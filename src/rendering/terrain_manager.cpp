@@ -708,17 +708,24 @@ std::string TerrainManager::getADTPath(const TileCoord& coord) const {
 }
 
 std::optional<float> TerrainManager::getHeightAt(float glX, float glY) const {
-    // Terrain mesh vertices are positioned as:
-    //   vertex.position[0] = chunk.position[0] - (offsetY * unitSize)  -> GL X
-    //   vertex.position[1] = chunk.position[1] - (offsetX * unitSize)  -> GL Y
-    //   vertex.position[2] = chunk.position[2] + height                -> GL Z (height)
+    // Terrain mesh vertices use chunk.position directly (WoW coordinates)
+    // But camera is in GL coordinates. We query using the mesh coordinates directly
+    // since terrain is rendered without model transformation.
     //
-    // The 9x9 outer vertex grid has offsetX, offsetY in [0, 8].
-    // So the chunk spans:
+    // The terrain mesh generation puts vertices at:
+    //   vertex.position[0] = chunk.position[0] - (offsetY * unitSize)
+    //   vertex.position[1] = chunk.position[1] - (offsetX * unitSize)
+    //   vertex.position[2] = chunk.position[2] + height
+    //
+    // So chunk spans:
     //   X: [chunk.position[0] - 8*unitSize, chunk.position[0]]
     //   Y: [chunk.position[1] - 8*unitSize, chunk.position[1]]
 
     const float unitSize = CHUNK_SIZE / 8.0f;
+
+    // Query coordinates are the same as what we pass (terrain uses identity model matrix)
+    float queryX = glX;
+    float queryY = glY;
 
     for (const auto& [coord, tile] : loadedTiles) {
         if (!tile || !tile->loaded) continue;
@@ -733,8 +740,8 @@ std::optional<float> TerrainManager::getHeightAt(float glX, float glY) const {
                 float chunkMaxY = chunk.position[1];
                 float chunkMinY = chunk.position[1] - 8.0f * unitSize;
 
-                if (glX < chunkMinX || glX > chunkMaxX ||
-                    glY < chunkMinY || glY > chunkMaxY) {
+                if (queryX < chunkMinX || queryX > chunkMaxX ||
+                    queryY < chunkMinY || queryY > chunkMaxY) {
                     continue;
                 }
 

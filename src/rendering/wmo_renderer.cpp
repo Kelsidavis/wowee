@@ -764,8 +764,6 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
                 }
             }
         }
-
-        // (debug logging removed)
     }
 
     return bestFloor;

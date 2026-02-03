@@ -126,8 +126,9 @@ private:
     static constexpr float WOW_GRAVITY = -19.29f;
     static constexpr float WOW_JUMP_VELOCITY = 7.96f;
 
-    // Default spawn position (on the road outside Stormwind)
-    glm::vec3 defaultPosition = glm::vec3(-8830.0f, -150.0f, 82.0f);
+    // Default spawn position (on terrain near Stormwind)
+    // Terrain chunks are around X=[-9100, -9066], Y=[-533, 0]
+    glm::vec3 defaultPosition = glm::vec3(-9080.0f, -100.0f, 100.0f);
     float defaultYaw = 180.0f;   // Look south toward Stormwind gate
     float defaultPitch = -5.0f;
 };
