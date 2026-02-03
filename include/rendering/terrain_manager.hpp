@@ -240,8 +240,8 @@ private:
 
     // Streaming parameters
     bool streamingEnabled = true;
-    int loadRadius = 4;      // Load tiles within this radius (9x9 grid, ~2133 units)
-    int unloadRadius = 6;    // Unload tiles beyond this radius (~3200 units, past far clip)
+    int loadRadius = 6;      // Load tiles within this radius (13x13 grid, ~3200 units)
+    int unloadRadius = 8;    // Unload tiles beyond this radius (~4266 units)
     float updateInterval = 0.1f;  // Check streaming every 0.1 seconds
     float timeSinceLastUpdate = 0.0f;
 

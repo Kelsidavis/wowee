@@ -201,9 +201,18 @@ void CameraController::update(float deltaTime) {
             }
 
             if (groundH) {
-                lastGroundZ = *groundH;
-                if (targetPos.z <= *groundH) {
-                    targetPos.z = *groundH;
+                // Smooth ground height to prevent stumbling on uneven terrain
+                float groundDiff = *groundH - lastGroundZ;
+                if (std::abs(groundDiff) < 2.0f) {
+                    // Small height difference - smooth it
+                    lastGroundZ += groundDiff * std::min(1.0f, deltaTime * 15.0f);
+                } else {
+                    // Large height difference (stairs, ledges) - snap
+                    lastGroundZ = *groundH;
+                }
+
+                if (targetPos.z <= lastGroundZ + 0.1f) {
+                    targetPos.z = lastGroundZ;
                     verticalVelocity = 0.0f;
                     grounded = true;
                     swimming = false;  // Touching ground = wading, not swimming
@@ -223,7 +232,30 @@ void CameraController::update(float deltaTime) {
 
         // Compute camera position orbiting behind the character
         glm::vec3 lookAtPoint = targetPos + glm::vec3(0.0f, 0.0f, eyeHeight);
-        glm::vec3 camPos = lookAtPoint - forward3D * orbitDistance;
+
+        // Camera collision detection - raycast from character head to desired camera position
+        glm::vec3 rayDir = -forward3D;  // Direction from character toward camera
+        float desiredDist = orbitDistance;
+        float actualDist = desiredDist;
+        const float cameraOffset = 0.3f;  // Small offset to not clip into walls
+
+        // Raycast against WMO bounding boxes
+        if (wmoRenderer) {
+            float wmoHit = wmoRenderer->raycastBoundingBoxes(lookAtPoint, rayDir, desiredDist);
+            if (wmoHit < actualDist) {
+                actualDist = std::max(minOrbitDistance, wmoHit - cameraOffset);
+            }
+        }
+
+        // Raycast against M2 bounding boxes (larger objects only affect camera)
+        if (m2Renderer) {
+            float m2Hit = m2Renderer->raycastBoundingBoxes(lookAtPoint, rayDir, desiredDist);
+            if (m2Hit < actualDist) {
+                actualDist = std::max(minOrbitDistance, m2Hit - cameraOffset);
+            }
+        }
+
+        glm::vec3 camPos = lookAtPoint + rayDir * actualDist;
 
         // Clamp camera above terrain/WMO floor
         {

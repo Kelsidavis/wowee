@@ -364,7 +364,7 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
     lastDrawCallCount = 0;
 
     // Distance-based culling threshold for M2 models
-    const float maxRenderDistance = 500.0f;  // Don't render small doodads beyond this
+    const float maxRenderDistance = 1000.0f;  // Don't render small doodads beyond this
     const float maxRenderDistanceSq = maxRenderDistance * maxRenderDistance;
     const glm::vec3 camPos = camera.getPosition();
 
@@ -392,7 +392,7 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
         shader->setUniform("uModel", instance.modelMatrix);
         shader->setUniform("uTime", instance.animTime);
-        shader->setUniform("uAnimScale", 1.0f);  // Enable animation for all M2s
+        shader->setUniform("uAnimScale", 0.0f);  // Disabled - proper M2 animation needs bone/particle systems
 
         glBindVertexArray(model.vao);
 
@@ -585,6 +585,47 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
     }
 
     return collided;
+}
+
+float M2Renderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {
+    float closestHit = maxDistance;
+
+    for (const auto& instance : instances) {
+        auto it = models.find(instance.modelId);
+        if (it == models.end()) continue;
+
+        const M2ModelGPU& model = it->second;
+
+        // Transform model bounds to world space (approximate with scaled AABB)
+        glm::vec3 worldMin = instance.position + model.boundMin * instance.scale;
+        glm::vec3 worldMax = instance.position + model.boundMax * instance.scale;
+
+        // Ensure min/max are correct
+        glm::vec3 actualMin = glm::min(worldMin, worldMax);
+        glm::vec3 actualMax = glm::max(worldMin, worldMax);
+
+        // Ray-AABB intersection (slab method)
+        glm::vec3 invDir = 1.0f / direction;
+        glm::vec3 tMin = (actualMin - origin) * invDir;
+        glm::vec3 tMax = (actualMax - origin) * invDir;
+
+        // Handle negative direction components
+        glm::vec3 t1 = glm::min(tMin, tMax);
+        glm::vec3 t2 = glm::max(tMin, tMax);
+
+        float tNear = std::max({t1.x, t1.y, t1.z});
+        float tFar = std::min({t2.x, t2.y, t2.z});
+
+        // Check if ray intersects the box
+        if (tNear <= tFar && tFar > 0.0f) {
+            float hitDist = tNear > 0.0f ? tNear : tFar;
+            if (hitDist > 0.0f && hitDist < closestHit) {
+                closestHit = hitDist;
+            }
+        }
+    }
+
+    return closestHit;
 }
 
 } // namespace rendering

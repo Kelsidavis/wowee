@@ -149,6 +149,15 @@ public:
      */
     bool isInsideWMO(float glX, float glY, float glZ, uint32_t* outModelId = nullptr) const;
 
+    /**
+     * Raycast against WMO bounding boxes for camera collision
+     * @param origin Ray origin (e.g., character head position)
+     * @param direction Ray direction (normalized)
+     * @param maxDistance Maximum ray distance to check
+     * @return Distance to first intersection, or maxDistance if no hit
+     */
+    float raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const;
+
 private:
     /**
      * WMO group GPU resources

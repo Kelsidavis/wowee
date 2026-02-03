@@ -354,7 +354,7 @@ void WMORenderer::render(const Camera& camera, const glm::mat4& view, const glm:
 
     // Render all instances with instance-level culling
     const glm::vec3 camPos = camera.getPosition();
-    const float maxRenderDistance = 1500.0f;  // Don't render WMOs beyond this distance
+    const float maxRenderDistance = 3000.0f;  // Don't render WMOs beyond this distance
     const float maxRenderDistanceSq = maxRenderDistance * maxRenderDistance;
 
     for (const auto& instance : instances) {
@@ -881,6 +881,45 @@ bool WMORenderer::isInsideWMO(float glX, float glY, float glZ, uint32_t* outMode
         }
     }
     return false;
+}
+
+float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {
+    float closestHit = maxDistance;
+
+    for (const auto& instance : instances) {
+        auto it = loadedModels.find(instance.modelId);
+        if (it == loadedModels.end()) continue;
+
+        const ModelData& model = it->second;
+
+        // Transform ray into local space
+        glm::mat4 invModel = glm::inverse(instance.modelMatrix);
+        glm::vec3 localOrigin = glm::vec3(invModel * glm::vec4(origin, 1.0f));
+        glm::vec3 localDir = glm::normalize(glm::vec3(invModel * glm::vec4(direction, 0.0f)));
+
+        for (const auto& group : model.groups) {
+            // Ray-AABB intersection (slab method)
+            glm::vec3 tMin = (group.boundingBoxMin - localOrigin) / localDir;
+            glm::vec3 tMax = (group.boundingBoxMax - localOrigin) / localDir;
+
+            // Handle negative direction components
+            glm::vec3 t1 = glm::min(tMin, tMax);
+            glm::vec3 t2 = glm::max(tMin, tMax);
+
+            float tNear = std::max({t1.x, t1.y, t1.z});
+            float tFar = std::min({t2.x, t2.y, t2.z});
+
+            // Check if ray intersects the box
+            if (tNear <= tFar && tFar > 0.0f) {
+                float hitDist = tNear > 0.0f ? tNear : tFar;
+                if (hitDist > 0.0f && hitDist < closestHit) {
+                    closestHit = hitDist;
+                }
+            }
+        }
+    }
+
+    return closestHit;
 }
 
 } // namespace rendering
