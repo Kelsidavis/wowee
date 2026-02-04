@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <optional>
+#include <random>
 
 namespace wowee {
 
@@ -94,6 +95,19 @@ struct M2Instance {
 };
 
 /**
+ * A single smoke particle emitted from a chimney or similar M2 model
+ */
+struct SmokeParticle {
+    glm::vec3 position;
+    glm::vec3 velocity;
+    float life = 0.0f;
+    float maxLife = 3.0f;
+    float size = 1.0f;
+    float isSpark = 0.0f;  // 0 = smoke, 1 = ember/spark
+    uint32_t instanceId = 0;
+};
+
+/**
  * M2 Model Renderer
  *
  * Handles rendering of M2 models (doodads like trees, rocks, bushes)
@@ -143,6 +157,11 @@ public:
      * Render all visible instances
      */
     void render(const Camera& camera, const glm::mat4& view, const glm::mat4& projection);
+
+    /**
+     * Render smoke particles (call after render())
+     */
+    void renderSmokeParticles(const Camera& camera, const glm::mat4& view, const glm::mat4& projection);
 
     /**
      * Remove a specific instance by ID
@@ -258,6 +277,15 @@ private:
     // Collision query profiling (per frame).
     mutable double queryTimeMs = 0.0;
     mutable uint32_t queryCallCount = 0;
+
+    // Smoke particle system
+    std::vector<SmokeParticle> smokeParticles;
+    GLuint smokeVAO = 0;
+    GLuint smokeVBO = 0;
+    std::unique_ptr<Shader> smokeShader;
+    static constexpr int MAX_SMOKE_PARTICLES = 1000;
+    float smokeEmitAccum = 0.0f;
+    std::mt19937 smokeRng{42};
 };
 
 } // namespace rendering

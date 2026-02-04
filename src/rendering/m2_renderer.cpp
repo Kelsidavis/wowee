@@ -218,8 +218,6 @@ bool M2Renderer::initialize(pipeline::AssetManager* assets) {
         uniform mat4 uProjection;
         uniform bool uUseBones;
         uniform mat4 uBones[128];
-        uniform float uScrollSpeed;  // >0 for smoke UV scroll, 0 for normal
-
         out vec3 FragPos;
         out vec3 Normal;
         out vec2 TexCoord;
@@ -241,9 +239,7 @@ bool M2Renderer::initialize(pipeline::AssetManager* assets) {
             vec4 worldPos = uModel * vec4(pos, 1.0);
             FragPos = worldPos.xyz;
             Normal = mat3(uModel) * norm;
-
-            // Scroll UV for rising smoke effect (scroll both axes for diagonal drift)
-            TexCoord = vec2(aTexCoord.x - uScrollSpeed, aTexCoord.y - uScrollSpeed * 0.3);
+            TexCoord = aTexCoord;
 
             gl_Position = uProjection * uView * worldPos;
         }
@@ -261,7 +257,6 @@ bool M2Renderer::initialize(pipeline::AssetManager* assets) {
         uniform bool uHasTexture;
         uniform bool uAlphaTest;
         uniform float uFadeAlpha;
-        uniform float uScrollSpeed;  // >0 for smoke
 
         out vec4 FragColor;
 
@@ -273,19 +268,13 @@ bool M2Renderer::initialize(pipeline::AssetManager* assets) {
                 texColor = vec4(0.6, 0.5, 0.4, 1.0);  // Fallback brownish
             }
 
-            bool isSmoke = (uScrollSpeed > 0.0);
-
-            // Alpha test for leaves, fences, etc. (skip for smoke)
-            if (uAlphaTest && !isSmoke && texColor.a < 0.5) {
+            // Alpha test for leaves, fences, etc.
+            if (uAlphaTest && texColor.a < 0.5) {
                 discard;
             }
 
             // Distance fade - discard nearly invisible fragments
             float finalAlpha = texColor.a * uFadeAlpha;
-            if (isSmoke) {
-                // Very soft alpha so the 4-sided box mesh blends into a smooth plume
-                finalAlpha *= 0.25;
-            }
             if (finalAlpha < 0.02) {
                 discard;
             }
@@ -300,10 +289,6 @@ bool M2Renderer::initialize(pipeline::AssetManager* assets) {
             vec3 diffuse = diff * texColor.rgb;
 
             vec3 result = ambient + diffuse;
-            if (isSmoke) {
-                // Lighten smoke color to look like wispy gray smoke
-                result = mix(result, vec3(0.7, 0.7, 0.72), 0.5);
-            }
             FragColor = vec4(result, finalAlpha);
         }
     )";
@@ -312,6 +297,91 @@ bool M2Renderer::initialize(pipeline::AssetManager* assets) {
     if (!shader->loadFromSource(vertexSrc, fragmentSrc)) {
         LOG_ERROR("Failed to create M2 shader");
         return false;
+    }
+
+    // Create smoke particle shader
+    const char* smokeVertSrc = R"(
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        layout (location = 1) in float aLifeRatio;
+        layout (location = 2) in float aSize;
+        layout (location = 3) in float aIsSpark;
+
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+        uniform float uScreenHeight;
+
+        out float vLifeRatio;
+        out float vIsSpark;
+
+        void main() {
+            vec4 viewPos = uView * vec4(aPos, 1.0);
+            gl_Position = uProjection * viewPos;
+            float dist = -viewPos.z;
+            float scale = (aIsSpark > 0.5) ? 0.12 : 0.3;
+            gl_PointSize = clamp(aSize * (uScreenHeight * scale) / max(dist, 1.0), 2.0, 200.0);
+            vLifeRatio = aLifeRatio;
+            vIsSpark = aIsSpark;
+        }
+    )";
+
+    const char* smokeFragSrc = R"(
+        #version 330 core
+        in float vLifeRatio;
+        in float vIsSpark;
+        out vec4 FragColor;
+
+        void main() {
+            vec2 coord = gl_PointCoord - vec2(0.5);
+            float dist = length(coord) * 2.0;
+
+            if (vIsSpark > 0.5) {
+                // Ember/spark: bright hot dot, fades quickly
+                float circle = 1.0 - smoothstep(0.3, 0.8, dist);
+                float fade = 1.0 - smoothstep(0.0, 1.0, vLifeRatio);
+                float alpha = circle * fade;
+                vec3 color = mix(vec3(1.0, 0.6, 0.1), vec3(1.0, 0.2, 0.0), vLifeRatio);
+                FragColor = vec4(color, alpha);
+            } else {
+                // Smoke: soft gray circle
+                float circle = 1.0 - smoothstep(0.5, 1.0, dist);
+                float fadeIn = smoothstep(0.0, 0.1, vLifeRatio);
+                float fadeOut = 1.0 - smoothstep(0.4, 1.0, vLifeRatio);
+                float alpha = circle * fadeIn * fadeOut * 0.5;
+                vec3 color = mix(vec3(0.5, 0.5, 0.53), vec3(0.65, 0.65, 0.68), vLifeRatio);
+                FragColor = vec4(color, alpha);
+            }
+        }
+    )";
+
+    smokeShader = std::make_unique<Shader>();
+    if (!smokeShader->loadFromSource(smokeVertSrc, smokeFragSrc)) {
+        LOG_ERROR("Failed to create smoke particle shader (non-fatal)");
+        smokeShader.reset();
+    }
+
+    // Create smoke particle VAO/VBO (only if shader compiled)
+    if (smokeShader) {
+        glGenVertexArrays(1, &smokeVAO);
+        glGenBuffers(1, &smokeVBO);
+        glBindVertexArray(smokeVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, smokeVBO);
+        // 5 floats per particle: pos(3) + lifeRatio(1) + size(1)
+        // 6 floats per particle: pos(3) + lifeRatio(1) + size(1) + isSpark(1)
+        glBufferData(GL_ARRAY_BUFFER, MAX_SMOKE_PARTICLES * 6 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        // Position
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        // Life ratio
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        // Size
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(4 * sizeof(float)));
+        // IsSpark
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(5 * sizeof(float)));
+        glBindVertexArray(0);
     }
 
     // Create white fallback texture
@@ -354,6 +424,12 @@ void M2Renderer::shutdown() {
     }
 
     shader.reset();
+
+    // Clean up smoke particle resources
+    if (smokeVAO != 0) { glDeleteVertexArrays(1, &smokeVAO); smokeVAO = 0; }
+    if (smokeVBO != 0) { glDeleteBuffers(1, &smokeVBO); smokeVBO = 0; }
+    smokeShader.reset();
+    smokeParticles.clear();
 }
 
 bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
@@ -850,6 +926,71 @@ static void computeBoneMatrices(const M2ModelGPU& model, M2Instance& instance) {
 
 void M2Renderer::update(float deltaTime) {
     float dtMs = deltaTime * 1000.0f;
+
+    // --- Smoke particle spawning ---
+    std::uniform_real_distribution<float> distXY(-0.4f, 0.4f);
+    std::uniform_real_distribution<float> distVelXY(-0.3f, 0.3f);
+    std::uniform_real_distribution<float> distVelZ(3.0f, 5.0f);
+    std::uniform_real_distribution<float> distLife(4.0f, 7.0f);
+    std::uniform_real_distribution<float> distDrift(-0.2f, 0.2f);
+
+    smokeEmitAccum += deltaTime;
+    float emitInterval = 1.0f / 8.0f;  // 8 particles per second per emitter
+
+    for (auto& instance : instances) {
+        auto it = models.find(instance.modelId);
+        if (it == models.end()) continue;
+        const M2ModelGPU& model = it->second;
+
+        if (model.isSmoke && smokeEmitAccum >= emitInterval &&
+            static_cast<int>(smokeParticles.size()) < MAX_SMOKE_PARTICLES) {
+            // Emission point: model origin in world space (model matrix already positions at chimney)
+            glm::vec3 emitWorld = glm::vec3(instance.modelMatrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+
+            // Occasionally spawn a spark instead of smoke (~1 in 8)
+            bool spark = (smokeRng() % 8 == 0);
+
+            SmokeParticle p;
+            p.position = emitWorld + glm::vec3(distXY(smokeRng), distXY(smokeRng), 0.0f);
+            if (spark) {
+                p.velocity = glm::vec3(distVelXY(smokeRng) * 2.0f, distVelXY(smokeRng) * 2.0f, distVelZ(smokeRng) * 1.5f);
+                p.maxLife = 0.8f + static_cast<float>(smokeRng() % 100) / 100.0f * 1.2f;  // 0.8-2.0s
+                p.size = 0.5f;
+                p.isSpark = 1.0f;
+            } else {
+                p.velocity = glm::vec3(distVelXY(smokeRng), distVelXY(smokeRng), distVelZ(smokeRng));
+                p.maxLife = distLife(smokeRng);
+                p.size = 1.0f;
+                p.isSpark = 0.0f;
+            }
+            p.life = 0.0f;
+            p.instanceId = instance.id;
+            smokeParticles.push_back(p);
+        }
+    }
+
+    if (smokeEmitAccum >= emitInterval) {
+        smokeEmitAccum = 0.0f;
+    }
+
+    // --- Update existing smoke particles ---
+    for (auto it = smokeParticles.begin(); it != smokeParticles.end(); ) {
+        it->life += deltaTime;
+        if (it->life >= it->maxLife) {
+            it = smokeParticles.erase(it);
+            continue;
+        }
+        it->position += it->velocity * deltaTime;
+        it->velocity.z *= 0.98f;  // Slight deceleration
+        it->velocity.x += distDrift(smokeRng) * deltaTime;
+        it->velocity.y += distDrift(smokeRng) * deltaTime;
+        // Grow from 1.0 to 3.5 over lifetime
+        float t = it->life / it->maxLife;
+        it->size = 1.0f + t * 2.5f;
+        ++it;
+    }
+
+    // --- Normal M2 animation update ---
     for (auto& instance : instances) {
         auto it = models.find(instance.modelId);
         if (it == models.end()) continue;
@@ -955,6 +1096,9 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
         const M2ModelGPU& model = it->second;
         if (!model.isValid()) continue;
 
+        // Skip smoke models — replaced by particle emitters
+        if (model.isSmoke) continue;
+
         // Distance culling for small objects (scaled by object size)
         glm::vec3 toCam = instance.position - camPos;
         float distSq = glm::dot(toCam, toCam);
@@ -988,11 +1132,6 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
         shader->setUniform("uModel", instance.modelMatrix);
         shader->setUniform("uFadeAlpha", fadeAlpha);
 
-        // UV scroll for smoke models: pass pre-computed scroll offset
-        bool isSmoke = model.isSmoke;
-        float scrollSpeed = isSmoke ? (instance.animTime / 1000.0f * 0.15f) : 0.0f;
-        shader->setUniform("uScrollSpeed", scrollSpeed);
-
         // Upload bone matrices if model has skeletal animation
         bool useBones = model.hasAnimation && !instance.boneMatrices.empty();
         shader->setUniform("uUseBones", useBones);
@@ -1001,14 +1140,9 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
             shader->setUniformMatrixArray("uBones[0]", instance.boneMatrices.data(), numBones);
         }
 
-        // Disable depth writes for fading objects and smoke to avoid z-fighting
-        if (fadeAlpha < 1.0f || isSmoke) {
+        // Disable depth writes for fading objects to avoid z-fighting
+        if (fadeAlpha < 1.0f) {
             glDepthMask(GL_FALSE);
-        }
-
-        // Additive blending for smoke
-        if (isSmoke) {
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         }
 
         glBindVertexArray(model.vao);
@@ -1034,17 +1168,62 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
         glBindVertexArray(0);
 
-        // Restore blending mode after smoke
-        if (isSmoke) {
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        }
-
-        if (fadeAlpha < 1.0f || isSmoke) {
+        if (fadeAlpha < 1.0f) {
             glDepthMask(GL_TRUE);
         }
     }
 
     // Restore state
+    glDisable(GL_BLEND);
+    glEnable(GL_CULL_FACE);
+}
+
+void M2Renderer::renderSmokeParticles(const Camera& /*camera*/, const glm::mat4& view, const glm::mat4& projection) {
+    if (smokeParticles.empty() || !smokeShader || smokeVAO == 0) return;
+
+    // Build vertex data: pos(3) + lifeRatio(1) + size(1) + isSpark(1) per particle
+    std::vector<float> data;
+    data.reserve(smokeParticles.size() * 6);
+    for (const auto& p : smokeParticles) {
+        data.push_back(p.position.x);
+        data.push_back(p.position.y);
+        data.push_back(p.position.z);
+        data.push_back(p.life / p.maxLife);
+        data.push_back(p.size);
+        data.push_back(p.isSpark);
+    }
+
+    // Upload to VBO
+    glBindBuffer(GL_ARRAY_BUFFER, smokeVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, data.size() * sizeof(float), data.data());
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    // Set GL state
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_DEPTH_TEST);  // Occlude behind buildings
+    glDepthMask(GL_FALSE);
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glDisable(GL_CULL_FACE);
+
+    smokeShader->use();
+    smokeShader->setUniform("uView", view);
+    smokeShader->setUniform("uProjection", projection);
+
+    // Get viewport height for point size scaling
+    GLint viewport[4];
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    smokeShader->setUniform("uScreenHeight", static_cast<float>(viewport[3]));
+
+    glBindVertexArray(smokeVAO);
+    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(smokeParticles.size()));
+    glBindVertexArray(0);
+
+    // Restore state
+    glEnable(GL_DEPTH_TEST);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_PROGRAM_POINT_SIZE);
     glDisable(GL_BLEND);
     glEnable(GL_CULL_FACE);
 }
@@ -1069,6 +1248,8 @@ void M2Renderer::clear() {
     instances.clear();
     spatialGrid.clear();
     instanceIndexById.clear();
+    smokeParticles.clear();
+    smokeEmitAccum = 0.0f;
 }
 
 void M2Renderer::setCollisionFocus(const glm::vec3& worldPos, float radius) {

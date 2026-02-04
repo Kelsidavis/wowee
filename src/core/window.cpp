@@ -31,6 +31,8 @@ bool Window::initialize() {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 
     // Create window
     Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN;
@@ -82,6 +84,7 @@ bool Window::initialize() {
     LOG_INFO("Vendor: ", glGetString(GL_VENDOR));
 
     // Set up OpenGL defaults
+    glEnable(GL_MULTISAMPLE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glEnable(GL_CULL_FACE);
