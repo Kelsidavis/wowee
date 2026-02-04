@@ -299,6 +299,12 @@ void Renderer::updateCharacterAnimation() {
     constexpr uint32_t ANIM_STAND      = 0;
     constexpr uint32_t ANIM_WALK       = 4;
     constexpr uint32_t ANIM_RUN        = 5;
+    // Candidate locomotion clips by common WotLK IDs.
+    constexpr uint32_t ANIM_STRAFE_RUN_RIGHT  = 92;
+    constexpr uint32_t ANIM_STRAFE_RUN_LEFT   = 93;
+    constexpr uint32_t ANIM_STRAFE_WALK_LEFT  = 11;
+    constexpr uint32_t ANIM_STRAFE_WALK_RIGHT = 12;
+    constexpr uint32_t ANIM_BACKPEDAL         = 13;
     constexpr uint32_t ANIM_JUMP_START = 37;
     constexpr uint32_t ANIM_JUMP_MID   = 38;
     constexpr uint32_t ANIM_JUMP_END   = 39;
@@ -310,6 +316,11 @@ void Renderer::updateCharacterAnimation() {
     CharAnimState newState = charAnimState;
 
     bool moving = cameraController->isMoving();
+    bool movingBackward = cameraController->isMovingBackward();
+    bool strafeLeft = cameraController->isStrafingLeft();
+    bool strafeRight = cameraController->isStrafingRight();
+    bool anyStrafeLeft = strafeLeft && !strafeRight;
+    bool anyStrafeRight = strafeRight && !strafeLeft;
     bool grounded = cameraController->isGrounded();
     bool jumping = cameraController->isJumping();
     bool sprinting = cameraController->isSprinting();
@@ -442,24 +453,61 @@ void Renderer::updateCharacterAnimation() {
 
     if (newState != charAnimState) {
         charAnimState = newState;
+    }
 
-        uint32_t animId = ANIM_STAND;
-        bool loop = true;
-
-        switch (charAnimState) {
-            case CharAnimState::IDLE:       animId = ANIM_STAND;      loop = true;  break;
-            case CharAnimState::WALK:       animId = ANIM_WALK;       loop = true;  break;
-            case CharAnimState::RUN:        animId = ANIM_RUN;        loop = true;  break;
-            case CharAnimState::JUMP_START: animId = ANIM_JUMP_START; loop = false; break;
-            case CharAnimState::JUMP_MID:   animId = ANIM_JUMP_MID;   loop = false; break;
-            case CharAnimState::JUMP_END:   animId = ANIM_JUMP_END;   loop = false; break;
-            case CharAnimState::SIT_DOWN:   animId = ANIM_SIT_DOWN;   loop = false; break;
-            case CharAnimState::SITTING:    animId = ANIM_SITTING;    loop = true;  break;
-            case CharAnimState::EMOTE:      animId = emoteAnimId;     loop = emoteLoop; break;
-            case CharAnimState::SWIM_IDLE:  animId = ANIM_SWIM_IDLE;  loop = true;  break;
-            case CharAnimState::SWIM:       animId = ANIM_SWIM;       loop = true;  break;
+    auto pickFirstAvailable = [&](std::initializer_list<uint32_t> candidates, uint32_t fallback) -> uint32_t {
+        for (uint32_t id : candidates) {
+            if (characterRenderer->hasAnimation(characterInstanceId, id)) {
+                return id;
+            }
         }
+        return fallback;
+    };
 
+    uint32_t animId = ANIM_STAND;
+    bool loop = true;
+
+    switch (charAnimState) {
+        case CharAnimState::IDLE:       animId = ANIM_STAND;      loop = true;  break;
+        case CharAnimState::WALK:
+            if (movingBackward) {
+                animId = pickFirstAvailable({ANIM_BACKPEDAL}, ANIM_WALK);
+            } else if (anyStrafeLeft) {
+                animId = pickFirstAvailable({ANIM_STRAFE_WALK_LEFT, ANIM_STRAFE_RUN_LEFT}, ANIM_WALK);
+            } else if (anyStrafeRight) {
+                animId = pickFirstAvailable({ANIM_STRAFE_WALK_RIGHT, ANIM_STRAFE_RUN_RIGHT}, ANIM_WALK);
+            } else {
+                animId = ANIM_WALK;
+            }
+            loop = true;
+            break;
+        case CharAnimState::RUN:
+            if (movingBackward) {
+                animId = pickFirstAvailable({ANIM_BACKPEDAL}, ANIM_WALK);
+            } else if (anyStrafeLeft) {
+                animId = pickFirstAvailable({ANIM_STRAFE_RUN_LEFT}, ANIM_RUN);
+            } else if (anyStrafeRight) {
+                animId = pickFirstAvailable({ANIM_STRAFE_RUN_RIGHT}, ANIM_RUN);
+            } else {
+                animId = ANIM_RUN;
+            }
+            loop = true;
+            break;
+        case CharAnimState::JUMP_START: animId = ANIM_JUMP_START; loop = false; break;
+        case CharAnimState::JUMP_MID:   animId = ANIM_JUMP_MID;   loop = false; break;
+        case CharAnimState::JUMP_END:   animId = ANIM_JUMP_END;   loop = false; break;
+        case CharAnimState::SIT_DOWN:   animId = ANIM_SIT_DOWN;   loop = false; break;
+        case CharAnimState::SITTING:    animId = ANIM_SITTING;    loop = true;  break;
+        case CharAnimState::EMOTE:      animId = emoteAnimId;     loop = emoteLoop; break;
+        case CharAnimState::SWIM_IDLE:  animId = ANIM_SWIM_IDLE;  loop = true;  break;
+        case CharAnimState::SWIM:       animId = ANIM_SWIM;       loop = true;  break;
+    }
+
+    uint32_t currentAnimId = 0;
+    float currentAnimTimeMs = 0.0f;
+    float currentAnimDurationMs = 0.0f;
+    bool haveState = characterRenderer->getAnimationState(characterInstanceId, currentAnimId, currentAnimTimeMs, currentAnimDurationMs);
+    if (!haveState || currentAnimId != animId) {
         characterRenderer->playAnimation(characterInstanceId, animId, loop);
     }
 }
@@ -600,9 +648,11 @@ void Renderer::update(float deltaTime) {
     if (characterInstanceId > 0 && characterRenderer && cameraController && cameraController->isThirdPerson()) {
         characterRenderer->setInstancePosition(characterInstanceId, characterPosition);
 
-        // Only rotate character to face camera direction when right-click is held
-        // Left-click orbits camera without turning the character
-        if (cameraController->isRightMouseHeld() || cameraController->isMoving()) {
+        // Keep facing decoupled from lateral movement:
+        // face camera when RMB is held, or with forward/back intent.
+        if (cameraController->isRightMouseHeld() ||
+            cameraController->isMovingForward() ||
+            cameraController->isMovingBackward()) {
             characterYaw = cameraController->getYaw();
         } else if (targetPosition && !emoteActive && !cameraController->isMoving()) {
             // Face target when idle

@@ -1165,6 +1165,26 @@ bool CharacterRenderer::getAnimationState(uint32_t instanceId, uint32_t& animati
     return true;
 }
 
+bool CharacterRenderer::hasAnimation(uint32_t instanceId, uint32_t animationId) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) {
+        return false;
+    }
+
+    auto modelIt = models.find(it->second.modelId);
+    if (modelIt == models.end()) {
+        return false;
+    }
+
+    const auto& sequences = modelIt->second.data.sequences;
+    for (const auto& seq : sequences) {
+        if (seq.id == animationId) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool CharacterRenderer::attachWeapon(uint32_t charInstanceId, uint32_t attachmentId,
                                       const pipeline::M2Model& weaponModel, uint32_t weaponModelId,
                                       const std::string& texturePath) {

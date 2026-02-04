@@ -42,6 +42,10 @@ public:
     bool isJumping() const { return !grounded && verticalVelocity > 0.0f; }
     bool isFalling() const { return !grounded && verticalVelocity <= 0.0f; }
     bool isSprinting() const;
+    bool isMovingForward() const { return moveForwardActive; }
+    bool isMovingBackward() const { return moveBackwardActive; }
+    bool isStrafingLeft() const { return strafeLeftActive; }
+    bool isStrafingRight() const { return strafeRightActive; }
     bool isRightMouseHeld() const { return rightMouseDown; }
     bool isSitting() const { return sitting; }
     bool isSwimming() const { return swimming; }
@@ -136,6 +140,10 @@ private:
     bool wasTurningRight = false;
     bool wasJumping = false;
     bool wasFalling = false;
+    bool moveForwardActive = false;
+    bool moveBackwardActive = false;
+    bool strafeLeftActive = false;
+    bool strafeRightActive = false;
 
     // Movement callback
     MovementCallback movementCallback;

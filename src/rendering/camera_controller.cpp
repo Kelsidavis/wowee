@@ -752,6 +752,10 @@ void CameraController::update(float deltaTime) {
     wasMovingBackward = nowBackward;
     wasStrafingLeft = nowStrafeLeft;
     wasStrafingRight = nowStrafeRight;
+    moveForwardActive = nowForward;
+    moveBackwardActive = nowBackward;
+    strafeLeftActive = nowStrafeLeft;
+    strafeRightActive = nowStrafeRight;
     wasTurningLeft = nowTurnLeft;
     wasTurningRight = nowTurnRight;
     wasJumping = nowJump;
@@ -827,6 +831,10 @@ void CameraController::reset() {
     wasJumping = false;
     wasFalling = false;
     wasSwimming = false;
+    moveForwardActive = false;
+    moveBackwardActive = false;
+    strafeLeftActive = false;
+    strafeRightActive = false;
 
     glm::vec3 spawnPos = defaultPosition;
 
