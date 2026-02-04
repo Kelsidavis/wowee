@@ -41,8 +41,8 @@ private:
     float pitch = 0.0f;
     float fov = 45.0f;
     float aspectRatio = 16.0f / 9.0f;
-    float nearPlane = 0.1f;
-    float farPlane = 200000.0f;  // Large draw distance for terrain visibility
+    float nearPlane = 0.05f;
+    float farPlane = 30000.0f;   // Improves depth precision vs extremely large far clip
 
     glm::mat4 viewMatrix = glm::mat4(1.0f);
     glm::mat4 projectionMatrix = glm::mat4(1.0f);

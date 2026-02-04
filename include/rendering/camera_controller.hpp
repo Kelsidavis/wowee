@@ -92,8 +92,8 @@ private:
     static constexpr float ZOOM_SMOOTH_SPEED = 15.0f;  // How fast zoom eases
     static constexpr float CAM_SMOOTH_SPEED = 20.0f;   // How fast camera position smooths
     static constexpr float PIVOT_HEIGHT = 1.8f;     // Pivot at head height
-    static constexpr float CAM_SPHERE_RADIUS = 0.2f;   // Collision sphere radius
-    static constexpr float CAM_EPSILON = 0.05f;     // Offset from walls
+    static constexpr float CAM_SPHERE_RADIUS = 0.32f;  // Keep camera farther from geometry to avoid clipping-through surfaces
+    static constexpr float CAM_EPSILON = 0.22f;        // Extra wall offset to avoid near-plane clipping artifacts
     static constexpr float MIN_PITCH = -88.0f;      // Look almost straight down
     static constexpr float MAX_PITCH = 35.0f;       // Limited upward look
     glm::vec3* followTarget = nullptr;

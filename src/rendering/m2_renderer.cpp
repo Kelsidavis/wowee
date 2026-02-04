@@ -22,12 +22,41 @@ void getTightCollisionBounds(const M2ModelGPU& model, glm::vec3& outMin, glm::ve
     glm::vec3 half = (model.boundMax - model.boundMin) * 0.5f;
 
     // Tighten footprint to reduce overly large object blockers.
-    half.x *= 0.60f;
-    half.y *= 0.60f;
-    half.z *= 0.90f;
+    half.x *= 0.72f;
+    half.y *= 0.72f;
+    half.z *= 0.78f;
 
     outMin = center - half;
     outMax = center + half;
+}
+
+bool segmentIntersectsAABB(const glm::vec3& from, const glm::vec3& to,
+                           const glm::vec3& bmin, const glm::vec3& bmax,
+                           float& outEnterT) {
+    glm::vec3 d = to - from;
+    float tEnter = 0.0f;
+    float tExit = 1.0f;
+
+    for (int axis = 0; axis < 3; axis++) {
+        if (std::abs(d[axis]) < 1e-6f) {
+            if (from[axis] < bmin[axis] || from[axis] > bmax[axis]) {
+                return false;
+            }
+            continue;
+        }
+
+        float inv = 1.0f / d[axis];
+        float t0 = (bmin[axis] - from[axis]) * inv;
+        float t1 = (bmax[axis] - from[axis]) * inv;
+        if (t0 > t1) std::swap(t0, t1);
+
+        tEnter = std::max(tEnter, t0);
+        tExit = std::min(tExit, t1);
+        if (tEnter > tExit) return false;
+    }
+
+    outEnterT = tEnter;
+    return tExit >= 0.0f && tEnter <= 1.0f;
 }
 
 } // namespace
@@ -42,6 +71,7 @@ void M2Instance::updateModelMatrix() {
     modelMatrix = glm::rotate(modelMatrix, rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
 
     modelMatrix = glm::scale(modelMatrix, glm::vec3(scale));
+    invModelMatrix = glm::inverse(modelMatrix);
 }
 
 M2Renderer::M2Renderer() {
@@ -341,6 +371,7 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     instance.rotation = glm::vec3(0.0f);
     instance.scale = 1.0f;
     instance.modelMatrix = modelMatrix;
+    instance.invModelMatrix = glm::inverse(modelMatrix);
     instance.animTime = static_cast<float>(rand()) / RAND_MAX * 10.0f;  // Random start time
 
     instances.push_back(instance);
@@ -571,8 +602,7 @@ std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ)
         glm::vec3 localMin, localMax;
         getTightCollisionBounds(model, localMin, localMax);
 
-        glm::mat4 invModel = glm::inverse(instance.modelMatrix);
-        glm::vec3 localPos = glm::vec3(invModel * glm::vec4(glX, glY, glZ, 1.0f));
+        glm::vec3 localPos = glm::vec3(instance.invModelMatrix * glm::vec4(glX, glY, glZ, 1.0f));
 
         // Must be within doodad footprint in local XY.
         if (localPos.x < localMin.x || localPos.x > localMax.x ||
@@ -597,7 +627,6 @@ std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ)
 
 bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
                                  glm::vec3& adjustedPos, float playerRadius) const {
-    (void)from;
     adjustedPos = to;
     bool collided = false;
 
@@ -609,8 +638,8 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
         const M2ModelGPU& model = it->second;
         if (instance.scale <= 0.001f) continue;
 
-        glm::mat4 invModel = glm::inverse(instance.modelMatrix);
-        glm::vec3 localPos = glm::vec3(invModel * glm::vec4(adjustedPos, 1.0f));
+        glm::vec3 localFrom = glm::vec3(instance.invModelMatrix * glm::vec4(from, 1.0f));
+        glm::vec3 localPos = glm::vec3(instance.invModelMatrix * glm::vec4(adjustedPos, 1.0f));
         float localRadius = playerRadius / instance.scale;
 
         glm::vec3 localMin, localMax;
@@ -624,6 +653,23 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
             continue;
         }
 
+        // Swept hard clamp for taller blockers only.
+        // Low/stepable objects should be climbable and not "shove" the player off.
+        constexpr float MAX_STEP_UP = 1.20f;
+        bool stepableLowObject = (localMax.z <= localFrom.z + MAX_STEP_UP);
+        if (!stepableLowObject) {
+            float tEnter = 0.0f;
+            if (segmentIntersectsAABB(localFrom, localPos, localMin, localMax, tEnter)) {
+                float tSafe = std::clamp(tEnter - 0.03f, 0.0f, 1.0f);
+                glm::vec3 localSafe = localFrom + (localPos - localFrom) * tSafe;
+                glm::vec3 worldSafe = glm::vec3(instance.modelMatrix * glm::vec4(localSafe, 1.0f));
+                adjustedPos.x = worldSafe.x;
+                adjustedPos.y = worldSafe.y;
+                collided = true;
+                continue;
+            }
+        }
+
         if (localPos.x < localMin.x || localPos.x > localMax.x ||
             localPos.y < localMin.y || localPos.y > localMax.y) {
             continue;
@@ -635,10 +681,12 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
         float pushFront = localMax.y - localPos.y;
 
         float minPush = std::min({pushLeft, pushRight, pushBack, pushFront});
-        // Soft pushback to avoid large snapping when grazing doodads.
-        float pushAmount = std::min(0.05f, std::max(0.0f, minPush * 0.30f));
-        if (pushAmount <= 0.0f) {
-            continue;
+        // Gentle fallback push for overlapping cases.
+        float pushAmount;
+        if (stepableLowObject) {
+            pushAmount = std::clamp(minPush * 0.12f, 0.002f, 0.015f);
+        } else {
+            pushAmount = std::clamp(minPush * 0.28f, 0.010f, 0.045f);
         }
         glm::vec3 localPush(0.0f);
         if (minPush == pushLeft) {
@@ -674,9 +722,8 @@ float M2Renderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3&
         glm::vec3 extents = (localMax - localMin) * instance.scale;
         if (glm::length(extents) < 0.75f) continue;
 
-        glm::mat4 invModel = glm::inverse(instance.modelMatrix);
-        glm::vec3 localOrigin = glm::vec3(invModel * glm::vec4(origin, 1.0f));
-        glm::vec3 localDir = glm::normalize(glm::vec3(invModel * glm::vec4(direction, 0.0f)));
+        glm::vec3 localOrigin = glm::vec3(instance.invModelMatrix * glm::vec4(origin, 1.0f));
+        glm::vec3 localDir = glm::normalize(glm::vec3(instance.invModelMatrix * glm::vec4(direction, 0.0f)));
         if (!std::isfinite(localDir.x) || !std::isfinite(localDir.y) || !std::isfinite(localDir.z)) {
             continue;
         }

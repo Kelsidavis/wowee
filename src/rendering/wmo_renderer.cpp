@@ -9,10 +9,18 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <unordered_set>
 
 namespace wowee {
 namespace rendering {
+
+static void transformAABB(const glm::mat4& modelMatrix,
+                          const glm::vec3& localMin,
+                          const glm::vec3& localMax,
+                          glm::vec3& outMin,
+                          glm::vec3& outMax);
 
 WMORenderer::WMORenderer() {
 }
@@ -377,12 +385,12 @@ void WMORenderer::render(const Camera& camera, const glm::mat4& view, const glm:
         for (const auto& group : model.groups) {
             // Proper frustum culling using AABB test
             if (frustumCulling) {
-                // Transform group bounding box to world space
-                glm::vec3 worldMin = glm::vec3(instance.modelMatrix * glm::vec4(group.boundingBoxMin, 1.0f));
-                glm::vec3 worldMax = glm::vec3(instance.modelMatrix * glm::vec4(group.boundingBoxMax, 1.0f));
-                // Ensure min/max are correct after transform (rotation can swap them)
-                glm::vec3 actualMin = glm::min(worldMin, worldMax);
-                glm::vec3 actualMax = glm::max(worldMin, worldMax);
+                // Transform all AABB corners to avoid false culling on rotated groups.
+                glm::vec3 actualMin, actualMax;
+                transformAABB(instance.modelMatrix, group.boundingBoxMin, group.boundingBoxMax, actualMin, actualMax);
+                // Small pad reduces edge flicker from precision/camera jitter.
+                actualMin -= glm::vec3(0.5f);
+                actualMax += glm::vec3(0.5f);
                 if (!frustum.intersectsAABB(actualMin, actualMax)) {
                     continue;
                 }
@@ -694,6 +702,31 @@ static bool rayIntersectsAABB(const glm::vec3& origin, const glm::vec3& dir,
     return tmax >= 0.0f;  // At least part of the ray is forward
 }
 
+static void transformAABB(const glm::mat4& modelMatrix,
+                          const glm::vec3& localMin,
+                          const glm::vec3& localMax,
+                          glm::vec3& outMin,
+                          glm::vec3& outMax) {
+    const glm::vec3 corners[8] = {
+        {localMin.x, localMin.y, localMin.z},
+        {localMin.x, localMin.y, localMax.z},
+        {localMin.x, localMax.y, localMin.z},
+        {localMin.x, localMax.y, localMax.z},
+        {localMax.x, localMin.y, localMin.z},
+        {localMax.x, localMin.y, localMax.z},
+        {localMax.x, localMax.y, localMin.z},
+        {localMax.x, localMax.y, localMax.z}
+    };
+
+    outMin = glm::vec3(std::numeric_limits<float>::max());
+    outMax = glm::vec3(-std::numeric_limits<float>::max());
+    for (const glm::vec3& corner : corners) {
+        glm::vec3 world = glm::vec3(modelMatrix * glm::vec4(corner, 1.0f));
+        outMin = glm::min(outMin, world);
+        outMax = glm::max(outMax, world);
+    }
+}
+
 // Möller–Trumbore ray-triangle intersection
 // Returns distance along ray if hit, or negative if miss
 static float rayTriangleIntersect(const glm::vec3& origin, const glm::vec3& dir,
@@ -716,6 +749,50 @@ static float rayTriangleIntersect(const glm::vec3& origin, const glm::vec3& dir,
 
     float t = f * glm::dot(e2, q);
     return t > EPSILON ? t : -1.0f;
+}
+
+// Closest point on triangle (from Real-Time Collision Detection).
+static glm::vec3 closestPointOnTriangle(const glm::vec3& p, const glm::vec3& a,
+                                        const glm::vec3& b, const glm::vec3& c) {
+    glm::vec3 ab = b - a;
+    glm::vec3 ac = c - a;
+    glm::vec3 ap = p - a;
+    float d1 = glm::dot(ab, ap);
+    float d2 = glm::dot(ac, ap);
+    if (d1 <= 0.0f && d2 <= 0.0f) return a;
+
+    glm::vec3 bp = p - b;
+    float d3 = glm::dot(ab, bp);
+    float d4 = glm::dot(ac, bp);
+    if (d3 >= 0.0f && d4 <= d3) return b;
+
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+        float v = d1 / (d1 - d3);
+        return a + v * ab;
+    }
+
+    glm::vec3 cp = p - c;
+    float d5 = glm::dot(ab, cp);
+    float d6 = glm::dot(ac, cp);
+    if (d6 >= 0.0f && d5 <= d6) return c;
+
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+        float w = d2 / (d2 - d6);
+        return a + w * ac;
+    }
+
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
+        float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + w * (c - b);
+    }
+
+    float denom = 1.0f / (va + vb + vc);
+    float v = vb * denom;
+    float w = vc * denom;
+    return a + ab * v + ac * w;
 }
 
 std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ) const {
@@ -808,6 +885,7 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
     // Player collision parameters
     const float PLAYER_RADIUS = 0.6f;       // Character collision radius
     const float PLAYER_HEIGHT = 2.0f;       // Player height for wall checks
+    const float MAX_STEP_HEIGHT = 0.85f;    // Balanced step-up without wall pass-through
 
     // Debug logging
     static int wallDebugCounter = 0;
@@ -821,6 +899,7 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
         const ModelData& model = it->second;
 
         // Transform positions into local space using cached inverse
+        glm::vec3 localFrom = glm::vec3(instance.invModelMatrix * glm::vec4(from, 1.0f));
         glm::vec3 localTo = glm::vec3(instance.invModelMatrix * glm::vec4(to, 1.0f));
         float localFeetZ = localTo.z;
 
@@ -850,9 +929,8 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
                 if (normalLen < 0.001f) continue;
                 normal /= normalLen;
 
-                // Skip mostly-horizontal triangles (floors/ceilings)
-                // Only collide with walls (vertical surfaces)
-                if (std::abs(normal.z) > 0.5f) continue;
+                // Skip near-horizontal triangles (floors/ceilings), keep sloped tunnel walls.
+                if (std::abs(normal.z) > 0.85f) continue;
 
                 // Get triangle Z range
                 float triMinZ = std::min({v0.z, v1.z, v2.z});
@@ -861,34 +939,55 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
                 // Only collide with walls in player's vertical range
                 if (triMaxZ < localFeetZ + 0.3f) continue;
                 if (triMinZ > localFeetZ + PLAYER_HEIGHT) continue;
+                if (triMaxZ <= localFeetZ + MAX_STEP_HEIGHT) continue;  // Treat as step-up, not hard wall
 
-                // Signed distance from player to triangle plane
-                float planeDist = glm::dot(localTo - v0, normal);
-                float absPlaneDist = std::abs(planeDist);
-                if (absPlaneDist > PLAYER_RADIUS) continue;
+                // Swept test: prevent tunneling when crossing a wall between frames.
+                float fromDist = glm::dot(localFrom - v0, normal);
+                float toDist = glm::dot(localTo - v0, normal);
+                if ((fromDist > PLAYER_RADIUS && toDist < -PLAYER_RADIUS) ||
+                    (fromDist < -PLAYER_RADIUS && toDist > PLAYER_RADIUS)) {
+                    float denom = (fromDist - toDist);
+                    if (std::abs(denom) > 1e-6f) {
+                        float tHit = fromDist / denom;  // Segment param [0,1]
+                        if (tHit >= 0.0f && tHit <= 1.0f) {
+                            glm::vec3 hitPoint = localFrom + (localTo - localFrom) * tHit;
+                            glm::vec3 hitClosest = closestPointOnTriangle(hitPoint, v0, v1, v2);
+                            float hitErrSq = glm::dot(hitClosest - hitPoint, hitClosest - hitPoint);
+                            bool insideHit = (hitErrSq <= 0.04f * 0.04f);
+                            if (insideHit) {
+                                float side = fromDist > 0.0f ? 1.0f : -1.0f;
+                                glm::vec3 safeLocal = hitPoint + normal * side * (PLAYER_RADIUS + 0.03f);
+                                glm::vec3 safeWorld = glm::vec3(instance.modelMatrix * glm::vec4(safeLocal, 1.0f));
+                                adjustedPos.x = safeWorld.x;
+                                adjustedPos.y = safeWorld.y;
+                                blocked = true;
+                                continue;
+                            }
+                        }
+                    }
+                }
 
-                // Project point onto plane
-                glm::vec3 projected = localTo - normal * planeDist;
-
-                // Check if projected point is inside triangle (or near edge)
-                float d0 = glm::dot(glm::cross(v1 - v0, projected - v0), normal);
-                float d1 = glm::dot(glm::cross(v2 - v1, projected - v1), normal);
-                float d2 = glm::dot(glm::cross(v0 - v2, projected - v2), normal);
-
-                // Allow small negative values for edge tolerance
-                const float edgeTolerance = -0.1f;
-                bool insideTriangle = (d0 >= edgeTolerance && d1 >= edgeTolerance && d2 >= edgeTolerance);
-
-                if (insideTriangle) {
+                glm::vec3 closest = closestPointOnTriangle(localTo, v0, v1, v2);
+                glm::vec3 delta = localTo - closest;
+                float horizDist = glm::length(glm::vec2(delta.x, delta.y));
+                if (horizDist <= PLAYER_RADIUS) {
                     wallsHit++;
-                    // Push player away from wall (horizontal only)
-                    float pushDist = PLAYER_RADIUS - absPlaneDist;
+                    // Push player away from wall (horizontal only, from closest point).
+                    float pushDist = PLAYER_RADIUS - horizDist;
                     if (pushDist > 0.0f) {
+                        glm::vec2 pushDir2;
+                        if (horizDist > 1e-4f) {
+                            pushDir2 = glm::normalize(glm::vec2(delta.x, delta.y));
+                        } else {
+                            glm::vec2 n2(normal.x, normal.y);
+                            if (glm::length(n2) < 1e-4f) continue;
+                            pushDir2 = glm::normalize(n2);
+                        }
+
                         // Soft pushback avoids hard side-snaps when skimming walls.
-                        pushDist = std::min(0.06f, pushDist * 0.30f);
+                        pushDist = std::min(0.06f, pushDist * 0.35f);
                         if (pushDist <= 0.0f) continue;
-                        float sign = planeDist > 0.0f ? 1.0f : -1.0f;
-                        glm::vec3 pushLocal = normal * sign * pushDist;
+                        glm::vec3 pushLocal(pushDir2.x * pushDist, pushDir2.y * pushDist, 0.0f);
 
                         // Transform push vector back to world space
                         glm::vec3 pushWorld = glm::vec3(instance.modelMatrix * glm::vec4(pushLocal, 0.0f));
@@ -935,6 +1034,13 @@ bool WMORenderer::isInsideWMO(float glX, float glY, float glZ, uint32_t* outMode
 
 float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3& direction, float maxDistance) const {
     float closestHit = maxDistance;
+    // Camera collision should primarily react to walls.
+    // Treat near-horizontal triangles as floor/ceiling and ignore them here so
+    // ramps/stairs don't constantly pull the camera in and clip the floor view.
+    constexpr float MAX_WALKABLE_ABS_NORMAL_Z = 0.20f;
+    constexpr float MAX_HIT_BELOW_ORIGIN = 0.90f;
+    constexpr float MAX_HIT_ABOVE_ORIGIN = 0.80f;
+    constexpr float MIN_SURFACE_ALIGNMENT = 0.25f;
 
     for (const auto& instance : instances) {
         auto it = loadedModels.find(instance.modelId);
@@ -959,6 +1065,20 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
                 const glm::vec3& v0 = verts[indices[i]];
                 const glm::vec3& v1 = verts[indices[i + 1]];
                 const glm::vec3& v2 = verts[indices[i + 2]];
+                glm::vec3 triNormal = glm::cross(v1 - v0, v2 - v0);
+                float normalLenSq = glm::dot(triNormal, triNormal);
+                if (normalLenSq < 1e-8f) {
+                    continue;
+                }
+                triNormal /= std::sqrt(normalLenSq);
+                if (std::abs(triNormal.z) > MAX_WALKABLE_ABS_NORMAL_Z) {
+                    continue;
+                }
+                // Ignore near-grazing intersections that tend to come from ramps/arches
+                // and cause camera pull-in even when no meaningful wall is behind the player.
+                if (std::abs(glm::dot(triNormal, localDir)) < MIN_SURFACE_ALIGNMENT) {
+                    continue;
+                }
 
                 float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
                 if (t <= 0.0f) {
@@ -969,6 +1089,15 @@ float WMORenderer::raycastBoundingBoxes(const glm::vec3& origin, const glm::vec3
 
                 glm::vec3 localHit = localOrigin + localDir * t;
                 glm::vec3 worldHit = glm::vec3(instance.modelMatrix * glm::vec4(localHit, 1.0f));
+                // Ignore low hits; camera floor handling already keeps the camera above ground.
+                // This avoids gate/ramp floor geometry pulling the camera in too aggressively.
+                if (worldHit.z < origin.z - MAX_HIT_BELOW_ORIGIN) {
+                    continue;
+                }
+                // Ignore very high hits (arches/ceilings) that should not clamp normal chase-cam distance.
+                if (worldHit.z > origin.z + MAX_HIT_ABOVE_ORIGIN) {
+                    continue;
+                }
                 float worldDist = glm::length(worldHit - origin);
                 if (worldDist > 0.0f && worldDist < closestHit && worldDist <= maxDistance) {
                     closestHit = worldDist;

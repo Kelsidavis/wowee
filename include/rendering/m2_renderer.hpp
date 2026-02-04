@@ -57,6 +57,7 @@ struct M2Instance {
     glm::vec3 rotation;  // Euler angles in degrees
     float scale;
     glm::mat4 modelMatrix;
+    glm::mat4 invModelMatrix;
 
     // Animation state
     float animTime = 0.0f;       // Current animation time

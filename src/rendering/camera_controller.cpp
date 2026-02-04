@@ -165,41 +165,6 @@ void CameraController::update(float deltaTime) {
     if (thirdPerson && followTarget) {
         // Move the follow target (character position) instead of the camera
         glm::vec3 targetPos = *followTarget;
-        auto clampMoveAgainstWMO = [&](const glm::vec3& fromFeet, glm::vec3& toFeet) {
-            if (!wmoRenderer) return;
-            glm::vec3 move = toFeet - fromFeet;
-            move.z = 0.0f;
-            float moveDist = glm::length(glm::vec2(move));
-            if (moveDist < 0.001f) return;
-
-            glm::vec3 dir = glm::normalize(move);
-            glm::vec3 perp(-dir.y, dir.x, 0.0f);
-            constexpr float BODY_RADIUS = 0.38f;
-            constexpr float SAFETY = 0.08f;
-            constexpr float HEIGHTS[3] = {0.4f, 1.0f, 1.6f};
-            const glm::vec3 probes[3] = {
-                fromFeet,
-                fromFeet + perp * BODY_RADIUS,
-                fromFeet - perp * BODY_RADIUS
-            };
-
-            float bestHit = moveDist + 1.0f;
-            for (const glm::vec3& probeBase : probes) {
-                for (float h : HEIGHTS) {
-                    glm::vec3 origin = probeBase + glm::vec3(0.0f, 0.0f, h);
-                    float hit = wmoRenderer->raycastBoundingBoxes(origin, dir, moveDist + SAFETY);
-                    if (hit < bestHit) {
-                        bestHit = hit;
-                    }
-                }
-            }
-
-            if (bestHit < moveDist + SAFETY) {
-                float allowed = std::max(0.0f, bestHit - SAFETY);
-                toFeet.x = fromFeet.x + dir.x * allowed;
-                toFeet.y = fromFeet.y + dir.y * allowed;
-            }
-        };
 
         // Check for water at current position
         std::optional<float> waterH;
@@ -269,7 +234,6 @@ void CameraController::update(float deltaTime) {
 
             for (int i = 0; i < sweepSteps; i++) {
                 glm::vec3 candidate = stepPos + stepDelta;
-                clampMoveAgainstWMO(stepPos, candidate);
 
                 if (wmoRenderer) {
                     glm::vec3 adjusted;
@@ -471,7 +435,9 @@ void CameraController::update(float deltaTime) {
             if (wmoRenderer) {
                 wmoH = wmoRenderer->getFloorHeight(x, y, z + 5.0f);
             }
-            return selectReachableFloor(terrainH, wmoH, z, 0.5f);
+            // Camera floor clamp must allow larger step-up on ramps/stairs.
+            // Too-small limits let the camera slip below rising ground and see through floors.
+            return selectReachableFloor(terrainH, wmoH, z, 2.0f);
         };
 
         // Raycast against WMO bounding boxes
@@ -518,13 +484,26 @@ void CameraController::update(float deltaTime) {
         smoothedCamPos += (actualCam - smoothedCamPos) * camLerp;
 
         // ===== Final floor clearance check =====
-        // After smoothing, ensure camera is above the floor at its final position
-        // This prevents camera clipping through ground in Stormwind and similar areas
-        constexpr float MIN_FLOOR_CLEARANCE = 0.20f;  // Keep camera at least 20cm above floor
-        auto finalFloorH = getFloorAt(smoothedCamPos.x, smoothedCamPos.y, smoothedCamPos.z);
+        // Sample a small footprint around the camera to avoid peeking through ramps/stairs
+        // when zoomed out and pitched down.
+        constexpr float MIN_FLOOR_CLEARANCE = 0.35f;
+        constexpr float FLOOR_SAMPLE_R = 0.35f;
+        std::optional<float> finalFloorH;
+        const glm::vec2 floorOffsets[] = {
+            {0.0f, 0.0f}, {FLOOR_SAMPLE_R, 0.0f}, {-FLOOR_SAMPLE_R, 0.0f},
+            {0.0f, FLOOR_SAMPLE_R}, {0.0f, -FLOOR_SAMPLE_R}
+        };
+        for (const auto& o : floorOffsets) {
+            auto h = getFloorAt(smoothedCamPos.x + o.x, smoothedCamPos.y + o.y, smoothedCamPos.z);
+            if (h && (!finalFloorH || *h > *finalFloorH)) {
+                finalFloorH = h;
+            }
+        }
         if (finalFloorH && smoothedCamPos.z < *finalFloorH + MIN_FLOOR_CLEARANCE) {
             smoothedCamPos.z = *finalFloorH + MIN_FLOOR_CLEARANCE;
         }
+        // Never let camera sink below the character's feet plane.
+        smoothedCamPos.z = std::max(smoothedCamPos.z, targetPos.z + 0.15f);
 
         camera->setPosition(smoothedCamPos);
 
@@ -538,41 +517,6 @@ void CameraController::update(float deltaTime) {
     } else {
         // Free-fly camera mode (original behavior)
         glm::vec3 newPos = camera->getPosition();
-        auto clampMoveAgainstWMO = [&](const glm::vec3& fromFeet, glm::vec3& toFeet) {
-            if (!wmoRenderer) return;
-            glm::vec3 move = toFeet - fromFeet;
-            move.z = 0.0f;
-            float moveDist = glm::length(glm::vec2(move));
-            if (moveDist < 0.001f) return;
-
-            glm::vec3 dir = glm::normalize(move);
-            glm::vec3 perp(-dir.y, dir.x, 0.0f);
-            constexpr float BODY_RADIUS = 0.38f;
-            constexpr float SAFETY = 0.08f;
-            constexpr float HEIGHTS[3] = {0.4f, 1.0f, 1.6f};
-            const glm::vec3 probes[3] = {
-                fromFeet,
-                fromFeet + perp * BODY_RADIUS,
-                fromFeet - perp * BODY_RADIUS
-            };
-
-            float bestHit = moveDist + 1.0f;
-            for (const glm::vec3& probeBase : probes) {
-                for (float h : HEIGHTS) {
-                    glm::vec3 origin = probeBase + glm::vec3(0.0f, 0.0f, h);
-                    float hit = wmoRenderer->raycastBoundingBoxes(origin, dir, moveDist + SAFETY);
-                    if (hit < bestHit) {
-                        bestHit = hit;
-                    }
-                }
-            }
-
-            if (bestHit < moveDist + SAFETY) {
-                float allowed = std::max(0.0f, bestHit - SAFETY);
-                toFeet.x = fromFeet.x + dir.x * allowed;
-                toFeet.y = fromFeet.y + dir.y * allowed;
-            }
-        };
         float feetZ = newPos.z - eyeHeight;
 
         // Check for water at feet position
@@ -640,7 +584,6 @@ void CameraController::update(float deltaTime) {
 
             for (int i = 0; i < sweepSteps; i++) {
                 glm::vec3 candidate = stepPos + stepDelta;
-                clampMoveAgainstWMO(stepPos, candidate);
                 glm::vec3 adjusted;
                 if (wmoRenderer->checkWallCollision(stepPos, candidate, adjusted)) {
                     candidate = adjusted;
