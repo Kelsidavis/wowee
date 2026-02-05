@@ -356,6 +356,21 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
                 break;
             }
 
+            case MOPR: {
+                // Portal references - links groups via portals
+                uint32_t nRefs = chunkSize / 8;  // Each reference is 8 bytes
+                for (uint32_t i = 0; i < nRefs; i++) {
+                    WMOPortalRef ref;
+                    ref.portalIndex = read<uint16_t>(wmoData, offset);
+                    ref.groupIndex = read<uint16_t>(wmoData, offset);
+                    ref.side = read<int16_t>(wmoData, offset);
+                    ref.padding = read<uint16_t>(wmoData, offset);
+                    model.portalRefs.push_back(ref);
+                }
+                core::Logger::getInstance().info("WMO portal refs: ", model.portalRefs.size());
+                break;
+            }
+
             default:
                 // Unknown chunk, skip it
                 break;

@@ -100,6 +100,14 @@ struct WMOPortalPlane {
     float distance;
 };
 
+// WMO Portal Reference (MOPR chunk) - links portals to groups
+struct WMOPortalRef {
+    uint16_t portalIndex;   // Index into portals array
+    uint16_t groupIndex;    // Group on other side of portal
+    int16_t side;           // Which side of portal plane (-1 or 1)
+    uint16_t padding;
+};
+
 // WMO Liquid (MLIQ chunk data)
 struct WMOLiquid {
     uint32_t xVerts = 0;        // Vertices in X direction
@@ -192,6 +200,7 @@ struct WMOModel {
     std::vector<WMOPortal> portals;
     std::vector<WMOPortalPlane> portalPlanes;
     std::vector<glm::vec3> portalVertices;
+    std::vector<WMOPortalRef> portalRefs;  // MOPR chunk - portal-to-group links
 
     // Lights
     std::vector<WMOLight> lights;

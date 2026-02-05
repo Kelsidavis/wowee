@@ -20,6 +20,7 @@ namespace rendering {
 
 class Camera;
 class Shader;
+class Frustum;
 
 /**
  * WMO (World Model Object) Renderer
@@ -129,6 +130,17 @@ public:
      */
     void setFrustumCulling(bool enabled) { frustumCulling = enabled; }
 
+    /**
+     * Enable/disable portal-based visibility culling
+     */
+    void setPortalCulling(bool enabled) { portalCulling = enabled; }
+    bool isPortalCullingEnabled() const { return portalCulling; }
+
+    /**
+     * Get number of groups culled by portals last frame
+     */
+    uint32_t getPortalCulledGroups() const { return lastPortalCulledGroups; }
+
     void setFog(const glm::vec3& color, float start, float end) {
         fogColor = color; fogStart = start; fogEnd = end;
     }
@@ -210,6 +222,22 @@ private:
     };
 
     /**
+     * Portal data for visibility culling
+     */
+    struct PortalData {
+        uint16_t startVertex;
+        uint16_t vertexCount;
+        glm::vec3 normal;
+        float distance;
+    };
+
+    struct PortalRef {
+        uint16_t portalIndex;
+        uint16_t groupIndex;
+        int16_t side;
+    };
+
+    /**
      * Loaded WMO model data
      */
     struct ModelData {
@@ -226,6 +254,13 @@ private:
 
         // Material blend modes (materialId -> blendMode; 1 = alpha-test cutout)
         std::vector<uint32_t> materialBlendModes;
+
+        // Portal visibility data
+        std::vector<PortalData> portals;
+        std::vector<glm::vec3> portalVertices;
+        std::vector<PortalRef> portalRefs;
+        // For each group: which portal refs belong to it (start index, count)
+        std::vector<std::pair<uint16_t, uint16_t>> groupPortalRefs;
 
         uint32_t getTotalTriangles() const {
             uint32_t total = 0;
@@ -271,6 +306,34 @@ private:
      */
     bool isGroupVisible(const GroupResources& group, const glm::mat4& modelMatrix,
                        const Camera& camera) const;
+
+    /**
+     * Find which group index contains a position (model space)
+     * @return Group index or -1 if outside all groups
+     */
+    int findContainingGroup(const ModelData& model, const glm::vec3& localPos) const;
+
+    /**
+     * Get visible groups via portal traversal
+     * @param model The WMO model data
+     * @param cameraLocalPos Camera position in model space
+     * @param frustum Frustum for portal visibility testing
+     * @param modelMatrix Transform for world-space frustum test
+     * @param outVisibleGroups Output set of visible group indices
+     */
+    void getVisibleGroupsViaPortals(const ModelData& model,
+                                     const glm::vec3& cameraLocalPos,
+                                     const Frustum& frustum,
+                                     const glm::mat4& modelMatrix,
+                                     std::unordered_set<uint32_t>& outVisibleGroups) const;
+
+    /**
+     * Test if a portal polygon is visible from a position through a frustum
+     */
+    bool isPortalVisible(const ModelData& model, uint16_t portalIndex,
+                         const glm::vec3& cameraLocalPos,
+                         const Frustum& frustum,
+                         const glm::mat4& modelMatrix) const;
 
     /**
      * Load a texture from path
@@ -320,7 +383,9 @@ private:
     // Rendering state
     bool wireframeMode = false;
     bool frustumCulling = true;
+    bool portalCulling = false;  // Disabled by default - needs debugging
     uint32_t lastDrawCalls = 0;
+    mutable uint32_t lastPortalCulledGroups = 0;
 
     // Fog parameters
     glm::vec3 fogColor = glm::vec3(0.5f, 0.6f, 0.7f);

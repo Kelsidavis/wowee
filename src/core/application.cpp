@@ -477,9 +477,14 @@ void Application::setupUICallbacks() {
             gameHandler->setSinglePlayerMode(true);
             gameHandler->setSinglePlayerCharListReady();
         }
-        uiManager->getCharacterCreateScreen().reset();
-        uiManager->getCharacterCreateScreen().initializePreview(assetManager.get());
-        setState(AppState::CHARACTER_CREATION);
+        // If characters exist, go to selection; otherwise go to creation
+        if (gameHandler && !gameHandler->getCharacters().empty()) {
+            setState(AppState::CHARACTER_SELECTION);
+        } else {
+            uiManager->getCharacterCreateScreen().reset();
+            uiManager->getCharacterCreateScreen().initializePreview(assetManager.get());
+            setState(AppState::CHARACTER_CREATION);
+        }
     });
 
     // Realm selection callback

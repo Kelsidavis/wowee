@@ -296,6 +296,43 @@ bool WMORenderer::loadModel(const pipeline::WMOModel& model, uint32_t id) {
         return false;
     }
 
+    // Copy portal data for visibility culling
+    modelData.portalVertices = model.portalVertices;
+    for (const auto& portal : model.portals) {
+        PortalData pd;
+        pd.startVertex = portal.startVertex;
+        pd.vertexCount = portal.vertexCount;
+        // Compute portal plane from vertices if we have them
+        if (portal.vertexCount >= 3 && portal.startVertex + portal.vertexCount <= model.portalVertices.size()) {
+            glm::vec3 v0 = model.portalVertices[portal.startVertex];
+            glm::vec3 v1 = model.portalVertices[portal.startVertex + 1];
+            glm::vec3 v2 = model.portalVertices[portal.startVertex + 2];
+            pd.normal = glm::normalize(glm::cross(v1 - v0, v2 - v0));
+            pd.distance = glm::dot(pd.normal, v0);
+        } else {
+            pd.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+            pd.distance = 0.0f;
+        }
+        modelData.portals.push_back(pd);
+    }
+    for (const auto& ref : model.portalRefs) {
+        PortalRef pr;
+        pr.portalIndex = ref.portalIndex;
+        pr.groupIndex = ref.groupIndex;
+        pr.side = ref.side;
+        modelData.portalRefs.push_back(pr);
+    }
+    // Build per-group portal ref ranges from WMOGroup data
+    modelData.groupPortalRefs.resize(model.groups.size(), {0, 0});
+    for (size_t gi = 0; gi < model.groups.size(); gi++) {
+        modelData.groupPortalRefs[gi] = {model.groups[gi].portalStart, model.groups[gi].portalCount};
+    }
+
+    if (!modelData.portals.empty()) {
+        core::Logger::getInstance().info("WMO portals: ", modelData.portals.size(),
+                                         " refs: ", modelData.portalRefs.size());
+    }
+
     loadedModels[id] = std::move(modelData);
     core::Logger::getInstance().info("WMO model ", id, " loaded successfully (", loadedGroups, " groups)");
     return true;
@@ -527,6 +564,8 @@ void WMORenderer::render(const Camera& camera, const glm::mat4& view, const glm:
     Frustum frustum;
     frustum.extractFromMatrix(projection * view);
 
+    lastPortalCulledGroups = 0;
+
     // Render all instances with instance-level culling
     for (const auto& instance : instances) {
         // NOTE: Disabled hard instance-distance culling for WMOs.
@@ -549,8 +588,26 @@ void WMORenderer::render(const Camera& camera, const glm::mat4& view, const glm:
         const ModelData& model = modelIt->second;
         shader->setUniform("uModel", instance.modelMatrix);
 
+        // Portal-based visibility culling
+        std::unordered_set<uint32_t> portalVisibleGroups;
+        bool usePortalCulling = portalCulling && !model.portals.empty() && !model.portalRefs.empty();
+
+        if (usePortalCulling) {
+            // Transform camera position to model's local space
+            glm::vec4 localCamPos = instance.invModelMatrix * glm::vec4(camera.getPosition(), 1.0f);
+            glm::vec3 cameraLocalPos(localCamPos);
+
+            getVisibleGroupsViaPortals(model, cameraLocalPos, frustum, instance.modelMatrix, portalVisibleGroups);
+        }
+
         // Render all groups using cached world-space bounds
         for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+            // Portal culling check
+            if (usePortalCulling && portalVisibleGroups.find(static_cast<uint32_t>(gi)) == portalVisibleGroups.end()) {
+                lastPortalCulledGroups++;
+                continue;
+            }
+
             if (frustumCulling && gi < instance.worldGroupBounds.size()) {
                 const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
                 if (!frustum.intersectsAABB(gMin, gMax)) {
@@ -797,6 +854,111 @@ bool WMORenderer::isGroupVisible(const GroupResources& group, const glm::mat4& m
 
     // If all corners are behind camera, cull
     return behindCount < 8;
+}
+
+int WMORenderer::findContainingGroup(const ModelData& model, const glm::vec3& localPos) const {
+    // Find which group's bounding box contains the position
+    // Prefer interior groups (smaller volume) when multiple match
+    int bestGroup = -1;
+    float bestVolume = std::numeric_limits<float>::max();
+
+    for (size_t gi = 0; gi < model.groups.size(); gi++) {
+        const auto& group = model.groups[gi];
+        if (localPos.x >= group.boundingBoxMin.x && localPos.x <= group.boundingBoxMax.x &&
+            localPos.y >= group.boundingBoxMin.y && localPos.y <= group.boundingBoxMax.y &&
+            localPos.z >= group.boundingBoxMin.z && localPos.z <= group.boundingBoxMax.z) {
+            glm::vec3 size = group.boundingBoxMax - group.boundingBoxMin;
+            float volume = size.x * size.y * size.z;
+            if (volume < bestVolume) {
+                bestVolume = volume;
+                bestGroup = static_cast<int>(gi);
+            }
+        }
+    }
+    return bestGroup;
+}
+
+bool WMORenderer::isPortalVisible(const ModelData& model, uint16_t portalIndex,
+                                   [[maybe_unused]] const glm::vec3& cameraLocalPos,
+                                   const Frustum& frustum,
+                                   const glm::mat4& modelMatrix) const {
+    if (portalIndex >= model.portals.size()) return false;
+
+    const auto& portal = model.portals[portalIndex];
+    if (portal.vertexCount < 3) return false;
+    if (portal.startVertex + portal.vertexCount > model.portalVertices.size()) return false;
+
+    // Get portal polygon center and bounds for frustum test
+    glm::vec3 center(0.0f);
+    glm::vec3 pMin = model.portalVertices[portal.startVertex];
+    glm::vec3 pMax = pMin;
+    for (uint16_t i = 0; i < portal.vertexCount; i++) {
+        const auto& v = model.portalVertices[portal.startVertex + i];
+        center += v;
+        pMin = glm::min(pMin, v);
+        pMax = glm::max(pMax, v);
+    }
+    center /= static_cast<float>(portal.vertexCount);
+
+    // Transform bounds to world space for frustum test
+    glm::vec4 worldMin = modelMatrix * glm::vec4(pMin, 1.0f);
+    glm::vec4 worldMax = modelMatrix * glm::vec4(pMax, 1.0f);
+
+    // Check if portal AABB intersects frustum (more robust than point test)
+    return frustum.intersectsAABB(glm::vec3(worldMin), glm::vec3(worldMax));
+}
+
+void WMORenderer::getVisibleGroupsViaPortals(const ModelData& model,
+                                              const glm::vec3& cameraLocalPos,
+                                              const Frustum& frustum,
+                                              const glm::mat4& modelMatrix,
+                                              std::unordered_set<uint32_t>& outVisibleGroups) const {
+    // Find camera's containing group
+    int cameraGroup = findContainingGroup(model, cameraLocalPos);
+
+    // If camera is outside all groups, fall back to frustum culling only
+    if (cameraGroup < 0) {
+        // Camera outside WMO - mark all groups as potentially visible
+        // (will still be frustum culled in render)
+        for (size_t gi = 0; gi < model.groups.size(); gi++) {
+            outVisibleGroups.insert(static_cast<uint32_t>(gi));
+        }
+        return;
+    }
+
+    // BFS through portals from camera's group
+    std::vector<bool> visited(model.groups.size(), false);
+    std::vector<uint32_t> queue;
+    queue.push_back(static_cast<uint32_t>(cameraGroup));
+    visited[cameraGroup] = true;
+    outVisibleGroups.insert(static_cast<uint32_t>(cameraGroup));
+
+    size_t queueIdx = 0;
+    while (queueIdx < queue.size()) {
+        uint32_t currentGroup = queue[queueIdx++];
+
+        // Get portal refs for this group
+        if (currentGroup >= model.groupPortalRefs.size()) continue;
+        auto [portalStart, portalCount] = model.groupPortalRefs[currentGroup];
+
+        for (uint16_t pi = 0; pi < portalCount; pi++) {
+            uint16_t refIdx = portalStart + pi;
+            if (refIdx >= model.portalRefs.size()) continue;
+
+            const auto& ref = model.portalRefs[refIdx];
+            uint32_t targetGroup = ref.groupIndex;
+
+            if (targetGroup >= model.groups.size()) continue;
+            if (visited[targetGroup]) continue;
+
+            // Check if portal is visible from camera
+            if (isPortalVisible(model, ref.portalIndex, cameraLocalPos, frustum, modelMatrix)) {
+                visited[targetGroup] = true;
+                outVisibleGroups.insert(targetGroup);
+                queue.push_back(targetGroup);
+            }
+        }
+    }
 }
 
 void WMORenderer::WMOInstance::updateModelMatrix() {
