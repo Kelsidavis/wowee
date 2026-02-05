@@ -3,6 +3,7 @@
 #include "core/logger.hpp"
 #include "platform/process.hpp"
 #include <fstream>
+#include <filesystem>
 
 namespace wowee {
 namespace audio {
@@ -75,6 +76,10 @@ void MusicManager::playMusic(const std::string& mpqPath, bool loop) {
 void MusicManager::playFilePath(const std::string& filePath, bool loop) {
     if (filePath.empty()) return;
     if (filePath == currentTrack && playing) return;
+    if (!std::filesystem::exists(filePath)) {
+        LOG_WARNING("Music: file not found: ", filePath);
+        return;
+    }
 
     stopCurrentProcess();
 

@@ -6,6 +6,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "audio/music_manager.hpp"
 #include <imgui.h>
+#include <filesystem>
 #include <sstream>
 #include <fstream>
 #include <cstdlib>
@@ -75,19 +76,29 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
         }
     }
 
+    auto& app = core::Application::getInstance();
+    auto* renderer = app.getRenderer();
     if (!musicInitAttempted) {
         musicInitAttempted = true;
-        auto& app = core::Application::getInstance();
-        auto* renderer = app.getRenderer();
         auto* assets = app.getAssetManager();
         if (renderer) {
             auto* music = renderer->getMusicManager();
             if (music && assets && assets->isInitialized() && !music->isInitialized()) {
                 music->initialize(assets);
             }
-            if (music && !musicPlaying) {
-                music->playFilePath("assets/20-taverns.mp3", true);
-                musicPlaying = true;
+        }
+    }
+    if (renderer) {
+        auto* music = renderer->getMusicManager();
+        if (music) {
+            music->update(ImGui::GetIO().DeltaTime);
+            if (!music->isPlaying()) {
+                std::string path = "assets/20-taverns.mp3";
+                if (!std::filesystem::exists(path)) {
+                    path = (std::filesystem::current_path() / "assets/20-taverns.mp3").string();
+                }
+                music->playFilePath(path, true);
+                musicPlaying = music->isPlaying();
             }
         }
     }
