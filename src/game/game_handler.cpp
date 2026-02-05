@@ -72,9 +72,70 @@ struct SinglePlayerStartDb {
         uint32_t classMask = 0;
         uint32_t spellId = 0;
     };
+    struct StartActionRow {
+        uint8_t race = 0;
+        uint8_t cls = 0;
+        uint16_t button = 0;
+        uint32_t action = 0;
+        uint16_t type = 0;
+    };
     std::vector<StartItemRow> items;
     std::vector<StartSpellRow> spells;
+    std::vector<StartActionRow> actions;
 };
+
+static uint32_t removeItemsFromInventory(Inventory& inventory, uint32_t itemId, uint32_t amount) {
+    if (itemId == 0 || amount == 0) return 0;
+    uint32_t remaining = amount;
+
+    for (int i = 0; i < Inventory::BACKPACK_SLOTS && remaining > 0; i++) {
+        const ItemSlot& slot = inventory.getBackpackSlot(i);
+        if (slot.empty() || slot.item.itemId != itemId) continue;
+        if (slot.item.stackCount <= remaining) {
+            remaining -= slot.item.stackCount;
+            inventory.clearBackpackSlot(i);
+        } else {
+            ItemDef updated = slot.item;
+            updated.stackCount -= remaining;
+            inventory.setBackpackSlot(i, updated);
+            remaining = 0;
+        }
+    }
+
+    for (int i = 0; i < Inventory::NUM_EQUIP_SLOTS && remaining > 0; i++) {
+        EquipSlot slotId = static_cast<EquipSlot>(i);
+        const ItemSlot& slot = inventory.getEquipSlot(slotId);
+        if (slot.empty() || slot.item.itemId != itemId) continue;
+        if (slot.item.stackCount <= remaining) {
+            remaining -= slot.item.stackCount;
+            inventory.clearEquipSlot(slotId);
+        } else {
+            ItemDef updated = slot.item;
+            updated.stackCount -= remaining;
+            inventory.setEquipSlot(slotId, updated);
+            remaining = 0;
+        }
+    }
+
+    for (int bag = 0; bag < Inventory::NUM_BAG_SLOTS && remaining > 0; bag++) {
+        int bagSize = inventory.getBagSize(bag);
+        for (int slotIndex = 0; slotIndex < bagSize && remaining > 0; slotIndex++) {
+            const ItemSlot& slot = inventory.getBagSlot(bag, slotIndex);
+            if (slot.empty() || slot.item.itemId != itemId) continue;
+            if (slot.item.stackCount <= remaining) {
+                remaining -= slot.item.stackCount;
+                inventory.setBagSlot(bag, slotIndex, ItemDef{});
+            } else {
+                ItemDef updated = slot.item;
+                updated.stackCount -= remaining;
+                inventory.setBagSlot(bag, slotIndex, updated);
+                remaining = 0;
+            }
+        }
+    }
+
+    return amount - remaining;
+}
 
 static std::string trimSql(const std::string& s) {
     size_t b = 0;
@@ -418,12 +479,14 @@ static SinglePlayerStartDb& getSinglePlayerStartDb() {
     std::filesystem::path basePath = base;
     std::filesystem::path itemPath = basePath / "playercreateinfo_item.sql";
     std::filesystem::path spellPath = basePath / "playercreateinfo_spell.sql";
-    if (!std::filesystem::exists(itemPath) || !std::filesystem::exists(spellPath)) {
+    std::filesystem::path actionPath = basePath / "playercreateinfo_action.sql";
+    if (!std::filesystem::exists(itemPath) || !std::filesystem::exists(spellPath) || !std::filesystem::exists(actionPath)) {
         auto alt = basePath / "base";
         if (std::filesystem::exists(alt / "playercreateinfo_item.sql")) {
             basePath = alt;
             itemPath = basePath / "playercreateinfo_item.sql";
             spellPath = basePath / "playercreateinfo_spell.sql";
+            actionPath = basePath / "playercreateinfo_action.sql";
         }
     }
 
@@ -458,9 +521,26 @@ static SinglePlayerStartDb& getSinglePlayerStartDb() {
         });
     }
 
+    if (std::filesystem::exists(actionPath)) {
+        std::ifstream in(actionPath);
+        processInsertStatements(in, [&](const std::vector<std::string>& row) {
+            if (row.size() < 5) return;
+            try {
+                SinglePlayerStartDb::StartActionRow r;
+                r.race = static_cast<uint8_t>(std::stoul(row[0]));
+                r.cls = static_cast<uint8_t>(std::stoul(row[1]));
+                r.button = static_cast<uint16_t>(std::stoul(row[2]));
+                r.action = static_cast<uint32_t>(std::stoul(row[3]));
+                r.type = static_cast<uint16_t>(std::stoul(row[4]));
+                db.actions.push_back(r);
+            } catch (const std::exception&) {
+            }
+        });
+    }
+
     db.loaded = true;
     LOG_INFO("Single-player start DB loaded (items=", db.items.size(),
-             ", spells=", db.spells.size(), ")");
+             ", spells=", db.spells.size(), ", actions=", db.actions.size(), ")");
     return db;
 }
 
@@ -1140,6 +1220,13 @@ void GameHandler::applySinglePlayerStartData(Race race, Class cls) {
         inventory.addItem(def);
     }
 
+    for (const auto& row : startDb.items) {
+        if (row.itemId == 0 || row.amount >= 0) continue;
+        if (row.race != 0 && row.race != raceVal) continue;
+        if (row.cls != 0 && row.cls != classVal) continue;
+        removeItemsFromInventory(inventory, row.itemId, static_cast<uint32_t>(-row.amount));
+    }
+
     uint32_t raceMask = 1u << (raceVal > 0 ? (raceVal - 1) : 0);
     uint32_t classMask = 1u << (classVal > 0 ? (classVal - 1) : 0);
     for (const auto& row : startDb.spells) {
@@ -1151,14 +1238,41 @@ void GameHandler::applySinglePlayerStartData(Race race, Class cls) {
         }
     }
 
-    // Auto-populate action bar with known spells
-    int slot = 1;
-    for (uint32_t spellId : knownSpells) {
-        if (spellId == 6603 || spellId == 8690) continue;
-        if (slot >= 11) break;
-        actionBar[slot].type = ActionBarSlot::SPELL;
-        actionBar[slot].id = spellId;
-        slot++;
+    bool hasActionRows = false;
+    for (const auto& row : startDb.actions) {
+        if (row.button >= actionBar.size()) continue;
+        if (row.race != 0 && row.race != raceVal) continue;
+        if (row.cls != 0 && row.cls != classVal) continue;
+
+        ActionBarSlot::Type type = ActionBarSlot::EMPTY;
+        switch (row.type) {
+            case 0: type = ActionBarSlot::SPELL; break;
+            case 1: type = ActionBarSlot::ITEM; break;
+            case 2: type = ActionBarSlot::MACRO; break;
+            default: break;
+        }
+        if (type == ActionBarSlot::EMPTY || row.action == 0) continue;
+
+        actionBar[row.button].type = type;
+        actionBar[row.button].id = row.action;
+        hasActionRows = true;
+
+        if (type == ActionBarSlot::SPELL &&
+            std::find(knownSpells.begin(), knownSpells.end(), row.action) == knownSpells.end()) {
+            knownSpells.push_back(row.action);
+        }
+    }
+
+    if (!hasActionRows) {
+        // Auto-populate action bar with known spells
+        int slot = 1;
+        for (uint32_t spellId : knownSpells) {
+            if (spellId == 6603 || spellId == 8690) continue;
+            if (slot >= 11) break;
+            actionBar[slot].type = ActionBarSlot::SPELL;
+            actionBar[slot].id = spellId;
+            slot++;
+        }
     }
 }
 
