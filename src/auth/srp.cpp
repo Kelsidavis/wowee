@@ -127,21 +127,20 @@ void SRP::computeSessionKey() {
 
     // Compute session key: S = (B - kg^x)^(a + ux) mod N
 
-    // Step 1: kg^x
+    // Step 1: kg^x mod N
     BigNum gx = g.modPow(x, N);
     BigNum kgx = k.multiply(gx);
 
-    // Step 2: B - kg^x
-    BigNum B_minus_kgx = B.subtract(kgx);
+    // Step 2: B - kg^x (add k*N first to prevent negative result)
+    BigNum kN = k.multiply(N);
+    BigNum diff = B.add(kN).subtract(kgx);
 
-    // Step 3: ux
+    // Step 3: a + ux
     BigNum ux = u.multiply(x);
-
-    // Step 4: a + ux
     BigNum aux = a.add(ux);
 
-    // Step 5: (B - kg^x)^(a + ux) mod N
-    S = B_minus_kgx.modPow(aux, N);
+    // Step 4: (B + kN - kg^x)^(a + ux) mod N
+    S = diff.modPow(aux, N);
 
     LOG_DEBUG("Session key S calculated");
 
@@ -178,7 +177,7 @@ void SRP::computeProofs(const std::string& username) {
     std::transform(upperUser.begin(), upperUser.end(), upperUser.begin(), ::toupper);
 
     // Compute H(N) and H(g)
-    std::vector<uint8_t> N_bytes = N.toArray(true, 256);  // Full 256 bytes
+    std::vector<uint8_t> N_bytes = N.toArray(true, 32);  // 32 bytes (256-bit prime)
     std::vector<uint8_t> g_bytes = g.toArray(true);
 
     std::vector<uint8_t> N_hash = Crypto::sha1(N_bytes);
