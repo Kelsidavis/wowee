@@ -31,6 +31,11 @@ public:
 
     void processMouseWheel(float delta);
     void setFollowTarget(glm::vec3* target);
+    void setDefaultSpawn(const glm::vec3& position, float yawDeg, float pitchDeg) {
+        defaultPosition = position;
+        defaultYaw = yawDeg;
+        defaultPitch = pitchDeg;
+    }
 
     void reset();
 

@@ -1,4 +1,5 @@
 #include "core/application.hpp"
+#include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera.hpp"
@@ -31,10 +32,83 @@
 #include <GL/glew.h>
 #include <chrono>
 #include <cstdlib>
+#include <algorithm>
+#include <cctype>
+#include <optional>
+#include <sstream>
 #include <set>
 
 namespace wowee {
 namespace core {
+
+namespace {
+
+struct SpawnPreset {
+    const char* key;
+    const char* label;
+    const char* mapName;        // Map name for ADT paths (e.g., "Azeroth")
+    glm::vec3 spawnCanonical;   // Canonical WoW coords: +X=North, +Y=West, +Z=Up
+    float yawDeg;
+    float pitchDeg;
+};
+
+const SpawnPreset* selectSpawnPreset(const char* envValue) {
+    // Spawn positions in canonical WoW world coordinates (X=north, Y=west, Z=up).
+    // Tile is computed from position via: tileN = floor(32 - wowN / 533.33333)
+    static const SpawnPreset presets[] = {
+        {"goldshire",  "Goldshire",      "Azeroth", glm::vec3(   62.0f, -9464.0f, 200.0f), 0.0f, -5.0f},
+        {"stormwind",  "Stormwind",      "Azeroth", glm::vec3( -365.0f, -8345.0f, 180.0f), 35.0f, -8.0f},
+        {"ironforge",  "Ironforge Area", "Azeroth", glm::vec3( -300.0f,-11240.0f, 260.0f), -20.0f, -8.0f},
+        {"westfall",   "Westfall",       "Azeroth", glm::vec3(-1820.0f, -9380.0f, 190.0f), 10.0f, -8.0f},
+    };
+
+    if (!envValue || !*envValue) {
+        return &presets[0];
+    }
+
+    std::string key = envValue;
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    for (const auto& preset : presets) {
+        if (key == preset.key) return &preset;
+    }
+
+    LOG_WARNING("Unknown WOW_SPAWN='", key, "', falling back to goldshire");
+    LOG_INFO("Available WOW_SPAWN presets: goldshire, stormwind, ironforge, westfall");
+    return &presets[0];
+}
+
+std::optional<glm::vec3> parseVec3Csv(const char* raw) {
+    if (!raw || !*raw) return std::nullopt;
+    std::stringstream ss(raw);
+    std::string part;
+    float vals[3];
+    for (int i = 0; i < 3; i++) {
+        if (!std::getline(ss, part, ',')) return std::nullopt;
+        try {
+            vals[i] = std::stof(part);
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    return glm::vec3(vals[0], vals[1], vals[2]);
+}
+
+std::optional<std::pair<float, float>> parseYawPitchCsv(const char* raw) {
+    if (!raw || !*raw) return std::nullopt;
+    std::stringstream ss(raw);
+    std::string part;
+    float yaw = 0.0f, pitch = 0.0f;
+    if (!std::getline(ss, part, ',')) return std::nullopt;
+    try { yaw = std::stof(part); } catch (...) { return std::nullopt; }
+    if (!std::getline(ss, part, ',')) return std::nullopt;
+    try { pitch = std::stof(part); } catch (...) { return std::nullopt; }
+    return std::make_pair(yaw, pitch);
+}
+
+} // namespace
 
 Application* Application::instance = nullptr;
 
@@ -293,14 +367,11 @@ void Application::update(float deltaTime) {
                 npcManager->update(deltaTime, renderer->getCharacterRenderer());
             }
 
-            // Sync character GL position → movementInfo WoW coords each frame
+            // Sync character render position → canonical WoW coords each frame
             if (renderer && gameHandler) {
-                glm::vec3 glPos = renderer->getCharacterPosition();
-                constexpr float ZEROPOINT = 32.0f * 533.33333f;
-                float wowX = ZEROPOINT - glPos.y;
-                float wowY = glPos.z;
-                float wowZ = ZEROPOINT - glPos.x;
-                gameHandler->setPosition(wowX, wowY, wowZ);
+                glm::vec3 renderPos = renderer->getCharacterPosition();
+                glm::vec3 canonical = core::coords::renderToCanonical(renderPos);
+                gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
 
                 // Sync orientation: camera yaw (degrees) → WoW orientation (radians)
                 float yawDeg = renderer->getCharacterYaw();
@@ -816,11 +887,8 @@ void Application::spawnNpcs() {
     // derive it from the camera so targeting distance calculations work.
     const auto& movement = gameHandler->getMovementInfo();
     if (movement.x == 0.0f && movement.y == 0.0f && movement.z == 0.0f) {
-        constexpr float ZEROPOINT = 32.0f * 533.33333f;
-        float wowX = ZEROPOINT - playerSpawnGL.y;
-        float wowY = playerSpawnGL.z;
-        float wowZ = ZEROPOINT - playerSpawnGL.x;
-        gameHandler->setPosition(wowX, wowY, wowZ);
+        glm::vec3 canonical = core::coords::renderToCanonical(playerSpawnGL);
+        gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
     }
 
     npcsSpawned = true;
@@ -848,6 +916,37 @@ void Application::startSinglePlayer() {
     loadEquippedWeapons();
 
     // --- Loading screen: load terrain and wait for streaming before spawning ---
+    const SpawnPreset* spawnPreset = selectSpawnPreset(std::getenv("WOW_SPAWN"));
+    // Canonical WoW coords: +X=North, +Y=West, +Z=Up
+    glm::vec3 spawnCanonical = spawnPreset ? spawnPreset->spawnCanonical : glm::vec3(62.0f, -9464.0f, 200.0f);
+    std::string mapName = spawnPreset ? spawnPreset->mapName : "Azeroth";
+    float spawnYaw = spawnPreset ? spawnPreset->yawDeg : 0.0f;
+    float spawnPitch = spawnPreset ? spawnPreset->pitchDeg : -5.0f;
+
+    if (auto envSpawnPos = parseVec3Csv(std::getenv("WOW_SPAWN_POS"))) {
+        spawnCanonical = *envSpawnPos;
+        LOG_INFO("Using WOW_SPAWN_POS override (canonical WoW X,Y,Z): (",
+                 spawnCanonical.x, ", ", spawnCanonical.y, ", ", spawnCanonical.z, ")");
+    }
+    if (auto envSpawnRot = parseYawPitchCsv(std::getenv("WOW_SPAWN_ROT"))) {
+        spawnYaw = envSpawnRot->first;
+        spawnPitch = envSpawnRot->second;
+        LOG_INFO("Using WOW_SPAWN_ROT override: yaw=", spawnYaw, " pitch=", spawnPitch);
+    }
+
+    // Convert canonical WoW → engine rendering coordinates (swap X/Y)
+    glm::vec3 spawnRender = core::coords::canonicalToRender(spawnCanonical);
+    if (renderer && renderer->getCameraController()) {
+        renderer->getCameraController()->setDefaultSpawn(spawnRender, spawnYaw, spawnPitch);
+    }
+    if (spawnPreset) {
+        LOG_INFO("Single-player spawn preset: ", spawnPreset->label,
+                 " canonical=(",
+                 spawnCanonical.x, ", ", spawnCanonical.y, ", ", spawnCanonical.z,
+                 ") (set WOW_SPAWN to change)");
+        LOG_INFO("Optional spawn overrides (canonical WoW X,Y,Z): WOW_SPAWN_POS=x,y,z WOW_SPAWN_ROT=yaw,pitch");
+    }
+
     rendering::LoadingScreen loadingScreen;
     bool loadingScreenOk = loadingScreen.initialize();
 
@@ -863,7 +962,11 @@ void Application::startSinglePlayer() {
     // Try to load test terrain if WOW_DATA_PATH is set
     bool terrainOk = false;
     if (renderer && assetManager && assetManager->isInitialized()) {
-        std::string adtPath = "World\\Maps\\Azeroth\\Azeroth_32_49.adt";
+        // Compute ADT path from canonical spawn coordinates
+        auto [tileX, tileY] = core::coords::canonicalToTile(spawnCanonical.x, spawnCanonical.y);
+        std::string adtPath = "World\\Maps\\" + mapName + "\\" + mapName + "_" +
+                              std::to_string(tileX) + "_" + std::to_string(tileY) + ".adt";
+        LOG_INFO("Initial ADT tile [", tileX, ",", tileY, "] from canonical position");
         terrainOk = renderer->loadTestTerrain(assetManager.get(), adtPath);
         if (!terrainOk) {
             LOG_WARNING("Could not load test terrain - atmospheric rendering only");

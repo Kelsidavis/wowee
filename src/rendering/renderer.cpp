@@ -1066,7 +1066,11 @@ void Renderer::renderWorld(game::World* world) {
 
     // Render minimap overlay
     if (minimap && camera && window) {
-        minimap->render(*camera, window->getWidth(), window->getHeight());
+        glm::vec3 minimapCenter = camera->getPosition();
+        if (cameraController && cameraController->isThirdPerson()) {
+            minimapCenter = characterPosition;
+        }
+        minimap->render(*camera, minimapCenter, window->getWidth(), window->getHeight());
     }
 
     // --- Resolve MSAA → non-MSAA texture ---

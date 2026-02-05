@@ -188,7 +188,7 @@ public:
 
 private:
     /**
-     * Get tile coordinates from world position
+     * Get tile coordinates from GL world position
      */
     TileCoord worldToTile(float worldX, float worldY) const;
 

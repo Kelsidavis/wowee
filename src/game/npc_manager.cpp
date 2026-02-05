@@ -1,5 +1,6 @@
 #include "game/npc_manager.hpp"
 #include "game/entity.hpp"
+#include "core/coordinates.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -12,8 +13,6 @@
 
 namespace wowee {
 namespace game {
-
-static constexpr float ZEROPOINT = 32.0f * 533.33333f;
 
 // Random emote animation IDs (humanoid only)
 static const uint32_t EMOTE_ANIMS[] = { 60, 66, 67, 70 }; // Talk, Bow, Wave, Laugh
@@ -315,11 +314,9 @@ void NpcManager::initialize(pipeline::AssetManager* am,
         unit->setHealth(s.health);
         unit->setMaxHealth(s.health);
 
-        // Convert GL position back to WoW coordinates for targeting system
-        float wowX = ZEROPOINT - glPos.y;
-        float wowY = glPos.z;
-        float wowZ = ZEROPOINT - glPos.x;
-        unit->setPosition(wowX, wowY, wowZ, s.rotation);
+        // Store canonical WoW coordinates for targeting/server compatibility
+        glm::vec3 canonical = core::coords::renderToCanonical(glPos);
+        unit->setPosition(canonical.x, canonical.y, canonical.z, s.rotation);
 
         em.addEntity(guid, unit);
 

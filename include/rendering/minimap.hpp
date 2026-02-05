@@ -22,7 +22,8 @@ public:
 
     void setTerrainRenderer(TerrainRenderer* tr) { terrainRenderer = tr; }
 
-    void render(const Camera& playerCamera, int screenWidth, int screenHeight);
+    void render(const Camera& playerCamera, const glm::vec3& centerWorldPos,
+                int screenWidth, int screenHeight);
 
     void setEnabled(bool enabled) { this->enabled = enabled; }
     bool isEnabled() const { return enabled; }
@@ -31,7 +32,7 @@ public:
     void setViewRadius(float radius) { viewRadius = radius; }
 
 private:
-    void renderTerrainToFBO(const Camera& playerCamera);
+    void renderTerrainToFBO(const Camera& playerCamera, const glm::vec3& centerWorldPos);
     void renderQuad(int screenWidth, int screenHeight);
 
     TerrainRenderer* terrainRenderer = nullptr;

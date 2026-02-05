@@ -1,5 +1,6 @@
 #include "ui/game_screen.hpp"
 #include "core/application.hpp"
+#include "core/coordinates.hpp"
 #include "core/input.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
@@ -12,12 +13,6 @@
 #include <unordered_set>
 
 namespace {
-    constexpr float ZEROPOINT = 32.0f * 533.33333f;
-
-    glm::vec3 wowToGL(float wowX, float wowY, float wowZ) {
-        return { -(wowZ - ZEROPOINT), -(wowX - ZEROPOINT), wowY };
-    }
-
     bool raySphereIntersect(const wowee::rendering::Ray& ray, const glm::vec3& center, float radius, float& tOut) {
         glm::vec3 oc = ray.origin - center;
         float b = glm::dot(oc, ray.direction);
@@ -103,7 +98,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         if (gameHandler.hasTarget()) {
             auto target = gameHandler.getTarget();
             if (target) {
-                targetGLPos = wowToGL(target->getX(), target->getY(), target->getZ());
+                targetGLPos = core::coords::canonicalToRender(glm::vec3(target->getX(), target->getY(), target->getZ()));
                 renderer->setTargetPosition(&targetGLPos);
             } else {
                 renderer->setTargetPosition(nullptr);
@@ -411,7 +406,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 auto t = entity->getType();
                 if (t != game::ObjectType::UNIT && t != game::ObjectType::PLAYER) continue;
 
-                glm::vec3 entityGL = wowToGL(entity->getX(), entity->getY(), entity->getZ());
+                glm::vec3 entityGL = core::coords::canonicalToRender(glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
                 // Add half-height offset so we target the body center, not feet
                 entityGL.z += 3.0f;
 

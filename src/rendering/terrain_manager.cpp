@@ -4,6 +4,7 @@
 #include "rendering/m2_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/camera.hpp"
+#include "core/coordinates.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -147,11 +148,9 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
 
     timeSinceLastUpdate = 0.0f;
 
-    // Get current tile from camera position
-    // GL coordinate mapping: GL Y = -(wowX - ZEROPOINT), GL X = -(wowZ - ZEROPOINT), GL Z = height
-    // worldToTile expects: worldX = -glY (maps to tileX), worldY = glX (maps to tileY)
+    // Get current tile from camera position.
     glm::vec3 camPos = camera.getPosition();
-    TileCoord newTile = worldToTile(-camPos.y, camPos.x);
+    TileCoord newTile = worldToTile(camPos.x, camPos.y);
 
     // Check if we've moved to a different tile
     if (newTile.x != currentTile.x || newTile.y != currentTile.y) {
@@ -293,20 +292,15 @@ std::unique_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
 
             // Store placement data for instance creation on main thread
             if (preparedModelIds.count(modelId)) {
-                const float ZEROPOINT = 32.0f * 533.33333f;
-
                 float wowX = placement.position[0];
                 float wowY = placement.position[1];
                 float wowZ = placement.position[2];
+                glm::vec3 glPos = core::coords::adtToWorld(wowX, wowY, wowZ);
 
                 PendingTile::M2Placement p;
                 p.modelId = modelId;
                 p.uniqueId = placement.uniqueId;
-                p.position = glm::vec3(
-                    -(wowZ - ZEROPOINT),
-                    -(wowX - ZEROPOINT),
-                    wowY
-                );
+                p.position = glPos;
                 p.rotation = glm::vec3(
                     -placement.rotation[2] * 3.14159f / 180.0f,
                     -placement.rotation[0] * 3.14159f / 180.0f,
@@ -368,13 +362,9 @@ std::unique_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
             }
 
             if (!wmoModel.groups.empty()) {
-                const float ZEROPOINT = 32.0f * 533.33333f;
-
-                glm::vec3 pos(
-                    -(placement.position[2] - ZEROPOINT),
-                    -(placement.position[0] - ZEROPOINT),
-                    placement.position[1]
-                );
+                glm::vec3 pos = core::coords::adtToWorld(placement.position[0],
+                                                       placement.position[1],
+                                                       placement.position[2]);
 
                 glm::vec3 rot(
                     -placement.rotation[2] * 3.14159f / 180.0f,
@@ -769,19 +759,8 @@ void TerrainManager::unloadAll() {
     }
 }
 
-TileCoord TerrainManager::worldToTile(float worldX, float worldY) const {
-    // WoW world coordinate system:
-    // - Tiles are 8533.33 units wide (TILE_SIZE)
-    // - Tile (32, 32) is roughly at world origin for continents
-    // - Coordinates increase going east (X) and south (Y)
-
-    int tileX = 32 + static_cast<int>(std::floor(worldX / TILE_SIZE));
-    int tileY = 32 - static_cast<int>(std::floor(worldY / TILE_SIZE));
-
-    // Clamp to valid range (0-63)
-    tileX = std::max(0, std::min(63, tileX));
-    tileY = std::max(0, std::min(63, tileY));
-
+TileCoord TerrainManager::worldToTile(float glX, float glY) const {
+    auto [tileX, tileY] = core::coords::worldToTile(glX, glY);
     return {tileX, tileY};
 }
 

@@ -137,11 +137,12 @@ void Minimap::shutdown() {
     quadShader.reset();
 }
 
-void Minimap::render(const Camera& playerCamera, int screenWidth, int screenHeight) {
+void Minimap::render(const Camera& playerCamera, const glm::vec3& centerWorldPos,
+                     int screenWidth, int screenHeight) {
     if (!enabled || !terrainRenderer || !fbo) return;
 
     const auto now = std::chrono::steady_clock::now();
-    glm::vec3 playerPos = playerCamera.getPosition();
+    glm::vec3 playerPos = centerWorldPos;
     bool needsRefresh = !hasCachedFrame;
     if (!needsRefresh) {
         float moved = glm::length(glm::vec2(playerPos.x - lastUpdatePos.x, playerPos.y - lastUpdatePos.y));
@@ -151,7 +152,7 @@ void Minimap::render(const Camera& playerCamera, int screenWidth, int screenHeig
 
     // 1. Render terrain from top-down into FBO (throttled)
     if (needsRefresh) {
-        renderTerrainToFBO(playerCamera);
+        renderTerrainToFBO(playerCamera, centerWorldPos);
         lastUpdateTime = now;
         lastUpdatePos = playerPos;
         hasCachedFrame = true;
@@ -161,7 +162,7 @@ void Minimap::render(const Camera& playerCamera, int screenWidth, int screenHeig
     renderQuad(screenWidth, screenHeight);
 }
 
-void Minimap::renderTerrainToFBO(const Camera& playerCamera) {
+void Minimap::renderTerrainToFBO(const Camera& /*playerCamera*/, const glm::vec3& centerWorldPos) {
     // Save current viewport
     GLint prevViewport[4];
     glGetIntegerv(GL_VIEWPORT, prevViewport);
@@ -173,7 +174,7 @@ void Minimap::renderTerrainToFBO(const Camera& playerCamera) {
 
     // Create a top-down camera at the player's XY position
     Camera topDownCamera;
-    glm::vec3 playerPos = playerCamera.getPosition();
+    glm::vec3 playerPos = centerWorldPos;
     topDownCamera.setPosition(glm::vec3(playerPos.x, playerPos.y, playerPos.z + 5000.0f));
     topDownCamera.setRotation(0.0f, -89.9f);  // Look straight down
     topDownCamera.setAspectRatio(1.0f);
