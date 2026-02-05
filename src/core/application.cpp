@@ -1,5 +1,6 @@
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
+#include "core/spawn_presets.hpp"
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera.hpp"
@@ -43,27 +44,9 @@ namespace core {
 
 namespace {
 
-struct SpawnPreset {
-    const char* key;
-    const char* label;
-    const char* mapName;        // Map name for ADT paths (e.g., "Azeroth")
-    glm::vec3 spawnCanonical;   // Canonical WoW coords: +X=North, +Y=West, +Z=Up
-    float yawDeg;
-    float pitchDeg;
-};
-
 const SpawnPreset* selectSpawnPreset(const char* envValue) {
-    // Spawn positions in canonical WoW world coordinates (X=north, Y=west, Z=up).
-    // Tile is computed from position via: tileN = floor(32 - wowN / 533.33333)
-    static const SpawnPreset presets[] = {
-        {"goldshire",  "Goldshire",      "Azeroth", glm::vec3(   62.0f, -9464.0f, 200.0f), 0.0f, -5.0f},
-        {"stormwind",  "Stormwind",      "Azeroth", glm::vec3( -365.0f, -8345.0f, 180.0f), 35.0f, -8.0f},
-        {"ironforge",  "Ironforge Area", "Azeroth", glm::vec3( -300.0f,-11240.0f, 260.0f), -20.0f, -8.0f},
-        {"westfall",   "Westfall",       "Azeroth", glm::vec3(-1820.0f, -9380.0f, 190.0f), 10.0f, -8.0f},
-    };
-
     if (!envValue || !*envValue) {
-        return &presets[0];
+        return &SPAWN_PRESETS[0];
     }
 
     std::string key = envValue;
@@ -71,13 +54,13 @@ const SpawnPreset* selectSpawnPreset(const char* envValue) {
         return static_cast<char>(std::tolower(c));
     });
 
-    for (const auto& preset : presets) {
-        if (key == preset.key) return &preset;
+    for (int i = 0; i < SPAWN_PRESET_COUNT; i++) {
+        if (key == SPAWN_PRESETS[i].key) return &SPAWN_PRESETS[i];
     }
 
     LOG_WARNING("Unknown WOW_SPAWN='", key, "', falling back to goldshire");
     LOG_INFO("Available WOW_SPAWN presets: goldshire, stormwind, ironforge, westfall");
-    return &presets[0];
+    return &SPAWN_PRESETS[0];
 }
 
 std::optional<glm::vec3> parseVec3Csv(const char* raw) {
@@ -257,6 +240,12 @@ void Application::run() {
                 else if (event.key.keysym.scancode == SDL_SCANCODE_N) {
                     if (renderer && renderer->getMinimap()) {
                         renderer->getMinimap()->toggle();
+                    }
+                }
+                // T: Toggle teleporter panel
+                else if (event.key.keysym.scancode == SDL_SCANCODE_T) {
+                    if (state == AppState::IN_GAME && uiManager) {
+                        uiManager->getGameScreen().toggleTeleporter();
                     }
                 }
             }
@@ -1055,6 +1044,93 @@ void Application::startSinglePlayer() {
     // Go directly to game
     setState(AppState::IN_GAME);
     LOG_INFO("Single-player mode started - press F1 for performance HUD");
+}
+
+void Application::teleportTo(int presetIndex) {
+    // Guard: only in single-player + IN_GAME state
+    if (!singlePlayerMode || state != AppState::IN_GAME) return;
+    if (presetIndex < 0 || presetIndex >= SPAWN_PRESET_COUNT) return;
+
+    const auto& preset = SPAWN_PRESETS[presetIndex];
+    LOG_INFO("Teleporting to: ", preset.label);
+
+    // Convert canonical WoW → engine rendering coordinates (swap X/Y)
+    glm::vec3 spawnRender = core::coords::canonicalToRender(preset.spawnCanonical);
+
+    // Update camera default spawn
+    if (renderer && renderer->getCameraController()) {
+        renderer->getCameraController()->setDefaultSpawn(spawnRender, preset.yawDeg, preset.pitchDeg);
+    }
+
+    // Unload all current terrain
+    if (renderer && renderer->getTerrainManager()) {
+        renderer->getTerrainManager()->unloadAll();
+    }
+
+    // Compute ADT path from canonical spawn coordinates
+    auto [tileX, tileY] = core::coords::canonicalToTile(preset.spawnCanonical.x, preset.spawnCanonical.y);
+    std::string mapName = preset.mapName;
+    std::string adtPath = "World\\Maps\\" + mapName + "\\" + mapName + "_" +
+                          std::to_string(tileX) + "_" + std::to_string(tileY) + ".adt";
+    LOG_INFO("Teleport ADT tile [", tileX, ",", tileY, "]");
+
+    // Set map name on terrain manager
+    if (renderer && renderer->getTerrainManager()) {
+        renderer->getTerrainManager()->setMapName(mapName);
+    }
+
+    // Load the initial tile
+    bool terrainOk = false;
+    if (renderer && assetManager && assetManager->isInitialized()) {
+        terrainOk = renderer->loadTestTerrain(assetManager.get(), adtPath);
+    }
+
+    // Stream surrounding tiles
+    if (terrainOk && renderer->getTerrainManager() && renderer->getCamera()) {
+        auto* terrainMgr = renderer->getTerrainManager();
+        auto* camera = renderer->getCamera();
+
+        terrainMgr->update(*camera, 1.0f);
+
+        auto startTime = std::chrono::high_resolution_clock::now();
+        const float maxWaitSeconds = 8.0f;
+
+        while (terrainMgr->getPendingTileCount() > 0) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_QUIT) {
+                    window->setShouldClose(true);
+                    return;
+                }
+            }
+
+            terrainMgr->update(*camera, 0.016f);
+
+            auto elapsed = std::chrono::high_resolution_clock::now() - startTime;
+            if (std::chrono::duration<float>(elapsed).count() > maxWaitSeconds) {
+                LOG_WARNING("Teleport terrain streaming timeout after ", maxWaitSeconds, "s");
+                break;
+            }
+
+            SDL_Delay(16);
+        }
+
+        LOG_INFO("Teleport terrain streaming complete: ", terrainMgr->getLoadedTileCount(), " tiles loaded");
+    }
+
+    // Reset camera — this snaps character position to terrain via followTarget
+    if (renderer && renderer->getCameraController()) {
+        renderer->getCameraController()->reset();
+    }
+
+    // Sync the terrain-snapped character position to game handler
+    if (renderer && gameHandler) {
+        glm::vec3 snappedRender = renderer->getCharacterPosition();
+        glm::vec3 snappedCanonical = core::coords::renderToCanonical(snappedRender);
+        gameHandler->setPosition(snappedCanonical.x, snappedCanonical.y, snappedCanonical.z);
+    }
+
+    LOG_INFO("Teleport to ", preset.label, " complete");
 }
 
 } // namespace core

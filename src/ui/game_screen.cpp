@@ -1,6 +1,7 @@
 #include "ui/game_screen.hpp"
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
+#include "core/spawn_presets.hpp"
 #include "core/input.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
@@ -78,6 +79,9 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     renderLootWindow(gameHandler);
     renderGossipWindow(gameHandler);
     renderVendorWindow(gameHandler);
+
+    // Teleporter panel (T key toggle handled in Application event loop)
+    renderTeleporterPanel();
 
     // Spellbook (P key toggle handled inside)
     spellbookScreen.render(gameHandler, core::Application::getInstance().getAssetManager());
@@ -337,7 +341,9 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
         }
 
         if (input.isKeyJustPressed(SDL_SCANCODE_ESCAPE)) {
-            if (gameHandler.isCasting()) {
+            if (showTeleporter) {
+                showTeleporter = false;
+            } else if (gameHandler.isCasting()) {
                 gameHandler.cancelCast();
             } else if (gameHandler.isLootWindowOpen()) {
                 gameHandler.closeLoot();
@@ -345,15 +351,6 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 gameHandler.closeGossip();
             } else {
                 gameHandler.clearTarget();
-            }
-        }
-
-        // Auto-attack (T key)
-        if (input.isKeyJustPressed(SDL_SCANCODE_T)) {
-            if (gameHandler.hasTarget() && !gameHandler.isAutoAttacking()) {
-                gameHandler.startAutoAttack(gameHandler.getTargetGuid());
-            } else if (gameHandler.isAutoAttacking()) {
-                gameHandler.stopAutoAttack();
             }
         }
 
@@ -1509,6 +1506,56 @@ void GameScreen::renderVendorWindow(game::GameHandler& gameHandler) {
         // Close vendor - just hide UI, no server packet needed
         // The vendor window state will be reset on next interaction
     }
+}
+
+// ============================================================
+// Teleporter Panel
+// ============================================================
+
+void GameScreen::renderTeleporterPanel() {
+    if (!showTeleporter) return;
+
+    auto* window = core::Application::getInstance().getWindow();
+    float screenW = window ? static_cast<float>(window->getWidth()) : 1280.0f;
+    float screenH = window ? static_cast<float>(window->getHeight()) : 720.0f;
+
+    float panelW = 280.0f;
+    float panelH = 0.0f;  // Auto-size height
+    ImGui::SetNextWindowPos(ImVec2((screenW - panelW) / 2.0f, screenH * 0.25f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panelW, panelH), ImGuiCond_Always);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.15f, 0.92f));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize;
+
+    if (ImGui::Begin("Teleporter", &showTeleporter, flags)) {
+        ImGui::Spacing();
+
+        for (int i = 0; i < core::SPAWN_PRESET_COUNT; i++) {
+            const auto& preset = core::SPAWN_PRESETS[i];
+            char label[128];
+            snprintf(label, sizeof(label), "%s\n(%.0f, %.0f, %.0f)",
+                     preset.label,
+                     preset.spawnCanonical.x, preset.spawnCanonical.y, preset.spawnCanonical.z);
+
+            if (ImGui::Button(label, ImVec2(-1, 50))) {
+                core::Application::getInstance().teleportTo(i);
+                showTeleporter = false;
+            }
+
+            if (i < core::SPAWN_PRESET_COUNT - 1) {
+                ImGui::Spacing();
+            }
+        }
+
+        ImGui::Spacing();
+    }
+    ImGui::End();
+
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
 }
 
 }} // namespace wowee::ui

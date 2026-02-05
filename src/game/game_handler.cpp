@@ -2,6 +2,7 @@
 #include "game/opcodes.hpp"
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
+#include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
 #include <cctype>
@@ -557,10 +558,11 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     LOG_INFO("Orientation: ", data.orientation, " radians");
     LOG_INFO("Player is now in the game world");
 
-    // Initialize movement info with world entry position
-    movementInfo.x = data.x;
-    movementInfo.y = data.y;
-    movementInfo.z = data.z;
+    // Initialize movement info with world entry position (server → canonical)
+    glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(data.x, data.y, data.z));
+    movementInfo.x = canonical.x;
+    movementInfo.y = canonical.y;
+    movementInfo.z = canonical.z;
     movementInfo.orientation = data.orientation;
     movementInfo.flags = 0;
     movementInfo.flags2 = 0;
@@ -698,8 +700,15 @@ void GameHandler::sendMovement(Opcode opcode) {
     LOG_DEBUG("Sending movement packet: opcode=0x", std::hex,
               static_cast<uint16_t>(opcode), std::dec);
 
+    // Convert canonical → server coordinates for the wire
+    MovementInfo wireInfo = movementInfo;
+    glm::vec3 serverPos = core::coords::canonicalToServer(glm::vec3(wireInfo.x, wireInfo.y, wireInfo.z));
+    wireInfo.x = serverPos.x;
+    wireInfo.y = serverPos.y;
+    wireInfo.z = serverPos.z;
+
     // Build and send movement packet
-    auto packet = MovementPacket::build(opcode, movementInfo);
+    auto packet = MovementPacket::build(opcode, wireInfo);
     socket->send(packet);
 }
 
@@ -762,10 +771,11 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                         break;
                 }
 
-                // Set position from movement block
+                // Set position from movement block (server → canonical)
                 if (block.hasMovement) {
-                    entity->setPosition(block.x, block.y, block.z, block.orientation);
-                    LOG_DEBUG("  Position: (", block.x, ", ", block.y, ", ", block.z, ")");
+                    glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
+                    entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
+                    LOG_DEBUG("  Position: (", pos.x, ", ", pos.y, ", ", pos.z, ")");
                 }
 
                 // Set fields
@@ -838,10 +848,11 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
             }
 
             case UpdateType::MOVEMENT: {
-                // Update entity position
+                // Update entity position (server → canonical)
                 auto entity = entityManager.getEntity(block.guid);
                 if (entity) {
-                    entity->setPosition(block.x, block.y, block.z, block.orientation);
+                    glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
+                    entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
                     LOG_DEBUG("Updated entity position: 0x", std::hex, block.guid, std::dec);
                 } else {
                     LOG_WARNING("MOVEMENT update for unknown entity: 0x", std::hex, block.guid, std::dec);

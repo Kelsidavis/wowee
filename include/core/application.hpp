@@ -60,6 +60,9 @@ public:
     // Weapon loading (called at spawn and on equipment change)
     void loadEquippedWeapons();
 
+    // Teleport to a spawn preset location (single-player only)
+    void teleportTo(int presetIndex);
+
     // Character skin composite state (saved at spawn for re-compositing on equipment change)
     const std::string& getBodySkinPath() const { return bodySkinPath_; }
     const std::vector<std::string>& getUnderwearPaths() const { return underwearPaths_; }

@@ -29,6 +29,16 @@ public:
      */
     bool isChatInputActive() const { return chatInputActive; }
 
+    /**
+     * Toggle the teleporter panel
+     */
+    void toggleTeleporter() { showTeleporter = !showTeleporter; }
+
+    /**
+     * Check if teleporter panel is open
+     */
+    bool isTeleporterOpen() const { return showTeleporter; }
+
 private:
     // Chat state
     char chatInputBuffer[512] = "";
@@ -40,6 +50,7 @@ private:
     bool showChatWindow = true;
     bool showPlayerInfo = false;
     bool refocusChatInput = false;
+    bool showTeleporter = false;
 
     /**
      * Render player info window
@@ -106,6 +117,7 @@ private:
     void renderLootWindow(game::GameHandler& gameHandler);
     void renderGossipWindow(game::GameHandler& gameHandler);
     void renderVendorWindow(game::GameHandler& gameHandler);
+    void renderTeleporterPanel();
 
     /**
      * Inventory screen

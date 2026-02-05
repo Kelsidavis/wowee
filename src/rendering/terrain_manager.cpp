@@ -723,7 +723,7 @@ void TerrainManager::unloadTile(int x, int y) {
 }
 
 void TerrainManager::unloadAll() {
-    // Stop worker thread
+    // Stop worker threads
     if (workerRunning.load()) {
         workerRunning.store(false);
         queueCV.notify_all();
@@ -748,6 +748,10 @@ void TerrainManager::unloadAll() {
     loadedTiles.clear();
     failedTiles.clear();
 
+    // Reset tile tracking so streaming re-triggers at the new location
+    currentTile = {-1, -1};
+    lastStreamTile = {-1, -1};
+
     // Clear terrain renderer
     if (terrainRenderer) {
         terrainRenderer->clear();
@@ -756,6 +760,23 @@ void TerrainManager::unloadAll() {
     // Clear water
     if (waterRenderer) {
         waterRenderer->clear();
+    }
+
+    // Clear WMO and M2 renderers so old-location geometry doesn't persist
+    if (wmoRenderer) {
+        wmoRenderer->clearInstances();
+    }
+    if (m2Renderer) {
+        m2Renderer->clear();
+    }
+
+    // Restart worker threads so streaming can resume
+    workerRunning.store(true);
+    unsigned hc = std::thread::hardware_concurrency();
+    workerCount = static_cast<int>(hc > 0 ? std::min(4u, std::max(2u, hc - 1)) : 2u);
+    workerThreads.reserve(workerCount);
+    for (int i = 0; i < workerCount; i++) {
+        workerThreads.emplace_back(&TerrainManager::workerLoop, this);
     }
 }
 

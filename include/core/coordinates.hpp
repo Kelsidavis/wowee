@@ -24,6 +24,24 @@ inline constexpr float ZEROPOINT = 32.0f * TILE_SIZE;
 //   Range [0, 34133.333] with center at ZEROPOINT (17066.666).
 //   adtY = height; adtX/adtZ are horizontal.
 
+// ---- Server / emulator coordinate system ----
+//   WoW emulators (TrinityCore, MaNGOS, AzerothCore, CMaNGOS) send positions
+//   over the wire as (X, Y, Z) where:
+//     server.X = canonical.Y (west axis)
+//     server.Y = canonical.X (north axis)
+//     server.Z = canonical.Z (height)
+//   This is also the byte order inside movement packets on the wire.
+
+// Convert server/wire coordinates → canonical WoW coordinates.
+inline glm::vec3 serverToCanonical(const glm::vec3& server) {
+    return glm::vec3(server.y, server.x, server.z);
+}
+
+// Convert canonical WoW coordinates → server/wire coordinates.
+inline glm::vec3 canonicalToServer(const glm::vec3& canonical) {
+    return glm::vec3(canonical.y, canonical.x, canonical.z);
+}
+
 // Convert between canonical WoW and engine rendering coordinates (just swap X/Y).
 inline glm::vec3 canonicalToRender(const glm::vec3& wow) {
     return glm::vec3(wow.y, wow.x, wow.z);
