@@ -1530,6 +1530,12 @@ bool GameHandler::loadSinglePlayerCharacterState(uint64_t guid) {
     spSavedOrientation_[guid] = orientation;
     if (!hasState) return false;
 
+    // Update movementInfo so startSinglePlayer can use it for spawning
+    movementInfo.x = posX;
+    movementInfo.y = posY;
+    movementInfo.z = posZ;
+    movementInfo.orientation = orientation;
+
     // Update character list entry
     for (auto& ch : characters) {
         if (ch.guid == guid) {
