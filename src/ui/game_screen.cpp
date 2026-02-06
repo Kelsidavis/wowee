@@ -14,6 +14,7 @@
 #include "audio/activity_sound_manager.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "pipeline/blp_loader.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
 #include <cmath>
@@ -1122,6 +1123,84 @@ void GameScreen::renderWorldMap(game::GameHandler& /* gameHandler */) {
 // Action Bar (Phase 3)
 // ============================================================
 
+GLuint GameScreen::getSpellIcon(uint32_t spellId, pipeline::AssetManager* am) {
+    if (spellId == 0 || !am) return 0;
+
+    // Check cache first
+    auto cit = spellIconCache_.find(spellId);
+    if (cit != spellIconCache_.end()) return cit->second;
+
+    // Lazy-load SpellIcon.dbc and Spell.dbc icon IDs
+    if (!spellIconDbLoaded_) {
+        spellIconDbLoaded_ = true;
+
+        // Load SpellIcon.dbc: field 0 = ID, field 1 = icon path
+        auto iconDbc = am->loadDBC("SpellIcon.dbc");
+        if (iconDbc && iconDbc->isLoaded()) {
+            for (uint32_t i = 0; i < iconDbc->getRecordCount(); i++) {
+                uint32_t id = iconDbc->getUInt32(i, 0);
+                std::string path = iconDbc->getString(i, 1);
+                if (!path.empty() && id > 0) {
+                    spellIconPaths_[id] = path;
+                }
+            }
+        }
+
+        // Load Spell.dbc: field 133 = SpellIconID
+        auto spellDbc = am->loadDBC("Spell.dbc");
+        if (spellDbc && spellDbc->isLoaded() && spellDbc->getFieldCount() > 133) {
+            for (uint32_t i = 0; i < spellDbc->getRecordCount(); i++) {
+                uint32_t id = spellDbc->getUInt32(i, 0);
+                uint32_t iconId = spellDbc->getUInt32(i, 133);
+                if (id > 0 && iconId > 0) {
+                    spellIconIds_[id] = iconId;
+                }
+            }
+        }
+    }
+
+    // Look up spellId -> SpellIconID -> icon path
+    auto iit = spellIconIds_.find(spellId);
+    if (iit == spellIconIds_.end()) {
+        spellIconCache_[spellId] = 0;
+        return 0;
+    }
+
+    auto pit = spellIconPaths_.find(iit->second);
+    if (pit == spellIconPaths_.end()) {
+        spellIconCache_[spellId] = 0;
+        return 0;
+    }
+
+    // Path from DBC has no extension — append .blp
+    std::string iconPath = pit->second + ".blp";
+    auto blpData = am->readFile(iconPath);
+    if (blpData.empty()) {
+        spellIconCache_[spellId] = 0;
+        return 0;
+    }
+
+    auto image = pipeline::BLPLoader::load(blpData);
+    if (!image.isValid()) {
+        spellIconCache_[spellId] = 0;
+        return 0;
+    }
+
+    GLuint texId = 0;
+    glGenTextures(1, &texId);
+    glBindTexture(GL_TEXTURE_2D, texId);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, image.data.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    spellIconCache_[spellId] = texId;
+    return texId;
+}
+
 void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
     auto* window = core::Application::getInstance().getWindow();
     float screenW = window ? static_cast<float>(window->getWidth()) : 1280.0f;
@@ -1159,14 +1238,6 @@ void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
             const auto& slot = bar[i];
             bool onCooldown = !slot.isReady();
 
-            if (onCooldown) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 0.8f));
-            } else if (slot.isEmpty()) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.15f, 0.8f));
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.5f, 0.9f));
-            }
-
             auto getSpellName = [&](uint32_t spellId) -> std::string {
                 if (!actionSpellDbAttempted) {
                     actionSpellDbAttempted = true;
@@ -1184,9 +1255,9 @@ void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
                             }
                             uint32_t count = dbc->getRecordCount();
                             actionSpellNames.reserve(count);
-                            for (uint32_t i = 0; i < count; ++i) {
-                                uint32_t id = dbc->getUInt32(i, 0);
-                                std::string name = dbc->getString(i, nameField);
+                            for (uint32_t r = 0; r < count; ++r) {
+                                uint32_t id = dbc->getUInt32(r, 0);
+                                std::string name = dbc->getString(r, nameField);
                                 if (!name.empty() && id > 0) {
                                     actionSpellNames[id] = name;
                                 }
@@ -1200,29 +1271,59 @@ void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
                 return "Spell #" + std::to_string(spellId);
             };
 
-            char label[32];
-            std::string spellName;
-            if (slot.type == game::ActionBarSlot::SPELL) {
-                spellName = getSpellName(slot.id);
-                if (spellName.size() > 6) {
-                    spellName = spellName.substr(0, 6);
-                }
-                snprintf(label, sizeof(label), "%s", spellName.c_str());
-            } else if (slot.type == game::ActionBarSlot::ITEM) {
-                snprintf(label, sizeof(label), "Item");
-            } else if (slot.type == game::ActionBarSlot::MACRO) {
-                snprintf(label, sizeof(label), "Macro");
-            } else {
-                snprintf(label, sizeof(label), "--");
+            // Try to get icon texture for this slot
+            GLuint iconTex = 0;
+            if (slot.type == game::ActionBarSlot::SPELL && slot.id != 0) {
+                iconTex = getSpellIcon(slot.id, assetMgr);
             }
 
-            if (ImGui::Button(label, ImVec2(slotSize, slotSize))) {
+            bool clicked = false;
+            if (iconTex) {
+                // Render icon-based button
+                ImVec4 tintColor(1, 1, 1, 1);
+                ImVec4 bgColor(0.1f, 0.1f, 0.1f, 0.9f);
+                if (onCooldown) {
+                    tintColor = ImVec4(0.4f, 0.4f, 0.4f, 0.8f);
+                    bgColor = ImVec4(0.1f, 0.1f, 0.1f, 0.8f);
+                }
+                clicked = ImGui::ImageButton("##icon",
+                    (ImTextureID)(uintptr_t)iconTex,
+                    ImVec2(slotSize - 4, slotSize - 4),
+                    ImVec2(0, 0), ImVec2(1, 1),
+                    bgColor, tintColor);
+            } else {
+                // Fallback to text button
+                if (onCooldown) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.2f, 0.2f, 0.8f));
+                } else if (slot.isEmpty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.15f, 0.8f));
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.5f, 0.9f));
+                }
+
+                char label[32];
+                if (slot.type == game::ActionBarSlot::SPELL) {
+                    std::string spellName = getSpellName(slot.id);
+                    if (spellName.size() > 6) spellName = spellName.substr(0, 6);
+                    snprintf(label, sizeof(label), "%s", spellName.c_str());
+                } else if (slot.type == game::ActionBarSlot::ITEM) {
+                    snprintf(label, sizeof(label), "Item");
+                } else if (slot.type == game::ActionBarSlot::MACRO) {
+                    snprintf(label, sizeof(label), "Macro");
+                } else {
+                    snprintf(label, sizeof(label), "--");
+                }
+
+                clicked = ImGui::Button(label, ImVec2(slotSize, slotSize));
+                ImGui::PopStyleColor();
+            }
+
+            if (clicked) {
                 if (slot.type == game::ActionBarSlot::SPELL && slot.isReady()) {
                     uint64_t target = gameHandler.hasTarget() ? gameHandler.getTargetGuid() : 0;
                     gameHandler.castSpell(slot.id, target);
                 }
             }
-            ImGui::PopStyleColor();
 
             if (ImGui::IsItemHovered() && slot.type == game::ActionBarSlot::SPELL && slot.id != 0) {
                 std::string fullName = getSpellName(slot.id);
@@ -1232,8 +1333,19 @@ void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
                 ImGui::EndTooltip();
             }
 
-            // Cooldown overlay text
-            if (onCooldown) {
+            // Cooldown overlay
+            if (onCooldown && iconTex) {
+                // Draw cooldown text centered over the icon
+                ImVec2 btnMin = ImGui::GetItemRectMin();
+                ImVec2 btnMax = ImGui::GetItemRectMax();
+                char cdText[16];
+                snprintf(cdText, sizeof(cdText), "%.0f", slot.cooldownRemaining);
+                ImVec2 textSize = ImGui::CalcTextSize(cdText);
+                float cx = btnMin.x + (btnMax.x - btnMin.x - textSize.x) * 0.5f;
+                float cy = btnMin.y + (btnMax.y - btnMin.y - textSize.y) * 0.5f;
+                ImGui::GetWindowDrawList()->AddText(ImVec2(cx, cy),
+                    IM_COL32(255, 255, 0, 255), cdText);
+            } else if (onCooldown) {
                 char cdText[16];
                 snprintf(cdText, sizeof(cdText), "%.0f", slot.cooldownRemaining);
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() - slotSize / 2 - 8);

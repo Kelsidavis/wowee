@@ -7,11 +7,14 @@
 #include "ui/inventory_screen.hpp"
 #include "ui/quest_log_screen.hpp"
 #include "ui/spellbook_screen.hpp"
+#include <GL/glew.h>
 #include <imgui.h>
 #include <string>
 #include <unordered_map>
 
-namespace wowee { namespace ui {
+namespace wowee {
+namespace pipeline { class AssetManager; }
+namespace ui {
 
 /**
  * In-game screen UI
@@ -152,6 +155,16 @@ private:
     bool actionSpellDbAttempted = false;
     bool actionSpellDbLoaded = false;
     std::unordered_map<uint32_t, std::string> actionSpellNames;
+
+    // Spell icon cache: spellId -> GL texture ID
+    std::unordered_map<uint32_t, GLuint> spellIconCache_;
+    // SpellIconID -> icon path (from SpellIcon.dbc)
+    std::unordered_map<uint32_t, std::string> spellIconPaths_;
+    // SpellID -> SpellIconID (from Spell.dbc field 133)
+    std::unordered_map<uint32_t, uint32_t> spellIconIds_;
+    bool spellIconDbLoaded_ = false;
+    GLuint getSpellIcon(uint32_t spellId, pipeline::AssetManager* am);
 };
 
-}} // namespace wowee::ui
+} // namespace ui
+} // namespace wowee
