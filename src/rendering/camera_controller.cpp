@@ -615,7 +615,7 @@ void CameraController::update(float deltaTime) {
         currentDistance += (userTargetDistance - currentDistance) * zoomLerp;
 
         // Limit max zoom when inside a WMO (building interior)
-        static constexpr float WMO_MAX_DISTANCE = 8.0f;
+        static constexpr float WMO_MAX_DISTANCE = 5.0f;
         if (wmoRenderer && wmoRenderer->isInsideWMO(targetPos.x, targetPos.y, targetPos.z + 1.0f, nullptr)) {
             if (currentDistance > WMO_MAX_DISTANCE) {
                 currentDistance = WMO_MAX_DISTANCE;

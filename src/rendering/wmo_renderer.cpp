@@ -1639,7 +1639,7 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
                 float horizDist = glm::length(glm::vec2(delta.x, delta.y));
                 if (horizDist <= PLAYER_RADIUS) {
                     wallsHit++;
-                    float pushDist = PLAYER_RADIUS - horizDist + 0.04f;
+                    float pushDist = PLAYER_RADIUS - horizDist + 0.02f;
                     glm::vec2 pushDir2;
                     if (horizDist > 1e-4f) {
                         pushDir2 = glm::normalize(glm::vec2(delta.x, delta.y));
