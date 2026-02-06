@@ -835,6 +835,11 @@ void GameHandler::update(float deltaTime) {
         // Update combat text (Phase 2)
         updateCombatText(deltaTime);
 
+        // Update entity movement interpolation (keeps targeting in sync with visuals)
+        for (auto& [guid, entity] : entityManager.getEntities()) {
+            entity->updateMovement(deltaTime);
+        }
+
         // Single-player local combat
         if (singlePlayerMode_) {
             updateLocalCombat(deltaTime);
@@ -2480,6 +2485,11 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     if (it != block.fields.end() && it->second != 0) {
                         auto unit = std::static_pointer_cast<Unit>(entity);
                         unit->setEntry(it->second);
+                        // Set name from cache immediately if available
+                        std::string cached = getCachedCreatureName(it->second);
+                        if (!cached.empty()) {
+                            unit->setName(cached);
+                        }
                         queryCreatureInfo(it->second, block.guid);
                     }
                 }
@@ -2493,12 +2503,17 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             case 25: unit->setPower(val); break;
                             case 32: unit->setMaxHealth(val); break;
                             case 33: unit->setMaxPower(val); break;
+                            case 55: unit->setFactionTemplate(val); break; // UNIT_FIELD_FACTIONTEMPLATE
                             case 59: unit->setUnitFlags(val); break;   // UNIT_FIELD_FLAGS
                             case 54: unit->setLevel(val); break;
                             case 67: unit->setDisplayId(val); break;  // UNIT_FIELD_DISPLAYID
                             case 82: unit->setNpcFlags(val); break;   // UNIT_NPC_FLAGS
                             default: break;
                         }
+                    }
+                    // Determine hostility from faction template for online creatures
+                    if (unit->getFactionTemplate() != 0) {
+                        unit->setHostile(isHostileFaction(unit->getFactionTemplate()));
                     }
                     // Trigger creature spawn callback for units with displayId
                     if (block.objectType == ObjectType::UNIT && unit->getDisplayId() != 0) {
@@ -2591,6 +2606,10 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                 case 33: unit->setMaxPower(val); break;
                                 case 59: unit->setUnitFlags(val); break;   // UNIT_FIELD_FLAGS
                                 case 54: unit->setLevel(val); break;
+                                case 55:  // UNIT_FIELD_FACTIONTEMPLATE
+                                    unit->setFactionTemplate(val);
+                                    unit->setHostile(isHostileFaction(val));
+                                    break;
                                 case 82: unit->setNpcFlags(val); break;   // UNIT_NPC_FLAGS
                                 default: break;
                             }
@@ -3191,8 +3210,9 @@ void GameHandler::handleMonsterMove(network::Packet& packet) {
                 }
             }
 
-            // Set entity to destination for targeting/logic; renderer interpolates visually
-            entity->setPosition(destCanonical.x, destCanonical.y, destCanonical.z, orientation);
+            // Interpolate entity position alongside renderer (so targeting matches visual)
+            entity->startMoveTo(destCanonical.x, destCanonical.y, destCanonical.z,
+                                orientation, data.duration / 1000.0f);
 
             // Notify renderer to smoothly move the creature
             if (creatureMoveCallback_) {

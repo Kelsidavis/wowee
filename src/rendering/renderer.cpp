@@ -1118,7 +1118,10 @@ void Renderer::renderSelectionCircle(const glm::mat4& view, const glm::mat4& pro
     if (!selCircleVisible) return;
     initSelectionCircle();
 
-    glm::mat4 model = glm::translate(glm::mat4(1.0f), selCirclePos);
+    // Small Z offset to prevent clipping under terrain
+    glm::vec3 raisedPos = selCirclePos;
+    raisedPos.z += 0.15f;
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), raisedPos);
     model = glm::scale(model, glm::vec3(selCircleRadius));
 
     glm::mat4 mvp = projection * view * model;

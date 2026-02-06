@@ -33,6 +33,11 @@ public:
     int getWidth() const { return fboWidth_; }
     int getHeight() const { return fboHeight_; }
 
+    CharacterRenderer* getCharacterRenderer() { return charRenderer_.get(); }
+    uint32_t getInstanceId() const { return instanceId_; }
+    uint32_t getModelId() const { return PREVIEW_MODEL_ID; }
+    bool isModelLoaded() const { return modelLoaded_; }
+
 private:
     void createFBO();
     void destroyFBO();

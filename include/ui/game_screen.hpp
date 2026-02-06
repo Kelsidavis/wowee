@@ -3,6 +3,7 @@
 #include "game/game_handler.hpp"
 #include "game/inventory.hpp"
 #include "rendering/world_map.hpp"
+#include "rendering/character_preview.hpp"
 #include "ui/inventory_screen.hpp"
 #include "ui/quest_log_screen.hpp"
 #include "ui/spellbook_screen.hpp"

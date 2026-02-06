@@ -626,6 +626,30 @@ void Application::setupUICallbacks() {
         loadOnlineWorldTerrain(mapId, x, y, z);
     });
 
+    // Load faction hostility map from FactionTemplate.dbc (used for both single-player and online)
+    if (assetManager && assetManager->isInitialized()) {
+        if (auto dbc = assetManager->loadDBC("FactionTemplate.dbc"); dbc && dbc->isLoaded()) {
+            uint32_t playerFriendGroup = 0;
+            for (uint32_t i = 0; i < dbc->getRecordCount(); i++) {
+                if (dbc->getUInt32(i, 0) == 1) { // Human player faction template
+                    playerFriendGroup = dbc->getUInt32(i, 4) | dbc->getUInt32(i, 3);
+                    break;
+                }
+            }
+            std::unordered_map<uint32_t, bool> factionMap;
+            for (uint32_t i = 0; i < dbc->getRecordCount(); i++) {
+                uint32_t id = dbc->getUInt32(i, 0);
+                uint32_t enemyGroup = dbc->getUInt32(i, 5);
+                uint32_t friendGroup = dbc->getUInt32(i, 4);
+                bool hostile = (enemyGroup & playerFriendGroup) != 0;
+                bool friendly = (friendGroup & playerFriendGroup) != 0;
+                factionMap[id] = hostile ? true : (!friendly && enemyGroup == 0 && friendGroup == 0);
+            }
+            gameHandler->setFactionHostileMap(std::move(factionMap));
+            LOG_INFO("Loaded faction hostility data (playerFriendGroup=0x", std::hex, playerFriendGroup, std::dec, ")");
+        }
+    }
+
     // Creature spawn callback (online mode) - spawn creature models
     gameHandler->setCreatureSpawnCallback([this](uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation) {
         // Queue spawns to avoid hanging when many creatures appear at once

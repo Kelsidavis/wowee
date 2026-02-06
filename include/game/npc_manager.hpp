@@ -26,6 +26,8 @@ struct NpcSpawnDef {
     float rotation;          // radians around Z
     float scale;
     bool isCritter;          // critters don't do humanoid emotes
+    uint32_t faction = 0;    // faction template ID from creature_template
+    uint32_t npcFlags = 0;   // NPC interaction flags from creature_template
 };
 
 struct NpcInstance {

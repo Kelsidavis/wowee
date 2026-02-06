@@ -497,6 +497,8 @@ std::vector<NpcSpawnDef> NpcManager::loadSpawnDefsFromAzerothCoreDb(
         uint32_t level = 1;
         uint32_t health = 100;
         std::string m2Path;
+        uint32_t faction = 0;
+        uint32_t npcFlags = 0;
     };
     std::unordered_map<uint32_t, TemplateRow> templates;
 
@@ -546,20 +548,24 @@ std::vector<NpcSpawnDef> NpcManager::loadSpawnDefsFromAzerothCoreDb(
             }
         };
 
-    // Parse creature_template.sql: entry, modelid1(displayId), name, minlevel.
+    // Parse creature_template.sql: entry, modelid1(displayId), name, minlevel, faction, npcflag.
     {
         std::ifstream in(tmplPath);
         processInsertStatements(in, [&](const std::vector<std::string>& cols) {
-                if (cols.size() < 16) return true;
+                if (cols.size() < 19) return true;
                 try {
                     uint32_t entry = static_cast<uint32_t>(std::stoul(cols[0]));
                     uint32_t displayId = static_cast<uint32_t>(std::stoul(cols[6]));
                     std::string name = unquoteSqlString(cols[10]);
                     uint32_t minLevel = static_cast<uint32_t>(std::stoul(cols[14]));
+                    uint32_t faction = static_cast<uint32_t>(std::stoul(cols[17]));
+                    uint32_t npcflag = static_cast<uint32_t>(std::stoul(cols[18]));
                     TemplateRow tr;
                     tr.name = name.empty() ? ("Creature " + std::to_string(entry)) : name;
                     tr.level = std::max(1u, minLevel);
                     tr.health = 150 + tr.level * 35;
+                    tr.faction = faction;
+                    tr.npcFlags = npcflag;
                     auto itModel = displayToModel.find(displayId);
                     if (itModel != displayToModel.end()) {
                         auto itPath = modelToPath.find(itModel->second);
@@ -604,6 +610,8 @@ std::vector<NpcSpawnDef> NpcManager::loadSpawnDefsFromAzerothCoreDb(
                 def.level = it->second.level;
                 def.health = std::max(it->second.health, curhealth);
                 def.m2Path = it->second.m2Path;
+                def.faction = it->second.faction;
+                def.npcFlags = it->second.npcFlags;
             } else {
                 def.entry = entry;
                 def.name = "Creature " + std::to_string(entry);
@@ -709,6 +717,44 @@ void NpcManager::initialize(pipeline::AssetManager* am,
         }
     }
 
+    // Build faction hostility lookup from FactionTemplate.dbc.
+    // Player is Alliance (Human) — faction template 1, friendGroup includes Alliance mask.
+    // A creature is hostile if its enemyGroup overlaps the player's friendGroup.
+    std::unordered_map<uint32_t, bool> factionHostile; // factionTemplateId → hostile to player
+    {
+        // FactionTemplate.dbc columns (3.3.5a):
+        //  0: ID, 1: Faction, 2: Flags, 3: FactionGroup, 4: FriendGroup, 5: EnemyGroup,
+        //  6-9: Enemies[4], 10-13: Friends[4]
+        uint32_t playerFriendGroup = 0;
+        if (auto dbc = am->loadDBC("FactionTemplate.dbc"); dbc && dbc->isLoaded()) {
+            // First pass: find player faction template (ID 1) friendGroup
+            for (uint32_t i = 0; i < dbc->getRecordCount(); i++) {
+                if (dbc->getUInt32(i, 0) == 1) {
+                    playerFriendGroup = dbc->getUInt32(i, 4); // FriendGroup
+                    // Also include our own factionGroup as friendly
+                    playerFriendGroup |= dbc->getUInt32(i, 3);
+                    break;
+                }
+            }
+            // Second pass: classify each faction template
+            for (uint32_t i = 0; i < dbc->getRecordCount(); i++) {
+                uint32_t id = dbc->getUInt32(i, 0);
+                uint32_t enemyGroup = dbc->getUInt32(i, 5);
+                uint32_t friendGroup = dbc->getUInt32(i, 4);
+                // Hostile if creature's enemy groups overlap player's faction/friend groups
+                bool hostile = (enemyGroup & playerFriendGroup) != 0;
+                // Friendly only if creature's friendGroup explicitly includes player's groups
+                bool friendly = (friendGroup & playerFriendGroup) != 0;
+                // Hostile if explicitly hostile, or if no explicit relationship at all
+                factionHostile[id] = hostile ? true : (!friendly && enemyGroup == 0 && friendGroup == 0);
+            }
+            LOG_INFO("NpcManager: loaded ", dbc->getRecordCount(),
+                     " faction templates (playerFriendGroup=0x", std::hex, playerFriendGroup, std::dec, ")");
+        } else {
+            LOG_WARNING("NpcManager: FactionTemplate.dbc not available, all NPCs default to hostile");
+        }
+    }
+
     // Spawn each NPC instance
     for (const auto* sPtr : active) {
         const auto& s = *sPtr;
@@ -751,6 +797,12 @@ void NpcManager::initialize(pipeline::AssetManager* am,
         if (s.entry != 0) {
             unit->setEntry(s.entry);
         }
+        unit->setNpcFlags(s.npcFlags);
+        unit->setFactionTemplate(s.faction);
+
+        // Determine hostility from faction template
+        auto fIt = factionHostile.find(s.faction);
+        unit->setHostile(fIt != factionHostile.end() ? fIt->second : true);
 
         // Store canonical WoW coordinates for targeting/server compatibility
         glm::vec3 spawnCanonical = core::coords::renderToCanonical(glPos);

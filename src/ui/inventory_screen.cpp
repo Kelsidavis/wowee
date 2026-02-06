@@ -1,12 +1,28 @@
 #include "ui/inventory_screen.hpp"
 #include "game/game_handler.hpp"
+#include "core/application.hpp"
 #include "core/input.hpp"
+#include "rendering/character_preview.hpp"
+#include "rendering/character_renderer.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_loader.hpp"
+#include "pipeline/blp_loader.hpp"
+#include "core/logger.hpp"
 #include <imgui.h>
 #include <SDL2/SDL.h>
 #include <cstdio>
+#include <unordered_set>
 
 namespace wowee {
 namespace ui {
+
+InventoryScreen::~InventoryScreen() {
+    // Clean up icon textures
+    for (auto& [id, tex] : iconCache_) {
+        if (tex) glDeleteTextures(1, &tex);
+    }
+    iconCache_.clear();
+}
 
 ImVec4 InventoryScreen::getQualityColor(game::ItemQuality quality) {
     switch (quality) {
@@ -19,6 +35,272 @@ ImVec4 InventoryScreen::getQualityColor(game::ItemQuality quality) {
         default:                           return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
     }
 }
+
+// ============================================================
+// Item Icon Loading
+// ============================================================
+
+GLuint InventoryScreen::getItemIcon(uint32_t displayInfoId) {
+    if (displayInfoId == 0 || !assetManager_) return 0;
+
+    auto it = iconCache_.find(displayInfoId);
+    if (it != iconCache_.end()) return it->second;
+
+    // Load ItemDisplayInfo.dbc
+    auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
+    if (!displayInfoDbc) {
+        iconCache_[displayInfoId] = 0;
+        return 0;
+    }
+
+    int32_t recIdx = displayInfoDbc->findRecordById(displayInfoId);
+    if (recIdx < 0) {
+        iconCache_[displayInfoId] = 0;
+        return 0;
+    }
+
+    // Field 5 = inventoryIcon_1
+    std::string iconName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), 5);
+    if (iconName.empty()) {
+        iconCache_[displayInfoId] = 0;
+        return 0;
+    }
+
+    std::string iconPath = "Interface\\Icons\\" + iconName + ".blp";
+    auto blpData = assetManager_->readFile(iconPath);
+    if (blpData.empty()) {
+        iconCache_[displayInfoId] = 0;
+        return 0;
+    }
+
+    auto image = pipeline::BLPLoader::load(blpData);
+    if (!image.isValid()) {
+        iconCache_[displayInfoId] = 0;
+        return 0;
+    }
+
+    GLuint texId = 0;
+    glGenTextures(1, &texId);
+    glBindTexture(GL_TEXTURE_2D, texId);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, image.data.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    iconCache_[displayInfoId] = texId;
+    return texId;
+}
+
+// ============================================================
+// Character Model Preview
+// ============================================================
+
+void InventoryScreen::setPlayerAppearance(game::Race race, game::Gender gender,
+                                           uint8_t skin, uint8_t face,
+                                           uint8_t hairStyle, uint8_t hairColor,
+                                           uint8_t facialHair) {
+    playerRace_ = race;
+    playerGender_ = gender;
+    playerSkin_ = skin;
+    playerFace_ = face;
+    playerHairStyle_ = hairStyle;
+    playerHairColor_ = hairColor;
+    playerFacialHair_ = facialHair;
+    // Force preview reload on next render
+    previewInitialized_ = false;
+}
+
+void InventoryScreen::initPreview() {
+    if (previewInitialized_ || !assetManager_) return;
+
+    if (!charPreview_) {
+        charPreview_ = std::make_unique<rendering::CharacterPreview>();
+        if (!charPreview_->initialize(assetManager_)) {
+            LOG_WARNING("InventoryScreen: failed to init CharacterPreview");
+            charPreview_.reset();
+            return;
+        }
+    }
+
+    charPreview_->loadCharacter(playerRace_, playerGender_,
+                                 playerSkin_, playerFace_,
+                                 playerHairStyle_, playerHairColor_,
+                                 playerFacialHair_);
+    previewInitialized_ = true;
+    previewDirty_ = true; // apply equipment on first load
+}
+
+void InventoryScreen::updatePreview(float deltaTime) {
+    if (charPreview_ && previewInitialized_) {
+        charPreview_->update(deltaTime);
+    }
+}
+
+void InventoryScreen::updatePreviewEquipment(game::Inventory& inventory) {
+    if (!charPreview_ || !charPreview_->isModelLoaded() || !assetManager_) return;
+
+    auto* charRenderer = charPreview_->getCharacterRenderer();
+    uint32_t instanceId = charPreview_->getInstanceId();
+    if (!charRenderer || instanceId == 0) return;
+
+    // --- Geosets (mirroring GameScreen::updateCharacterGeosets) ---
+    auto displayInfoDbc = assetManager_->loadDBC("ItemDisplayInfo.dbc");
+
+    auto getGeosetGroup = [&](uint32_t displayInfoId, int groupField) -> uint32_t {
+        if (!displayInfoDbc || displayInfoId == 0) return 0;
+        int32_t recIdx = displayInfoDbc->findRecordById(displayInfoId);
+        if (recIdx < 0) return 0;
+        return displayInfoDbc->getUInt32(static_cast<uint32_t>(recIdx), 7 + groupField);
+    };
+
+    auto findEquippedDisplayId = [&](std::initializer_list<uint8_t> types) -> uint32_t {
+        for (int s = 0; s < game::Inventory::NUM_EQUIP_SLOTS; s++) {
+            const auto& slot = inventory.getEquipSlot(static_cast<game::EquipSlot>(s));
+            if (!slot.empty()) {
+                for (uint8_t t : types) {
+                    if (slot.item.inventoryType == t)
+                        return slot.item.displayInfoId;
+                }
+            }
+        }
+        return 0;
+    };
+
+    auto hasEquippedType = [&](std::initializer_list<uint8_t> types) -> bool {
+        for (int s = 0; s < game::Inventory::NUM_EQUIP_SLOTS; s++) {
+            const auto& slot = inventory.getEquipSlot(static_cast<game::EquipSlot>(s));
+            if (!slot.empty()) {
+                for (uint8_t t : types) {
+                    if (slot.item.inventoryType == t) return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    std::unordered_set<uint16_t> geosets;
+    for (uint16_t i = 0; i <= 18; i++) geosets.insert(i);
+
+    // Hair geoset: group 1 = 100 + hairStyle + 1
+    geosets.insert(static_cast<uint16_t>(100 + playerHairStyle_ + 1));
+    // Facial hair geoset: group 2 = 200 + facialHair + 1
+    geosets.insert(static_cast<uint16_t>(200 + playerFacialHair_ + 1));
+    geosets.insert(701);  // Ears
+
+    // Chest/Shirt
+    {
+        uint32_t did = findEquippedDisplayId({4, 5, 20});
+        uint32_t gg = getGeosetGroup(did, 0);
+        geosets.insert(static_cast<uint16_t>(gg > 0 ? 501 + gg : 501));
+        uint32_t gg3 = getGeosetGroup(did, 2);
+        if (gg3 > 0) {
+            geosets.insert(static_cast<uint16_t>(1301 + gg3));
+        }
+    }
+
+    // Legs
+    {
+        uint32_t did = findEquippedDisplayId({7});
+        uint32_t gg = getGeosetGroup(did, 0);
+        if (geosets.count(1302) == 0 && geosets.count(1303) == 0) {
+            geosets.insert(static_cast<uint16_t>(gg > 0 ? 1301 + gg : 1301));
+        }
+    }
+
+    // Feet
+    {
+        uint32_t did = findEquippedDisplayId({8});
+        uint32_t gg = getGeosetGroup(did, 0);
+        geosets.insert(static_cast<uint16_t>(gg > 0 ? 401 + gg : 401));
+    }
+
+    // Gloves
+    {
+        uint32_t did = findEquippedDisplayId({10});
+        uint32_t gg = getGeosetGroup(did, 0);
+        geosets.insert(static_cast<uint16_t>(gg > 0 ? 301 + gg : 301));
+    }
+
+    // Cloak
+    geosets.insert(hasEquippedType({16}) ? 1502 : 1501);
+
+    // Tabard
+    if (hasEquippedType({19})) {
+        geosets.insert(1201);
+    }
+
+    charRenderer->setActiveGeosets(instanceId, geosets);
+
+    // --- Textures (mirroring GameScreen::updateCharacterTextures) ---
+    auto& app = core::Application::getInstance();
+    const auto& bodySkinPath = app.getBodySkinPath();
+    const auto& underwearPaths = app.getUnderwearPaths();
+
+    if (bodySkinPath.empty() || !displayInfoDbc) return;
+
+    static const char* componentDirs[] = {
+        "ArmUpperTexture", "ArmLowerTexture", "HandTexture",
+        "TorsoUpperTexture", "TorsoLowerTexture",
+        "LegUpperTexture", "LegLowerTexture", "FootTexture",
+    };
+
+    std::vector<std::pair<int, std::string>> regionLayers;
+    for (int s = 0; s < game::Inventory::NUM_EQUIP_SLOTS; s++) {
+        const auto& slot = inventory.getEquipSlot(static_cast<game::EquipSlot>(s));
+        if (slot.empty() || slot.item.displayInfoId == 0) continue;
+
+        int32_t recIdx = displayInfoDbc->findRecordById(slot.item.displayInfoId);
+        if (recIdx < 0) continue;
+
+        for (int region = 0; region < 8; region++) {
+            uint32_t fieldIdx = 15 + region;
+            std::string texName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), fieldIdx);
+            if (texName.empty()) continue;
+
+            std::string base = "Item\\TextureComponents\\" +
+                std::string(componentDirs[region]) + "\\" + texName;
+            std::string genderSuffix = (playerGender_ == game::Gender::FEMALE) ? "_F.blp" : "_M.blp";
+            std::string genderPath = base + genderSuffix;
+            std::string unisexPath = base + "_U.blp";
+            std::string fullPath;
+            if (assetManager_->fileExists(genderPath)) {
+                fullPath = genderPath;
+            } else if (assetManager_->fileExists(unisexPath)) {
+                fullPath = unisexPath;
+            } else {
+                fullPath = base + ".blp";
+            }
+            regionLayers.emplace_back(region, fullPath);
+        }
+    }
+
+    // Find the skin texture slot index in the preview model
+    // The preview model uses model ID PREVIEW_MODEL_ID; find slot for type-1 (body skin)
+    const auto* modelData = charRenderer->getModelData(charPreview_->getModelId());
+    uint32_t skinSlot = 0;
+    if (modelData) {
+        for (size_t ti = 0; ti < modelData->textures.size(); ti++) {
+            if (modelData->textures[ti].type == 1) {
+                skinSlot = static_cast<uint32_t>(ti);
+                break;
+            }
+        }
+    }
+
+    GLuint newTex = charRenderer->compositeWithRegions(bodySkinPath, underwearPaths, regionLayers);
+    if (newTex != 0) {
+        charRenderer->setModelTexture(charPreview_->getModelId(), skinSlot, newTex);
+    }
+
+    previewDirty_ = false;
+}
+
+// ============================================================
+// Equip slot helpers
+// ============================================================
 
 game::EquipSlot InventoryScreen::getEquipSlotForType(uint8_t inventoryType, game::Inventory& inv) {
     switch (inventoryType) {
@@ -191,19 +473,28 @@ void InventoryScreen::renderHeldItem() {
     ImVec4 qColor = getQualityColor(heldItem.quality);
     ImU32 borderCol = ImGui::ColorConvertFloat4ToU32(qColor);
 
-    drawList->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size),
-                            IM_COL32(40, 35, 30, 200));
-    drawList->AddRect(pos, ImVec2(pos.x + size, pos.y + size),
-                      borderCol, 0.0f, 0, 2.0f);
+    // Try to show icon
+    GLuint iconTex = getItemIcon(heldItem.displayInfoId);
+    if (iconTex) {
+        drawList->AddImage((ImTextureID)(uintptr_t)iconTex, pos,
+                           ImVec2(pos.x + size, pos.y + size));
+        drawList->AddRect(pos, ImVec2(pos.x + size, pos.y + size),
+                          borderCol, 0.0f, 0, 2.0f);
+    } else {
+        drawList->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size),
+                                IM_COL32(40, 35, 30, 200));
+        drawList->AddRect(pos, ImVec2(pos.x + size, pos.y + size),
+                          borderCol, 0.0f, 0, 2.0f);
 
-    char abbr[4] = {};
-    if (!heldItem.name.empty()) {
-        abbr[0] = heldItem.name[0];
-        if (heldItem.name.size() > 1) abbr[1] = heldItem.name[1];
+        char abbr[4] = {};
+        if (!heldItem.name.empty()) {
+            abbr[0] = heldItem.name[0];
+            if (heldItem.name.size() > 1) abbr[1] = heldItem.name[1];
+        }
+        float textW = ImGui::CalcTextSize(abbr).x;
+        drawList->AddText(ImVec2(pos.x + (size - textW) * 0.5f, pos.y + 2.0f),
+                          ImGui::ColorConvertFloat4ToU32(qColor), abbr);
     }
-    float textW = ImGui::CalcTextSize(abbr).x;
-    drawList->AddText(ImVec2(pos.x + (size - textW) * 0.5f, pos.y + 2.0f),
-                      ImGui::ColorConvertFloat4ToU32(qColor), abbr);
 
     if (heldItem.stackCount > 1) {
         char countStr[16];
@@ -301,14 +592,32 @@ void InventoryScreen::render(game::Inventory& inventory, uint64_t moneyCopper) {
 }
 
 // ============================================================
-// Character screen (C key) — standalone equipment window
+// Character screen (C key) — equipment + model preview + stats
 // ============================================================
 
-void InventoryScreen::renderCharacterScreen(game::Inventory& inventory) {
+void InventoryScreen::renderCharacterScreen(game::GameHandler& gameHandler) {
     if (!characterOpen) return;
 
+    auto& inventory = gameHandler.getInventory();
+
+    // Lazy-init the preview
+    if (!previewInitialized_ && assetManager_) {
+        initPreview();
+    }
+
+    // Update preview equipment if dirty
+    if (previewDirty_ && charPreview_ && previewInitialized_) {
+        updatePreviewEquipment(inventory);
+    }
+
+    // Update and render the preview FBO
+    if (charPreview_ && previewInitialized_) {
+        charPreview_->update(ImGui::GetIO().DeltaTime);
+        charPreview_->render();
+    }
+
     ImGui::SetNextWindowPos(ImVec2(20.0f, 80.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(220.0f, 520.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350.0f, 650.0f), ImGuiCond_FirstUseEver);
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     if (!ImGui::Begin("Character", &characterOpen, flags)) {
@@ -316,7 +625,25 @@ void InventoryScreen::renderCharacterScreen(game::Inventory& inventory) {
         return;
     }
 
+    // Clamp window position within screen after resize
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 pos = ImGui::GetWindowPos();
+        ImVec2 sz = ImGui::GetWindowSize();
+        bool clamped = false;
+        if (pos.x + sz.x > io.DisplaySize.x) { pos.x = std::max(0.0f, io.DisplaySize.x - sz.x); clamped = true; }
+        if (pos.y + sz.y > io.DisplaySize.y) { pos.y = std::max(0.0f, io.DisplaySize.y - sz.y); clamped = true; }
+        if (pos.x < 0.0f) { pos.x = 0.0f; clamped = true; }
+        if (pos.y < 0.0f) { pos.y = 0.0f; clamped = true; }
+        if (clamped) ImGui::SetWindowPos(pos);
+    }
+
     renderEquipmentPanel(inventory);
+
+    // Stats panel
+    ImGui::Spacing();
+    ImGui::Separator();
+    renderStatsPanel(inventory, gameHandler.getPlayerLevel());
 
     ImGui::End();
 
@@ -345,10 +672,17 @@ void InventoryScreen::renderEquipmentPanel(game::Inventory& inventory) {
     };
 
     constexpr float slotSize = 36.0f;
-    constexpr float spacing = 4.0f;
+    constexpr float previewW = 140.0f;
+
+    // Calculate column positions for the 3-column layout
+    float contentStartX = ImGui::GetCursorPosX();
+    float rightColX = contentStartX + slotSize + 8.0f + previewW + 8.0f;
 
     int rows = 8;
+    float previewStartY = ImGui::GetCursorScreenPos().y;
+
     for (int r = 0; r < rows; r++) {
+        // Left column
         {
             const auto& slot = inventory.getEquipSlot(leftSlots[r]);
             const char* label = game::getEquipSlotName(leftSlots[r]);
@@ -360,8 +694,8 @@ void InventoryScreen::renderEquipmentPanel(game::Inventory& inventory) {
             ImGui::PopID();
         }
 
-        ImGui::SameLine(slotSize + spacing + 60.0f);
-
+        // Right column
+        ImGui::SameLine(rightColX);
         {
             const auto& slot = inventory.getEquipSlot(rightSlots[r]);
             const char* label = game::getEquipSlotName(rightSlots[r]);
@@ -371,6 +705,44 @@ void InventoryScreen::renderEquipmentPanel(game::Inventory& inventory) {
             renderItemSlot(inventory, slot, slotSize, label,
                            SlotKind::EQUIPMENT, -1, rightSlots[r]);
             ImGui::PopID();
+        }
+    }
+
+    float previewEndY = ImGui::GetCursorScreenPos().y;
+
+    // Draw the 3D character preview in the center column
+    if (charPreview_ && previewInitialized_ && charPreview_->getTextureId()) {
+        float previewX = ImGui::GetWindowPos().x + contentStartX + slotSize + 8.0f;
+        float previewH = previewEndY - previewStartY;
+        // Maintain aspect ratio
+        float texAspect = static_cast<float>(charPreview_->getWidth()) / static_cast<float>(charPreview_->getHeight());
+        float displayW = previewW;
+        float displayH = displayW / texAspect;
+        if (displayH > previewH) {
+            displayH = previewH;
+            displayW = displayH * texAspect;
+        }
+        float offsetX = previewX + (previewW - displayW) * 0.5f;
+        float offsetY = previewStartY + (previewH - displayH) * 0.5f;
+
+        ImVec2 pMin(offsetX, offsetY);
+        ImVec2 pMax(offsetX + displayW, offsetY + displayH);
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        // Background for preview area
+        drawList->AddRectFilled(pMin, pMax, IM_COL32(13, 13, 25, 255));
+        drawList->AddImage(
+            (ImTextureID)(uintptr_t)charPreview_->getTextureId(),
+            pMin, pMax,
+            ImVec2(0, 1), ImVec2(1, 0));  // flip Y for GL
+        drawList->AddRect(pMin, pMax, IM_COL32(60, 60, 80, 200));
+
+        // Drag-to-rotate: detect mouse drag over the preview image
+        ImGui::SetCursorScreenPos(pMin);
+        ImGui::InvisibleButton("##charPreviewDrag", ImVec2(displayW, displayH));
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            float dx = ImGui::GetIO().MouseDelta.x;
+            charPreview_->rotate(dx * 1.0f);
         }
     }
 
@@ -394,6 +766,60 @@ void InventoryScreen::renderEquipmentPanel(game::Inventory& inventory) {
                        SlotKind::EQUIPMENT, -1, weaponSlots[i]);
         ImGui::PopID();
     }
+}
+
+// ============================================================
+// Stats Panel
+// ============================================================
+
+void InventoryScreen::renderStatsPanel(game::Inventory& inventory, uint32_t playerLevel) {
+    // Sum equipment stats
+    int32_t totalArmor = 0;
+    int32_t totalStr = 0, totalAgi = 0, totalSta = 0, totalInt = 0, totalSpi = 0;
+
+    for (int s = 0; s < game::Inventory::NUM_EQUIP_SLOTS; s++) {
+        const auto& slot = inventory.getEquipSlot(static_cast<game::EquipSlot>(s));
+        if (slot.empty()) continue;
+        totalArmor += slot.item.armor;
+        totalStr += slot.item.strength;
+        totalAgi += slot.item.agility;
+        totalSta += slot.item.stamina;
+        totalInt += slot.item.intellect;
+        totalSpi += slot.item.spirit;
+    }
+
+    // Base stats: 20 + level
+    int32_t baseStat = 20 + static_cast<int32_t>(playerLevel);
+
+    ImVec4 green(0.0f, 1.0f, 0.0f, 1.0f);
+    ImVec4 white(1.0f, 1.0f, 1.0f, 1.0f);
+    ImVec4 gold(1.0f, 0.84f, 0.0f, 1.0f);
+    ImVec4 gray(0.6f, 0.6f, 0.6f, 1.0f);
+
+    // Armor (no base)
+    if (totalArmor > 0) {
+        ImGui::TextColored(gold, "Armor: %d", totalArmor);
+    } else {
+        ImGui::TextColored(gray, "Armor: 0");
+    }
+
+    // Helper to render a stat line
+    auto renderStat = [&](const char* name, int32_t equipBonus) {
+        int32_t total = baseStat + equipBonus;
+        if (equipBonus > 0) {
+            ImGui::TextColored(white, "%s: %d", name, total);
+            ImGui::SameLine();
+            ImGui::TextColored(green, "(+%d)", equipBonus);
+        } else {
+            ImGui::TextColored(gray, "%s: %d", name, total);
+        }
+    };
+
+    renderStat("Strength", totalStr);
+    renderStat("Agility", totalAgi);
+    renderStat("Stamina", totalSta);
+    renderStat("Intellect", totalInt);
+    renderStat("Spirit", totalSpi);
 }
 
 void InventoryScreen::renderBackpackPanel(game::Inventory& inventory) {
@@ -511,18 +937,27 @@ void InventoryScreen::renderItemSlot(game::Inventory& inventory, const game::Ite
             borderCol = IM_COL32(0, 200, 0, 220);
         }
 
-        drawList->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), bgCol);
-        drawList->AddRect(pos, ImVec2(pos.x + size, pos.y + size),
-                          borderCol, 0.0f, 0, 2.0f);
+        // Try to show icon
+        GLuint iconTex = getItemIcon(item.displayInfoId);
+        if (iconTex) {
+            drawList->AddImage((ImTextureID)(uintptr_t)iconTex, pos,
+                               ImVec2(pos.x + size, pos.y + size));
+            drawList->AddRect(pos, ImVec2(pos.x + size, pos.y + size),
+                              borderCol, 0.0f, 0, 2.0f);
+        } else {
+            drawList->AddRectFilled(pos, ImVec2(pos.x + size, pos.y + size), bgCol);
+            drawList->AddRect(pos, ImVec2(pos.x + size, pos.y + size),
+                              borderCol, 0.0f, 0, 2.0f);
 
-        char abbr[4] = {};
-        if (!item.name.empty()) {
-            abbr[0] = item.name[0];
-            if (item.name.size() > 1) abbr[1] = item.name[1];
+            char abbr[4] = {};
+            if (!item.name.empty()) {
+                abbr[0] = item.name[0];
+                if (item.name.size() > 1) abbr[1] = item.name[1];
+            }
+            float textW = ImGui::CalcTextSize(abbr).x;
+            drawList->AddText(ImVec2(pos.x + (size - textW) * 0.5f, pos.y + 2.0f),
+                              ImGui::ColorConvertFloat4ToU32(qColor), abbr);
         }
-        float textW = ImGui::CalcTextSize(abbr).x;
-        drawList->AddText(ImVec2(pos.x + (size - textW) * 0.5f, pos.y + 2.0f),
-                          ImGui::ColorConvertFloat4ToU32(qColor), abbr);
 
         if (item.stackCount > 1) {
             char countStr[16];
@@ -654,12 +1089,23 @@ void InventoryScreen::renderItemTooltip(const game::ItemDef& item) {
         ImGui::Text("%d Armor", item.armor);
     }
 
-    // Stats
-    if (item.stamina != 0) ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "+%d Stamina", item.stamina);
-    if (item.strength != 0) ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "+%d Strength", item.strength);
-    if (item.agility != 0) ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "+%d Agility", item.agility);
-    if (item.intellect != 0) ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "+%d Intellect", item.intellect);
-    if (item.spirit != 0) ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "+%d Spirit", item.spirit);
+    // Stats with "Equip:" prefix style
+    ImVec4 green(0.0f, 1.0f, 0.0f, 1.0f);
+    ImVec4 red(1.0f, 0.2f, 0.2f, 1.0f);
+
+    auto renderStat = [&](int32_t val, const char* name) {
+        if (val > 0) {
+            ImGui::TextColored(green, "+%d %s", val, name);
+        } else if (val < 0) {
+            ImGui::TextColored(red, "%d %s", val, name);
+        }
+    };
+
+    renderStat(item.stamina, "Stamina");
+    renderStat(item.strength, "Strength");
+    renderStat(item.agility, "Agility");
+    renderStat(item.intellect, "Intellect");
+    renderStat(item.spirit, "Spirit");
 
     // Stack info
     if (item.maxStack > 1) {

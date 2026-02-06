@@ -294,6 +294,9 @@ public:
     using CreatureDespawnCallback = std::function<void(uint64_t guid)>;
     void setCreatureDespawnCallback(CreatureDespawnCallback cb) { creatureDespawnCallback_ = std::move(cb); }
 
+    // Faction hostility map (populated from FactionTemplate.dbc by Application)
+    void setFactionHostileMap(std::unordered_map<uint32_t, bool> map) { factionHostileMap_ = std::move(map); }
+
     // Creature move callback (online mode - triggered by SMSG_MONSTER_MOVE)
     // Parameters: guid, x, y, z (canonical), duration_ms (0 = instant)
     using CreatureMoveCallback = std::function<void(uint64_t guid, float x, float y, float z, uint32_t durationMs)>;
@@ -643,6 +646,13 @@ private:
 
     // Quest log
     std::vector<QuestLogEntry> questLog_;
+
+    // Faction hostility lookup (populated from FactionTemplate.dbc)
+    std::unordered_map<uint32_t, bool> factionHostileMap_;
+    bool isHostileFaction(uint32_t factionTemplateId) const {
+        auto it = factionHostileMap_.find(factionTemplateId);
+        return it != factionHostileMap_.end() ? it->second : true; // default hostile if unknown
+    }
 
     // Vendor
     bool vendorWindowOpen = false;

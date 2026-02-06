@@ -1,4 +1,5 @@
 #include "ui/game_screen.hpp"
+#include "rendering/character_preview.hpp"
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
 #include "core/spawn_presets.hpp"
@@ -101,6 +102,28 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     // Spellbook (P key toggle handled inside)
     spellbookScreen.render(gameHandler, core::Application::getInstance().getAssetManager());
 
+    // Set up inventory screen asset manager + player appearance (once)
+    {
+        static bool inventoryScreenInit = false;
+        if (!inventoryScreenInit) {
+            auto* am = core::Application::getInstance().getAssetManager();
+            if (am) {
+                inventoryScreen.setAssetManager(am);
+                const auto* ch = gameHandler.getActiveCharacter();
+                if (ch) {
+                    uint8_t skin = ch->appearanceBytes & 0xFF;
+                    uint8_t face = (ch->appearanceBytes >> 8) & 0xFF;
+                    uint8_t hairStyle = (ch->appearanceBytes >> 16) & 0xFF;
+                    uint8_t hairColor = (ch->appearanceBytes >> 24) & 0xFF;
+                    inventoryScreen.setPlayerAppearance(
+                        ch->race, ch->gender, skin, face,
+                        hairStyle, hairColor, ch->facialFeatures);
+                    inventoryScreenInit = true;
+                }
+            }
+        }
+    }
+
     // Set vendor mode before rendering inventory
     inventoryScreen.setVendorMode(gameHandler.isVendorWindowOpen(), &gameHandler);
 
@@ -113,7 +136,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     inventoryScreen.render(gameHandler.getInventory(), gameHandler.getMoneyCopper());
 
     // Character screen (C key toggle handled inside render())
-    inventoryScreen.renderCharacterScreen(gameHandler.getInventory());
+    inventoryScreen.renderCharacterScreen(gameHandler);
 
     if (inventoryScreen.consumeInventoryDirty()) {
         gameHandler.notifyInventoryChanged();
@@ -124,6 +147,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         updateCharacterTextures(gameHandler.getInventory());
         core::Application::getInstance().loadEquippedWeapons();
         gameHandler.notifyEquipmentChanged();
+        inventoryScreen.markPreviewDirty();
     }
 
     // Update renderer face-target position and selection circle
@@ -143,10 +167,10 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                     auto unit = std::static_pointer_cast<game::Unit>(target);
                     if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
                         circleColor = glm::vec3(0.5f, 0.5f, 0.5f); // gray (dead)
-                    } else if (unit->isInteractable()) {
-                        circleColor = glm::vec3(0.3f, 1.0f, 0.3f); // green (friendly)
-                    } else {
+                    } else if (unit->isHostile()) {
                         circleColor = glm::vec3(1.0f, 0.2f, 0.2f); // red (hostile)
+                    } else {
+                        circleColor = glm::vec3(0.3f, 1.0f, 0.3f); // green (friendly)
                     }
                 } else if (target->getType() == game::ObjectType::PLAYER) {
                     circleColor = glm::vec3(0.3f, 1.0f, 0.3f); // green (player)
@@ -504,17 +528,21 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
                         gameHandler.lootTarget(target->getGuid());
                     } else if (gameHandler.isSinglePlayerMode()) {
-                        // Single-player: toggle auto-attack
-                        if (gameHandler.isAutoAttacking()) {
-                            gameHandler.stopAutoAttack();
-                        } else {
-                            gameHandler.startAutoAttack(target->getGuid());
+                        // Single-player: interact with friendly NPCs, attack hostiles
+                        if (!unit->isHostile() && unit->isInteractable()) {
+                            gameHandler.interactWithNpc(target->getGuid());
+                        } else if (unit->isHostile()) {
+                            if (gameHandler.isAutoAttacking()) {
+                                gameHandler.stopAutoAttack();
+                            } else {
+                                gameHandler.startAutoAttack(target->getGuid());
+                            }
                         }
                     } else {
                         // Online mode: interact with friendly NPCs, attack hostiles
-                        if (unit->isInteractable()) {
+                        if (!unit->isHostile() && unit->isInteractable()) {
                             gameHandler.interactWithNpc(target->getGuid());
-                        } else {
+                        } else if (unit->isHostile()) {
                             if (gameHandler.isAutoAttacking()) {
                                 gameHandler.stopAutoAttack();
                             } else {
@@ -643,10 +671,10 @@ void GameScreen::renderTargetFrame(game::GameHandler& gameHandler) {
         auto u = std::static_pointer_cast<game::Unit>(target);
         if (u->getHealth() == 0 && u->getMaxHealth() > 0) {
             hostileColor = ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
-        } else if (u->isInteractable()) {
-            hostileColor = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
-        } else {
+        } else if (u->isHostile()) {
             hostileColor = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);
+        } else {
+            hostileColor = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
         }
     }
 

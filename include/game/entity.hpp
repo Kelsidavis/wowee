@@ -72,7 +72,38 @@ public:
         y = py;
         z = pz;
         orientation = o;
+        isMoving_ = false; // Instant position set cancels interpolation
     }
+
+    // Movement interpolation (syncs entity position with renderer during movement)
+    void startMoveTo(float destX, float destY, float destZ, float destO, float durationSec) {
+        if (durationSec <= 0.0f) {
+            setPosition(destX, destY, destZ, destO);
+            return;
+        }
+        moveStartX_ = x; moveStartY_ = y; moveStartZ_ = z;
+        moveEndX_ = destX; moveEndY_ = destY; moveEndZ_ = destZ;
+        moveDuration_ = durationSec;
+        moveElapsed_ = 0.0f;
+        orientation = destO;
+        isMoving_ = true;
+    }
+
+    void updateMovement(float deltaTime) {
+        if (!isMoving_) return;
+        moveElapsed_ += deltaTime;
+        float t = moveElapsed_ / moveDuration_;
+        if (t >= 1.0f) {
+            x = moveEndX_; y = moveEndY_; z = moveEndZ_;
+            isMoving_ = false;
+        } else {
+            x = moveStartX_ + (moveEndX_ - moveStartX_) * t;
+            y = moveStartY_ + (moveEndY_ - moveStartY_) * t;
+            z = moveStartZ_ + (moveEndZ_ - moveStartZ_) * t;
+        }
+    }
+
+    bool isEntityMoving() const { return isMoving_; }
 
     // Object type
     ObjectType getType() const { return type; }
@@ -108,6 +139,13 @@ protected:
 
     // Update fields (dynamic values)
     std::map<uint16_t, uint32_t> fields;
+
+    // Movement interpolation state
+    bool isMoving_ = false;
+    float moveStartX_ = 0, moveStartY_ = 0, moveStartZ_ = 0;
+    float moveEndX_ = 0, moveEndY_ = 0, moveEndZ_ = 0;
+    float moveDuration_ = 0;
+    float moveElapsed_ = 0;
 };
 
 /**
@@ -162,6 +200,12 @@ public:
     // Returns true if NPC has interaction flags (gossip/vendor/quest/trainer)
     bool isInteractable() const { return npcFlags != 0; }
 
+    // Faction-based hostility
+    uint32_t getFactionTemplate() const { return factionTemplate; }
+    void setFactionTemplate(uint32_t f) { factionTemplate = f; }
+    bool isHostile() const { return hostile; }
+    void setHostile(bool h) { hostile = h; }
+
 protected:
     std::string name;
     uint32_t health = 0;
@@ -174,6 +218,8 @@ protected:
     uint32_t displayId = 0;
     uint32_t unitFlags = 0;
     uint32_t npcFlags = 0;
+    uint32_t factionTemplate = 0;
+    bool hostile = false;
 };
 
 /**
