@@ -2,6 +2,7 @@
 #include <chrono>
 #include <iomanip>
 #include <ctime>
+#include <filesystem>
 
 namespace wowee {
 namespace core {
@@ -11,12 +12,21 @@ Logger& Logger::getInstance() {
     return instance;
 }
 
+void Logger::ensureFile() {
+    if (fileReady) return;
+    fileReady = true;
+    std::error_code ec;
+    std::filesystem::create_directories("logs", ec);
+    fileStream.open("logs/wowee.log", std::ios::out | std::ios::app);
+}
+
 void Logger::log(LogLevel level, const std::string& message) {
     if (level < minLevel) {
         return;
     }
 
     std::lock_guard<std::mutex> lock(mutex);
+    ensureFile();
 
     // Get current time
     auto now = std::chrono::system_clock::now();
@@ -28,20 +38,27 @@ void Logger::log(LogLevel level, const std::string& message) {
     localtime_r(&time, &tm);
 
     // Format: [YYYY-MM-DD HH:MM:SS.mmm] [LEVEL] message
-    std::cout << "["
-              << std::put_time(&tm, "%Y-%m-%d %H:%M:%S")
-              << "." << std::setfill('0') << std::setw(3) << ms.count()
-              << "] [";
+    std::ostringstream line;
+    line << "["
+         << std::put_time(&tm, "%Y-%m-%d %H:%M:%S")
+         << "." << std::setfill('0') << std::setw(3) << ms.count()
+         << "] [";
 
     switch (level) {
-        case LogLevel::DEBUG:   std::cout << "DEBUG"; break;
-        case LogLevel::INFO:    std::cout << "INFO "; break;
-        case LogLevel::WARNING: std::cout << "WARN "; break;
-        case LogLevel::ERROR:   std::cout << "ERROR"; break;
-        case LogLevel::FATAL:   std::cout << "FATAL"; break;
+        case LogLevel::DEBUG:   line << "DEBUG"; break;
+        case LogLevel::INFO:    line << "INFO "; break;
+        case LogLevel::WARNING: line << "WARN "; break;
+        case LogLevel::ERROR:   line << "ERROR"; break;
+        case LogLevel::FATAL:   line << "FATAL"; break;
     }
 
-    std::cout << "] " << message << std::endl;
+    line << "] " << message;
+
+    std::cout << line.str() << std::endl;
+    if (fileStream.is_open()) {
+        fileStream << line.str() << std::endl;
+        fileStream.flush();
+    }
 }
 
 void Logger::setLogLevel(LogLevel level) {

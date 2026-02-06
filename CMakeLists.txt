@@ -21,6 +21,7 @@ find_package(GLEW REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(SQLite3 REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libswscale libavutil)
 
@@ -260,6 +261,7 @@ target_link_libraries(wowee PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     Threads::Threads
+    ZLIB::ZLIB
 )
 
 # SQLite

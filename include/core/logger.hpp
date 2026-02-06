@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <mutex>
+#include <fstream>
 
 namespace wowee {
 namespace core {
@@ -63,6 +64,9 @@ private:
 
     LogLevel minLevel = LogLevel::DEBUG;
     std::mutex mutex;
+    std::ofstream fileStream;
+    bool fileReady = false;
+    void ensureFile();
 };
 
 // Convenience macros
