@@ -1515,7 +1515,7 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
     if (moveDistXY < 0.001f) return false;
 
     // Player collision parameters
-    const float PLAYER_RADIUS = 0.50f;      // Slightly narrower to pass tight doorways/interiors
+    const float PLAYER_RADIUS = 0.55f;      // Slightly wider for better wall collision
     const float PLAYER_HEIGHT = 2.0f;       // Player height for wall checks
     const float MAX_STEP_HEIGHT = 0.85f;    // Balanced step-up without wall pass-through
 

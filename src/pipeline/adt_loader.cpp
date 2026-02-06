@@ -377,6 +377,7 @@ void ADTLoader::parseMCVT(const uint8_t* data, size_t size, MapChunk& chunk) {
         if (height < minHeight) minHeight = height;
         if (height > maxHeight) maxHeight = height;
     }
+    chunk.heightMap.loaded = true;
 
     // Log height range for first chunk only
     static bool logged = false;

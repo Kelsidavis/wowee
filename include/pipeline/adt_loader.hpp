@@ -21,9 +21,10 @@ struct ADTCoord {
  */
 struct HeightMap {
     std::array<float, 145> heights;  // 9x9 outer + 8x8 inner vertices
+    bool loaded = false;
 
     float getHeight(int x, int y) const;
-    bool isLoaded() const { return heights[0] != 0.0f || heights[1] != 0.0f; }
+    bool isLoaded() const { return loaded; }
 };
 
 /**
