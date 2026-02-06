@@ -41,6 +41,8 @@ public:
     }
 
     void reset();
+    void startIntroPan(float durationSec = 2.5f, float orbitDegrees = 120.0f);
+    bool isIntroActive() const { return introActive; }
 
     float getMovementSpeed() const { return movementSpeed; }
     const glm::vec3& getDefaultPosition() const { return defaultPosition; }
@@ -178,6 +180,14 @@ private:
     glm::vec3 defaultPosition = glm::vec3(-9464.0f, 62.0f, 200.0f);
     float defaultYaw = 0.0f;
     float defaultPitch = -5.0f;
+
+    // Spawn intro camera pan
+    bool introActive = false;
+    float introTimer = 0.0f;
+    float introDuration = 0.0f;
+    float introStartYaw = 0.0f;
+    float introOrbitDegrees = 0.0f;
+    float introPitch = -10.0f;
 };
 
 } // namespace rendering

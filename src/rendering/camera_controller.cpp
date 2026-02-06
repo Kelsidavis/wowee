@@ -56,6 +56,17 @@ CameraController::CameraController(Camera* cam) : camera(cam) {
     reset();
 }
 
+void CameraController::startIntroPan(float durationSec, float orbitDegrees) {
+    if (!camera) return;
+    introActive = true;
+    introTimer = 0.0f;
+    introDuration = std::max(0.5f, durationSec);
+    introStartYaw = yaw;
+    introOrbitDegrees = orbitDegrees;
+    introPitch = pitch;
+    thirdPerson = true;
+}
+
 void CameraController::update(float deltaTime) {
     if (!enabled || !camera) {
         return;
@@ -76,6 +87,24 @@ void CameraController::update(float deltaTime) {
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));
     bool ctrlDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LCTRL) || input.isKeyPressed(SDL_SCANCODE_RCTRL));
     bool nowJump = !uiWantsKeyboard && !sitting && input.isKeyPressed(SDL_SCANCODE_SPACE);
+
+    if (introActive) {
+        if (leftMouseDown || rightMouseDown || keyW || keyS || keyA || keyD || keyQ || keyE || nowJump) {
+            introActive = false;
+        } else {
+            introTimer += deltaTime;
+            float t = (introDuration > 0.0f) ? std::min(introTimer / introDuration, 1.0f) : 1.0f;
+            yaw = introStartYaw + introOrbitDegrees * t;
+            pitch = introPitch;
+            camera->setRotation(yaw, pitch);
+            facingYaw = yaw;
+            if (t >= 1.0f) {
+                introActive = false;
+            }
+        }
+        // Suppress player movement/input during intro.
+        keyW = keyS = keyA = keyD = keyQ = keyE = nowJump = false;
+    }
 
     bool mouseAutorun = !uiWantsKeyboard && !sitting && leftMouseDown && rightMouseDown;
     bool nowForward = keyW || mouseAutorun;
@@ -957,6 +986,9 @@ void CameraController::update(float deltaTime) {
 
 void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     if (!enabled || !camera) {
+        return;
+    }
+    if (introActive) {
         return;
     }
 
