@@ -103,9 +103,13 @@ public:
     const std::vector<Character>& getCharacters() const { return characters; }
 
     void createCharacter(const CharCreateData& data);
+    void deleteCharacter(uint64_t characterGuid);
 
     using CharCreateCallback = std::function<void(bool success, const std::string& message)>;
     void setCharCreateCallback(CharCreateCallback cb) { charCreateCallback_ = std::move(cb); }
+
+    using CharDeleteCallback = std::function<void(bool success)>;
+    void setCharDeleteCallback(CharDeleteCallback cb) { charDeleteCallback_ = std::move(cb); }
 
     /**
      * Select and log in with a character
@@ -601,6 +605,7 @@ private:
     WorldConnectSuccessCallback onSuccess;
     WorldConnectFailureCallback onFailure;
     CharCreateCallback charCreateCallback_;
+    CharDeleteCallback charDeleteCallback_;
     bool pendingCharCreateResult_ = false;
     bool pendingCharCreateSuccess_ = false;
     std::string pendingCharCreateMsg_;

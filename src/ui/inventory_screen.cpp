@@ -263,18 +263,22 @@ void InventoryScreen::render(game::Inventory& inventory, uint64_t moneyCopper) {
         return;
     }
 
+    // Reserve space for money display at bottom
+    float moneyHeight = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+    float panelHeight = ImGui::GetContentRegionAvail().y - moneyHeight;
+
     // Two-column layout: Equipment (left) | Backpack (right)
-    ImGui::BeginChild("EquipPanel", ImVec2(200.0f, 0.0f), true);
+    ImGui::BeginChild("EquipPanel", ImVec2(200.0f, panelHeight), true);
     renderEquipmentPanel(inventory);
     ImGui::EndChild();
 
     ImGui::SameLine();
 
-    ImGui::BeginChild("BackpackPanel", ImVec2(0.0f, 0.0f), true);
+    ImGui::BeginChild("BackpackPanel", ImVec2(0.0f, panelHeight), true);
     renderBackpackPanel(inventory);
     ImGui::EndChild();
 
-    ImGui::Separator();
+    // Money display
     uint64_t gold = moneyCopper / 10000;
     uint64_t silver = (moneyCopper / 100) % 100;
     uint64_t copper = moneyCopper % 100;

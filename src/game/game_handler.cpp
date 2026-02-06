@@ -894,6 +894,15 @@ void GameHandler::handlePacket(network::Packet& packet) {
             handleCharCreateResponse(packet);
             break;
 
+        case Opcode::SMSG_CHAR_DELETE: {
+            uint8_t result = packet.readUInt8();
+            bool success = (result == 0x47); // CHAR_DELETE_SUCCESS
+            LOG_INFO("SMSG_CHAR_DELETE result: ", (int)result, success ? " (success)" : " (failed)");
+            if (success) requestCharacterList();
+            if (charDeleteCallback_) charDeleteCallback_(success);
+            break;
+        }
+
         case Opcode::SMSG_CHAR_ENUM:
             if (state == WorldState::CHAR_LIST_REQUESTED) {
                 handleCharEnum(packet);
@@ -1391,6 +1400,45 @@ void GameHandler::handleCharCreateResponse(network::Packet& packet) {
             charCreateCallback_(false, msg);
         }
     }
+}
+
+void GameHandler::deleteCharacter(uint64_t characterGuid) {
+    if (singlePlayerMode_) {
+        // Remove from local list
+        characters.erase(
+            std::remove_if(characters.begin(), characters.end(),
+                           [characterGuid](const Character& c) { return c.guid == characterGuid; }),
+            characters.end());
+        // Remove from database
+        auto& sp = getSinglePlayerSqlite();
+        if (sp.db) {
+            const char* sql = "DELETE FROM characters WHERE guid=?";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(sp.db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(characterGuid));
+                sqlite3_step(stmt);
+                sqlite3_finalize(stmt);
+            }
+            const char* sql2 = "DELETE FROM character_inventory WHERE guid=?";
+            if (sqlite3_prepare_v2(sp.db, sql2, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(characterGuid));
+                sqlite3_step(stmt);
+                sqlite3_finalize(stmt);
+            }
+        }
+        if (charDeleteCallback_) charDeleteCallback_(true);
+        return;
+    }
+
+    if (!socket) {
+        if (charDeleteCallback_) charDeleteCallback_(false);
+        return;
+    }
+
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_CHAR_DELETE));
+    packet.writeUInt64(characterGuid);
+    socket->send(packet);
+    LOG_INFO("CMSG_CHAR_DELETE sent for GUID: 0x", std::hex, characterGuid, std::dec);
 }
 
 const Character* GameHandler::getActiveCharacter() const {
@@ -2262,7 +2310,7 @@ void GameHandler::sendMovement(Opcode opcode) {
     wireInfo.z = serverPos.z;
 
     // Build and send movement packet
-    auto packet = MovementPacket::build(opcode, wireInfo);
+    auto packet = MovementPacket::build(opcode, wireInfo, playerGuid);
     socket->send(packet);
 }
 

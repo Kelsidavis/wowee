@@ -31,6 +31,8 @@ public:
     }
 
     void setOnCreateCharacter(std::function<void()> cb) { onCreateCharacter = std::move(cb); }
+    void setOnBack(std::function<void()> cb) { onBack = std::move(cb); }
+    void setOnDeleteCharacter(std::function<void(uint64_t)> cb) { onDeleteCharacter = std::move(cb); }
 
     /**
      * Check if a character has been selected
@@ -41,6 +43,11 @@ public:
      * Get selected character GUID
      */
     uint64_t getSelectedGuid() const { return selectedCharacterGuid; }
+
+    /**
+     * Update status message
+     */
+    void setStatus(const std::string& message);
 
 private:
     // UI state
@@ -54,11 +61,9 @@ private:
     // Callbacks
     std::function<void(uint64_t)> onCharacterSelected;
     std::function<void()> onCreateCharacter;
-
-    /**
-     * Update status message
-     */
-    void setStatus(const std::string& message);
+    std::function<void()> onBack;
+    std::function<void(uint64_t)> onDeleteCharacter;
+    bool confirmDelete = false;
 
     /**
      * Get faction color based on race

@@ -161,10 +161,29 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
 
             ImGui::SameLine();
 
-            // Display character GUID
-            std::stringstream guidStr;
-            guidStr << "GUID: 0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(16) << character.guid;
-            ImGui::TextDisabled("%s", guidStr.str().c_str());
+            // Delete Character button
+            if (!confirmDelete) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+                if (ImGui::Button("Delete Character", ImVec2(150, 40))) {
+                    confirmDelete = true;
+                }
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.0f, 0.0f, 1.0f));
+                if (ImGui::Button("Confirm Delete?", ImVec2(150, 40))) {
+                    if (onDeleteCharacter) {
+                        onDeleteCharacter(character.guid);
+                    }
+                    confirmDelete = false;
+                    selectedCharacterIndex = -1;
+                    selectedCharacterGuid = 0;
+                }
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(80, 40))) {
+                    confirmDelete = false;
+                }
+            }
         }
     }
 
@@ -173,6 +192,14 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
     ImGui::Spacing();
 
     // Back/Refresh/Create buttons
+    if (ImGui::Button("Back", ImVec2(120, 0))) {
+        if (onBack) {
+            onBack();
+        }
+    }
+
+    ImGui::SameLine();
+
     if (ImGui::Button("Refresh", ImVec2(120, 0))) {
         if (gameHandler.getState() == game::WorldState::READY ||
             gameHandler.getState() == game::WorldState::CHAR_LIST_RECEIVED) {

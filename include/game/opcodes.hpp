@@ -14,6 +14,7 @@ enum class Opcode : uint16_t {
     CMSG_AUTH_SESSION                = 0x1ED,
     CMSG_CHAR_CREATE                 = 0x036,
     CMSG_CHAR_ENUM                   = 0x037,
+    CMSG_CHAR_DELETE                 = 0x038,
     CMSG_PLAYER_LOGIN                = 0x03D,
 
     // ---- Movement ----
@@ -38,6 +39,7 @@ enum class Opcode : uint16_t {
     SMSG_AUTH_RESPONSE               = 0x1EE,
     SMSG_CHAR_CREATE                 = 0x03A,
     SMSG_CHAR_ENUM                   = 0x03B,
+    SMSG_CHAR_DELETE                 = 0x03C,
     SMSG_PONG                        = 0x1DD,
     SMSG_LOGIN_VERIFY_WORLD          = 0x236,
     SMSG_ACCOUNT_DATA_TIMES          = 0x209,

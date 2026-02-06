@@ -640,6 +640,39 @@ void Application::setupUICallbacks() {
         uiManager->getCharacterCreateScreen().initializePreview(assetManager.get());
         setState(AppState::CHARACTER_CREATION);
     });
+
+    // "Back" button on character screen
+    uiManager->getCharacterScreen().setOnBack([this]() {
+        if (singlePlayerMode) {
+            setState(AppState::AUTHENTICATION);
+            singlePlayerMode = false;
+            gameHandler->setSinglePlayerMode(false);
+        } else {
+            setState(AppState::REALM_SELECTION);
+        }
+    });
+
+    // "Delete Character" button on character screen
+    uiManager->getCharacterScreen().setOnDeleteCharacter([this](uint64_t guid) {
+        if (gameHandler) {
+            gameHandler->deleteCharacter(guid);
+        }
+    });
+
+    // Character delete result callback
+    gameHandler->setCharDeleteCallback([this](bool success) {
+        if (success) {
+            uiManager->getCharacterScreen().setStatus("Character deleted.");
+            // Refresh character list
+            if (singlePlayerMode) {
+                gameHandler->setSinglePlayerCharListReady();
+            } else {
+                gameHandler->requestCharacterList();
+            }
+        } else {
+            uiManager->getCharacterScreen().setStatus("Delete failed.");
+        }
+    });
 }
 
 void Application::spawnPlayerCharacter() {

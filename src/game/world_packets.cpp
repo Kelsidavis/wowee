@@ -517,15 +517,32 @@ bool PongParser::parse(network::Packet& packet, PongData& data) {
     return true;
 }
 
-network::Packet MovementPacket::build(Opcode opcode, const MovementInfo& info) {
+network::Packet MovementPacket::build(Opcode opcode, const MovementInfo& info, uint64_t playerGuid) {
     network::Packet packet(static_cast<uint16_t>(opcode));
 
     // Movement packet format (WoW 3.3.5a):
+    // packed GUID
     // uint32 flags
     // uint16 flags2
     // uint32 time
     // float x, y, z
     // float orientation
+
+    // Write packed GUID
+    uint8_t mask = 0;
+    uint8_t guidBytes[8];
+    int guidByteCount = 0;
+    for (int i = 0; i < 8; i++) {
+        uint8_t byte = static_cast<uint8_t>((playerGuid >> (i * 8)) & 0xFF);
+        if (byte != 0) {
+            mask |= (1 << i);
+            guidBytes[guidByteCount++] = byte;
+        }
+    }
+    packet.writeUInt8(mask);
+    for (int i = 0; i < guidByteCount; i++) {
+        packet.writeUInt8(guidBytes[i]);
+    }
 
     // Write movement flags
     packet.writeUInt32(info.flags);

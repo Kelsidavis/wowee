@@ -429,7 +429,7 @@ public:
      * @param info Movement info
      * @return Packet ready to send
      */
-    static network::Packet build(Opcode opcode, const MovementInfo& info);
+    static network::Packet build(Opcode opcode, const MovementInfo& info, uint64_t playerGuid = 0);
 };
 
 // Forward declare Entity types
