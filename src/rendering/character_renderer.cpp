@@ -1217,26 +1217,30 @@ void CharacterRenderer::render(const Camera& camera, const glm::mat4& view, cons
 
             // Draw batches (submeshes) with per-batch textures
             // Geoset filtering: Group = submeshId / 100, Variation = submeshId % 100
-            // Group 0 (body parts): always render all (0-99 are different body parts, not variations)
+            // Group 0 (body parts): render if texture is valid (skip duplicates with white/fallback texture)
             // Other groups: render only if exact submeshId is in activeGeosets
             for (const auto& batch : gpuModel.data.batches) {
-                if (!instance.activeGeosets.empty()) {
-                    uint16_t group = batch.submeshId / 100;
-                    if (group != 0) {
-                        // Non-body groups: require exact match
-                        if (instance.activeGeosets.find(batch.submeshId) == instance.activeGeosets.end()) {
-                            continue;
-                        }
-                    }
-                    // Group 0 (body): always render
-                }
-
-                // Resolve texture for this batch
+                // Resolve texture for this batch first (needed for body part filtering)
                 GLuint texId = whiteTexture;
                 if (batch.textureIndex < gpuModel.data.textureLookup.size()) {
                     uint16_t lookupIdx = gpuModel.data.textureLookup[batch.textureIndex];
                     if (lookupIdx < gpuModel.textureIds.size()) {
                         texId = gpuModel.textureIds[lookupIdx];
+                    }
+                }
+
+                if (!instance.activeGeosets.empty()) {
+                    uint16_t group = batch.submeshId / 100;
+                    if (group == 0) {
+                        // Body parts: skip if texture is white/fallback (duplicate mesh for compositing)
+                        if (texId == whiteTexture) {
+                            continue;
+                        }
+                    } else {
+                        // Non-body groups: require exact match in activeGeosets
+                        if (instance.activeGeosets.find(batch.submeshId) == instance.activeGeosets.end()) {
+                            continue;
+                        }
                     }
                 }
 
