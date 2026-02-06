@@ -535,13 +535,16 @@ void CameraController::update(float deltaTime) {
 
             if (groundH) {
                 float groundDiff = *groundH - lastGroundZ;
-                if (std::abs(groundDiff) < 2.0f) {
+                if (groundDiff > 2.0f) {
+                    // Landing on a higher ledge - snap up
+                    lastGroundZ = *groundH;
+                } else if (groundDiff > -2.0f) {
                     // Small height difference - smooth it
                     lastGroundZ += groundDiff * std::min(1.0f, deltaTime * 15.0f);
-                } else {
-                    // Large height difference - snap (for falling onto ledges)
-                    lastGroundZ = *groundH;
                 }
+                // If groundDiff < -2.0f (floor much lower), ignore it - we're likely
+                // on an upper floor and detecting ground floor through a gap.
+                // Let gravity handle actual falls.
 
                 if (targetPos.z <= lastGroundZ + 0.1f && verticalVelocity <= 0.0f) {
                     targetPos.z = lastGroundZ;
@@ -836,8 +839,18 @@ void CameraController::update(float deltaTime) {
             }
 
             if (groundH) {
-                lastGroundZ = *groundH;
-                float groundZ = *groundH + eyeHeight;
+                float groundDiff = *groundH - lastGroundZ;
+                if (groundDiff > 2.0f) {
+                    // Landing on a higher ledge - snap up
+                    lastGroundZ = *groundH;
+                } else if (groundDiff > -2.0f) {
+                    // Small difference - accept it
+                    lastGroundZ = *groundH;
+                }
+                // If groundDiff < -2.0f (floor much lower), ignore it - we're likely
+                // on an upper floor and detecting ground floor through a gap.
+
+                float groundZ = lastGroundZ + eyeHeight;
                 if (newPos.z <= groundZ) {
                     newPos.z = groundZ;
                     verticalVelocity = 0.0f;
