@@ -60,6 +60,7 @@ private:
     bool pendingFullscreen = false;
     bool pendingVsync = false;
     int pendingResIndex = 0;
+    bool pendingShadows = true;
 
     /**
      * Render player info window

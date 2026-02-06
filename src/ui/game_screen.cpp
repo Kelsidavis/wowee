@@ -385,6 +385,13 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 }
             }
         }
+
+        if (input.isKeyJustPressed(SDL_SCANCODE_F4)) {
+            auto* renderer = core::Application::getInstance().getRenderer();
+            if (renderer) {
+                renderer->setShadowsEnabled(!renderer->areShadowsEnabled());
+            }
+        }
     }
 
     // Slash key: focus chat input
@@ -1780,6 +1787,7 @@ void GameScreen::renderSettingsWindow() {
     if (!showSettingsWindow) return;
 
     auto* window = core::Application::getInstance().getWindow();
+    auto* renderer = core::Application::getInstance().getRenderer();
     if (!window) return;
 
     static const int kResolutions[][2] = {
@@ -1794,6 +1802,7 @@ void GameScreen::renderSettingsWindow() {
     if (!settingsInit) {
         pendingFullscreen = window->isFullscreen();
         pendingVsync = window->isVsyncEnabled();
+        pendingShadows = renderer ? renderer->areShadowsEnabled() : true;
         pendingResIndex = 0;
         int curW = window->getWidth();
         int curH = window->getHeight();
@@ -1824,6 +1833,7 @@ void GameScreen::renderSettingsWindow() {
         ImGui::Text("Video");
         ImGui::Checkbox("Fullscreen", &pendingFullscreen);
         ImGui::Checkbox("VSync", &pendingVsync);
+        ImGui::Checkbox("Shadows", &pendingShadows);
 
         const char* resLabel = "Resolution";
         const char* resItems[kResCount];
@@ -1839,6 +1849,9 @@ void GameScreen::renderSettingsWindow() {
             window->setVsync(pendingVsync);
             window->setFullscreen(pendingFullscreen);
             window->applyResolution(kResolutions[pendingResIndex][0], kResolutions[pendingResIndex][1]);
+            if (renderer) {
+                renderer->setShadowsEnabled(pendingShadows);
+            }
         }
         if (ImGui::Button("Close", ImVec2(-1, 0))) {
             showSettingsWindow = false;
