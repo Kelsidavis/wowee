@@ -41,7 +41,7 @@ public:
     }
 
     void reset();
-    void startIntroPan(float durationSec = 2.5f, float orbitDegrees = 120.0f);
+    void startIntroPan(float durationSec = 2.8f, float orbitDegrees = 140.0f);
     bool isIntroActive() const { return introActive; }
 
     float getMovementSpeed() const { return movementSpeed; }
@@ -186,8 +186,12 @@ private:
     float introTimer = 0.0f;
     float introDuration = 0.0f;
     float introStartYaw = 0.0f;
+    float introEndYaw = 0.0f;
     float introOrbitDegrees = 0.0f;
-    float introPitch = -10.0f;
+    float introStartPitch = -15.0f;
+    float introEndPitch = -5.0f;
+    float introStartDistance = 12.0f;
+    float introEndDistance = 10.0f;
 };
 
 } // namespace rendering

@@ -61,9 +61,17 @@ void CameraController::startIntroPan(float durationSec, float orbitDegrees) {
     introActive = true;
     introTimer = 0.0f;
     introDuration = std::max(0.5f, durationSec);
-    introStartYaw = yaw;
+    introStartYaw = facingYaw + orbitDegrees;
+    introEndYaw = facingYaw;
     introOrbitDegrees = orbitDegrees;
-    introPitch = pitch;
+    introStartPitch = -32.0f;
+    introEndPitch = -10.0f;
+    introStartDistance = 18.0f;
+    introEndDistance = 10.0f;
+    yaw = introStartYaw;
+    pitch = introStartPitch;
+    currentDistance = introStartDistance;
+    userTargetDistance = introEndDistance;
     thirdPerson = true;
 }
 
@@ -94,8 +102,10 @@ void CameraController::update(float deltaTime) {
         } else {
             introTimer += deltaTime;
             float t = (introDuration > 0.0f) ? std::min(introTimer / introDuration, 1.0f) : 1.0f;
-            yaw = introStartYaw + introOrbitDegrees * t;
-            pitch = introPitch;
+            yaw = introStartYaw + (introEndYaw - introStartYaw) * t;
+            pitch = introStartPitch + (introEndPitch - introStartPitch) * t;
+            currentDistance = introStartDistance + (introEndDistance - introStartDistance) * t;
+            userTargetDistance = introEndDistance;
             camera->setRotation(yaw, pitch);
             facingYaw = yaw;
             if (t >= 1.0f) {

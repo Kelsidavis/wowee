@@ -183,7 +183,6 @@ public:
         int sfxVolume = 100;
         float mouseSensitivity = 0.2f;
         bool invertMouse = false;
-        bool introSeen = false;
     };
     bool getSinglePlayerSettings(SinglePlayerSettings& out) const;
     void setSinglePlayerSettings(const SinglePlayerSettings& settings);

@@ -1172,7 +1172,6 @@ void Application::startSinglePlayer() {
                 settings.mouseSensitivity = cameraController->getMouseSensitivity();
                 settings.invertMouse = cameraController->isInvertMouse();
             }
-            settings.introSeen = false;
             gameHandler->setSinglePlayerSettings(settings);
             hasSettings = true;
         }
@@ -1196,11 +1195,7 @@ void Application::startSinglePlayer() {
             if (auto* cameraController = renderer->getCameraController()) {
                 cameraController->setMouseSensitivity(settings.mouseSensitivity);
                 cameraController->setInvertMouse(settings.invertMouse);
-                if (!settings.introSeen) {
-                    cameraController->startIntroPan(2.8f, 140.0f);
-                    settings.introSeen = true;
-                    gameHandler->setSinglePlayerSettings(settings);
-                }
+                cameraController->startIntroPan(2.8f, 140.0f);
             }
         }
     }

@@ -204,12 +204,9 @@ struct SinglePlayerSqlite {
             " music_volume INTEGER,"
             " sfx_volume INTEGER,"
             " mouse_sensitivity REAL,"
-            " invert_mouse INTEGER,"
-            " intro_seen INTEGER"
+            " invert_mouse INTEGER"
             ");";
-        bool ok = exec(kSchema);
-        exec("ALTER TABLE character_settings ADD COLUMN intro_seen INTEGER DEFAULT 0;");
-        return ok;
+        return exec(kSchema);
     }
 };
 
@@ -1639,7 +1636,7 @@ bool GameHandler::loadSinglePlayerCharacterState(uint64_t guid) {
     spLastDirtyOrientation_ = movementInfo.orientation;
 
     const char* sqlSettings =
-        "SELECT fullscreen, vsync, shadows, res_w, res_h, music_volume, sfx_volume, mouse_sensitivity, invert_mouse, intro_seen "
+        "SELECT fullscreen, vsync, shadows, res_w, res_h, music_volume, sfx_volume, mouse_sensitivity, invert_mouse "
         "FROM character_settings WHERE guid=?;";
     if (sqlite3_prepare_v2(sp.db, sqlSettings, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(guid));
@@ -1653,7 +1650,6 @@ bool GameHandler::loadSinglePlayerCharacterState(uint64_t guid) {
             spSettings_.sfxVolume = sqlite3_column_int(stmt, 6);
             spSettings_.mouseSensitivity = static_cast<float>(sqlite3_column_double(stmt, 7));
             spSettings_.invertMouse = sqlite3_column_int(stmt, 8) != 0;
-            spSettings_.introSeen = sqlite3_column_int(stmt, 9) != 0;
             spSettingsLoaded_ = true;
         }
         sqlite3_finalize(stmt);
@@ -1814,13 +1810,13 @@ void GameHandler::saveSinglePlayerCharacterState(bool force) {
     if (spSettingsLoaded_ && (force || (spDirtyFlags_ & SP_DIRTY_SETTINGS))) {
         const char* upsertSettings =
             "INSERT INTO character_settings "
-            "(guid, fullscreen, vsync, shadows, res_w, res_h, music_volume, sfx_volume, mouse_sensitivity, invert_mouse, intro_seen) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+            "(guid, fullscreen, vsync, shadows, res_w, res_h, music_volume, sfx_volume, mouse_sensitivity, invert_mouse) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(guid) DO UPDATE SET "
             "fullscreen=excluded.fullscreen, vsync=excluded.vsync, shadows=excluded.shadows, "
             "res_w=excluded.res_w, res_h=excluded.res_h, music_volume=excluded.music_volume, "
             "sfx_volume=excluded.sfx_volume, mouse_sensitivity=excluded.mouse_sensitivity, "
-            "invert_mouse=excluded.invert_mouse, intro_seen=excluded.intro_seen;";
+            "invert_mouse=excluded.invert_mouse;";
         if (sqlite3_prepare_v2(sp.db, upsertSettings, -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(activeCharacterGuid_));
             sqlite3_bind_int(stmt, 2, spSettings_.fullscreen ? 1 : 0);
@@ -1832,7 +1828,6 @@ void GameHandler::saveSinglePlayerCharacterState(bool force) {
             sqlite3_bind_int(stmt, 8, spSettings_.sfxVolume);
             sqlite3_bind_double(stmt, 9, spSettings_.mouseSensitivity);
             sqlite3_bind_int(stmt, 10, spSettings_.invertMouse ? 1 : 0);
-            sqlite3_bind_int(stmt, 11, spSettings_.introSeen ? 1 : 0);
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         }
