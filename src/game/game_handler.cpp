@@ -177,6 +177,7 @@ void GameHandler::update(float deltaTime) {
         for (auto& [guid, entity] : entityManager.getEntities()) {
             entity->updateMovement(deltaTime);
         }
+    }
 }
 
 void GameHandler::handlePacket(network::Packet& packet) {
