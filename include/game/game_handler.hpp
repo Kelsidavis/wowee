@@ -254,6 +254,13 @@ public:
     // Duel
     void forfeitDuel();
 
+    // AFK/DND status
+    void toggleAfk(const std::string& message = "");
+    void toggleDnd(const std::string& message = "");
+    void replyToLastWhisper(const std::string& message);
+    std::string getLastWhisperSender() const { return lastWhisperSender_; }
+    void setLastWhisperSender(const std::string& name) { lastWhisperSender_ = name; }
+
     // ---- Phase 1: Name queries ----
     void queryPlayerName(uint64_t guid);
     void queryCreatureInfo(uint32_t entry, uint64_t guid);
@@ -659,6 +666,13 @@ private:
 
     // ---- Follow state ----
     uint64_t followTargetGuid_ = 0;
+
+    // ---- AFK/DND status ----
+    bool afkStatus_ = false;
+    bool dndStatus_ = false;
+    std::string afkMessage_;
+    std::string dndMessage_;
+    std::string lastWhisperSender_;
 
     // ---- Online item tracking ----
     struct OnlineItemInfo {

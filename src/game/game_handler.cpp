@@ -1481,6 +1481,11 @@ void GameHandler::handleMessageChat(network::Packet& packet) {
         chatHistory.erase(chatHistory.begin());
     }
 
+    // Track whisper sender for /r command
+    if (data.type == ChatType::WHISPER && !data.senderName.empty()) {
+        lastWhisperSender_ = data.senderName;
+    }
+
     // Log the message
     std::string senderInfo;
     if (!data.senderName.empty()) {
@@ -2042,6 +2047,73 @@ void GameHandler::forfeitDuel() {
     socket->send(packet);
     addSystemChatMessage("You have forfeited the duel.");
     LOG_INFO("Forfeited duel");
+}
+
+void GameHandler::toggleAfk(const std::string& message) {
+    afkStatus_ = !afkStatus_;
+    afkMessage_ = message;
+
+    if (afkStatus_) {
+        if (message.empty()) {
+            addSystemChatMessage("You are now AFK.");
+        } else {
+            addSystemChatMessage("You are now AFK: " + message);
+        }
+        // If DND was active, turn it off
+        if (dndStatus_) {
+            dndStatus_ = false;
+            dndMessage_.clear();
+        }
+    } else {
+        addSystemChatMessage("You are no longer AFK.");
+        afkMessage_.clear();
+    }
+
+    LOG_INFO("AFK status: ", afkStatus_, ", message: ", message);
+}
+
+void GameHandler::toggleDnd(const std::string& message) {
+    dndStatus_ = !dndStatus_;
+    dndMessage_ = message;
+
+    if (dndStatus_) {
+        if (message.empty()) {
+            addSystemChatMessage("You are now DND (Do Not Disturb).");
+        } else {
+            addSystemChatMessage("You are now DND: " + message);
+        }
+        // If AFK was active, turn it off
+        if (afkStatus_) {
+            afkStatus_ = false;
+            afkMessage_.clear();
+        }
+    } else {
+        addSystemChatMessage("You are no longer DND.");
+        dndMessage_.clear();
+    }
+
+    LOG_INFO("DND status: ", dndStatus_, ", message: ", message);
+}
+
+void GameHandler::replyToLastWhisper(const std::string& message) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot send whisper: not in world or not connected");
+        return;
+    }
+
+    if (lastWhisperSender_.empty()) {
+        addSystemChatMessage("No one has whispered you yet.");
+        return;
+    }
+
+    if (message.empty()) {
+        addSystemChatMessage("You must specify a message to send.");
+        return;
+    }
+
+    // Send whisper using the standard message chat function
+    sendChatMessage(ChatType::WHISPER, message, lastWhisperSender_);
+    LOG_INFO("Replied to ", lastWhisperSender_, ": ", message);
 }
 
 void GameHandler::releaseSpirit() {

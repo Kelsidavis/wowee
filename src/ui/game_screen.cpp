@@ -1306,6 +1306,30 @@ void GameScreen::sendChatMessage(game::GameHandler& gameHandler) {
                 return;
             }
 
+            // AFK command
+            if (cmdLower == "afk" || cmdLower == "away") {
+                std::string afkMsg = (spacePos != std::string::npos) ? command.substr(spacePos + 1) : "";
+                gameHandler.toggleAfk(afkMsg);
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            // DND command
+            if (cmdLower == "dnd" || cmdLower == "busy") {
+                std::string dndMsg = (spacePos != std::string::npos) ? command.substr(spacePos + 1) : "";
+                gameHandler.toggleDnd(dndMsg);
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            // Reply command
+            if (cmdLower == "r" || cmdLower == "reply") {
+                std::string replyMsg = (spacePos != std::string::npos) ? command.substr(spacePos + 1) : "";
+                gameHandler.replyToLastWhisper(replyMsg);
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
             // Chat channel slash commands
             bool isChannelCommand = false;
             if (cmdLower == "s" || cmdLower == "say") {
