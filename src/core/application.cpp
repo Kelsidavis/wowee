@@ -652,8 +652,9 @@ void Application::setupUICallbacks() {
                 uint32_t factionGroup = dbc->getUInt32(i, 3);
                 uint32_t enemyGroup = dbc->getUInt32(i, 5);
                 bool hostile = (enemyGroup & playerFriendGroup) != 0;
-                // Monster factionGroup bit (4) = hostile to players
-                if (!hostile && (factionGroup & 4) != 0) {
+                // Monster factionGroup bit (8) = hostile to players
+                // Bits: 1=Player, 2=Alliance, 4=Horde, 8=Monster
+                if (!hostile && (factionGroup & 8) != 0) {
                     hostile = true;
                 }
                 // Check individual enemy faction IDs (fields 6-9)

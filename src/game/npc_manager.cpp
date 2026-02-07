@@ -751,8 +751,9 @@ void NpcManager::initialize(pipeline::AssetManager* am,
                 uint32_t enemyGroup = dbc->getUInt32(i, 5);
                 // Check group-level hostility
                 bool hostile = (enemyGroup & playerFriendGroup) != 0;
-                // Check if creature is a Monster type (factionGroup bit 4)
-                if (!hostile && (factionGroup & 4) != 0) {
+                // Check if creature is a Monster type (factionGroup bit 8)
+                // Bits: 1=Player, 2=Alliance, 4=Horde, 8=Monster
+                if (!hostile && (factionGroup & 8) != 0) {
                     hostile = true;
                 }
                 // Check individual enemy faction IDs (fields 6-9)
