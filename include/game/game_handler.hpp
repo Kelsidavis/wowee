@@ -279,6 +279,7 @@ public:
     uint32_t getPlayerXp() const { return playerXp_; }
     uint32_t getPlayerNextLevelXp() const { return playerNextLevelXp_; }
     uint32_t getPlayerLevel() const { return singlePlayerMode_ ? localPlayerLevel_ : serverPlayerLevel_; }
+    static uint32_t killXp(uint32_t playerLevel, uint32_t victimLevel);
 
     // Hearthstone callback (single-player teleport)
     using HearthstoneCallback = std::function<void()>;
@@ -680,7 +681,6 @@ private:
     void awardLocalXp(uint64_t victimGuid, uint32_t victimLevel);
     void levelUp();
     static uint32_t xpForLevel(uint32_t level);
-    static uint32_t killXp(uint32_t playerLevel, uint32_t victimLevel);
 
     // ---- Single-player combat ----
     bool singlePlayerMode_ = false;
