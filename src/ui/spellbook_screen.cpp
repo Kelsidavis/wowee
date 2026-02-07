@@ -194,9 +194,23 @@ void SpellbookScreen::render(game::GameHandler& gameHandler, pipeline::AssetMana
 
     ImGui::SetNextWindowPos(ImVec2(bookX, bookY), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(bookW, bookH), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(280, 200), ImVec2(screenW, screenH));
+
+    ImGuiWindowFlags spellbookFlags = 0;
+    if (draggingSpell_) {
+        spellbookFlags |= ImGuiWindowFlags_NoMove;
+    }
 
     bool windowOpen = open;
-    if (ImGui::Begin("Spellbook", &windowOpen)) {
+    if (ImGui::Begin("Spellbook", &windowOpen, spellbookFlags)) {
+        // Clamp window position to stay on screen
+        ImVec2 winPos = ImGui::GetWindowPos();
+        ImVec2 winSize = ImGui::GetWindowSize();
+        float clampedX = std::max(0.0f, std::min(winPos.x, screenW - winSize.x));
+        float clampedY = std::max(0.0f, std::min(winPos.y, screenH - winSize.y));
+        if (clampedX != winPos.x || clampedY != winPos.y) {
+            ImGui::SetWindowPos(ImVec2(clampedX, clampedY));
+        }
 
         // Tab bar
         if (ImGui::BeginTabBar("SpellbookTabs")) {
