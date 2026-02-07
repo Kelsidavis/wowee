@@ -210,6 +210,14 @@ public:
     void requestPlayedTime();
     void queryWho(const std::string& playerName = "");
 
+    // Social commands
+    void addFriend(const std::string& playerName, const std::string& note = "");
+    void removeFriend(const std::string& playerName);
+    void setFriendNote(const std::string& playerName, const std::string& note);
+
+    // Random roll
+    void randomRoll(uint32_t minRoll = 1, uint32_t maxRoll = 100);
+
     // ---- Phase 1: Name queries ----
     void queryPlayerName(uint64_t guid);
     void queryCreatureInfo(uint32_t entry, uint64_t guid);
@@ -513,6 +521,10 @@ private:
     void handlePlayedTime(network::Packet& packet);
     void handleWho(network::Packet& packet);
 
+    // ---- Social handlers ----
+    void handleFriendStatus(network::Packet& packet);
+    void handleRandomRoll(network::Packet& packet);
+
     void addCombatText(CombatTextEntry::Type type, int32_t amount, uint32_t spellId, bool isPlayerSource);
     void addSystemChatMessage(const std::string& message);
 
@@ -591,6 +603,9 @@ private:
     std::unordered_set<uint64_t> pendingNameQueries;
     std::unordered_map<uint32_t, CreatureQueryResponseData> creatureInfoCache;
     std::unordered_set<uint32_t> pendingCreatureQueries;
+
+    // ---- Friend list cache ----
+    std::unordered_map<std::string, uint64_t> friendsCache;  // name -> guid
 
     // ---- Online item tracking ----
     struct OnlineItemInfo {

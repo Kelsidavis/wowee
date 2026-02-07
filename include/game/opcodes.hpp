@@ -63,6 +63,17 @@ enum class Opcode : uint16_t {
     CMSG_QUERY_TIME                  = 0x1CE,
     SMSG_QUERY_TIME_RESPONSE         = 0x1CF,
 
+    // ---- Social Commands ----
+    SMSG_FRIEND_STATUS               = 0x068,
+    CMSG_ADD_FRIEND                  = 0x069,
+    CMSG_DEL_FRIEND                  = 0x06A,
+    CMSG_SET_CONTACT_NOTES           = 0x06B,
+    CMSG_ADD_IGNORE                  = 0x06C,
+    CMSG_DEL_IGNORE                  = 0x06D,
+
+    // ---- Random Roll ----
+    MSG_RANDOM_ROLL                  = 0x1FB,
+
     // ---- Phase 1: Foundation (Targeting, Queries) ----
     CMSG_SET_SELECTION               = 0x13D,
     CMSG_NAME_QUERY                  = 0x050,

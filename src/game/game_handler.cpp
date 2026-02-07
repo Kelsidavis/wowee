@@ -305,6 +305,18 @@ void GameHandler::handlePacket(network::Packet& packet) {
             }
             break;
 
+        case Opcode::SMSG_FRIEND_STATUS:
+            if (state == WorldState::IN_WORLD) {
+                handleFriendStatus(packet);
+            }
+            break;
+
+        case Opcode::MSG_RANDOM_ROLL:
+            if (state == WorldState::IN_WORLD) {
+                handleRandomRoll(packet);
+            }
+            break;
+
         // ---- Phase 1: Foundation ----
         case Opcode::SMSG_NAME_QUERY_RESPONSE:
             handleNameQueryResponse(packet);
@@ -1580,6 +1592,91 @@ void GameHandler::queryWho(const std::string& playerName) {
     auto packet = WhoPacket::build(0, 0, playerName);
     socket->send(packet);
     LOG_INFO("Sent WHO query", playerName.empty() ? "" : " for: " + playerName);
+}
+
+void GameHandler::addFriend(const std::string& playerName, const std::string& note) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot add friend: not in world or not connected");
+        return;
+    }
+
+    if (playerName.empty()) {
+        addSystemChatMessage("You must specify a player name.");
+        return;
+    }
+
+    auto packet = AddFriendPacket::build(playerName, note);
+    socket->send(packet);
+    addSystemChatMessage("Sending friend request to " + playerName + "...");
+    LOG_INFO("Sent friend request to: ", playerName);
+}
+
+void GameHandler::removeFriend(const std::string& playerName) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot remove friend: not in world or not connected");
+        return;
+    }
+
+    if (playerName.empty()) {
+        addSystemChatMessage("You must specify a player name.");
+        return;
+    }
+
+    // Look up GUID from cache
+    auto it = friendsCache.find(playerName);
+    if (it == friendsCache.end()) {
+        addSystemChatMessage(playerName + " is not in your friends list.");
+        LOG_WARNING("Friend not found in cache: ", playerName);
+        return;
+    }
+
+    auto packet = DelFriendPacket::build(it->second);
+    socket->send(packet);
+    addSystemChatMessage("Removing " + playerName + " from friends list...");
+    LOG_INFO("Sent remove friend request for: ", playerName, " (GUID: 0x", std::hex, it->second, std::dec, ")");
+}
+
+void GameHandler::setFriendNote(const std::string& playerName, const std::string& note) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot set friend note: not in world or not connected");
+        return;
+    }
+
+    if (playerName.empty()) {
+        addSystemChatMessage("You must specify a player name.");
+        return;
+    }
+
+    // Look up GUID from cache
+    auto it = friendsCache.find(playerName);
+    if (it == friendsCache.end()) {
+        addSystemChatMessage(playerName + " is not in your friends list.");
+        return;
+    }
+
+    auto packet = SetContactNotesPacket::build(it->second, note);
+    socket->send(packet);
+    addSystemChatMessage("Updated note for " + playerName);
+    LOG_INFO("Set friend note for: ", playerName);
+}
+
+void GameHandler::randomRoll(uint32_t minRoll, uint32_t maxRoll) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot roll: not in world or not connected");
+        return;
+    }
+
+    if (minRoll > maxRoll) {
+        std::swap(minRoll, maxRoll);
+    }
+
+    if (maxRoll > 10000) {
+        maxRoll = 10000;  // Cap at reasonable value
+    }
+
+    auto packet = RandomRollPacket::build(minRoll, maxRoll);
+    socket->send(packet);
+    LOG_INFO("Rolled ", minRoll, "-", maxRoll);
 }
 
 void GameHandler::releaseSpirit() {
@@ -2933,6 +3030,97 @@ void GameHandler::handleWho(network::Packet& packet) {
         addSystemChatMessage(msg);
         LOG_INFO("  ", playerName, " (", guildName, ") Lv", level, " Class:", classId, " Race:", raceId);
     }
+}
+
+void GameHandler::handleFriendStatus(network::Packet& packet) {
+    FriendStatusData data;
+    if (!FriendStatusParser::parse(packet, data)) {
+        LOG_WARNING("Failed to parse SMSG_FRIEND_STATUS");
+        return;
+    }
+
+    // Look up player name from GUID
+    std::string playerName;
+    auto it = playerNameCache.find(data.guid);
+    if (it != playerNameCache.end()) {
+        playerName = it->second;
+    } else {
+        playerName = "Unknown";
+    }
+
+    // Update friends cache
+    if (data.status == 1 || data.status == 2) {  // Added or online
+        friendsCache[playerName] = data.guid;
+    } else if (data.status == 0) {  // Removed
+        friendsCache.erase(playerName);
+    }
+
+    // Status messages
+    switch (data.status) {
+        case 0:
+            addSystemChatMessage(playerName + " has been removed from your friends list.");
+            break;
+        case 1:
+            addSystemChatMessage(playerName + " has been added to your friends list.");
+            break;
+        case 2:
+            addSystemChatMessage(playerName + " is now online.");
+            break;
+        case 3:
+            addSystemChatMessage(playerName + " is now offline.");
+            break;
+        case 4:
+            addSystemChatMessage("Player not found.");
+            break;
+        case 5:
+            addSystemChatMessage(playerName + " is already in your friends list.");
+            break;
+        case 6:
+            addSystemChatMessage("Your friends list is full.");
+            break;
+        case 7:
+            addSystemChatMessage(playerName + " is ignoring you.");
+            break;
+        default:
+            LOG_INFO("Friend status: ", (int)data.status, " for ", playerName);
+            break;
+    }
+
+    LOG_INFO("Friend status update: ", playerName, " status=", (int)data.status);
+}
+
+void GameHandler::handleRandomRoll(network::Packet& packet) {
+    RandomRollData data;
+    if (!RandomRollParser::parse(packet, data)) {
+        LOG_WARNING("Failed to parse SMSG_RANDOM_ROLL");
+        return;
+    }
+
+    // Get roller name
+    std::string rollerName;
+    if (data.rollerGuid == playerGuid) {
+        rollerName = "You";
+    } else {
+        auto it = playerNameCache.find(data.rollerGuid);
+        if (it != playerNameCache.end()) {
+            rollerName = it->second;
+        } else {
+            rollerName = "Someone";
+        }
+    }
+
+    // Build message
+    std::string msg = rollerName;
+    if (data.rollerGuid == playerGuid) {
+        msg += " roll ";
+    } else {
+        msg += " rolls ";
+    }
+    msg += std::to_string(data.result);
+    msg += " (" + std::to_string(data.minRoll) + "-" + std::to_string(data.maxRoll) + ")";
+
+    addSystemChatMessage(msg);
+    LOG_INFO("Random roll: ", rollerName, " rolled ", data.result, " (", data.minRoll, "-", data.maxRoll, ")");
 }
 
 uint32_t GameHandler::generateClientSeed() {

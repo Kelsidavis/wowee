@@ -701,6 +701,67 @@ public:
 };
 
 // ============================================================
+// Social Commands
+// ============================================================
+
+/** CMSG_ADD_FRIEND packet builder */
+class AddFriendPacket {
+public:
+    static network::Packet build(const std::string& playerName, const std::string& note = "");
+};
+
+/** CMSG_DEL_FRIEND packet builder */
+class DelFriendPacket {
+public:
+    static network::Packet build(uint64_t friendGuid);
+};
+
+/** CMSG_SET_CONTACT_NOTES packet builder */
+class SetContactNotesPacket {
+public:
+    static network::Packet build(uint64_t friendGuid, const std::string& note);
+};
+
+/** SMSG_FRIEND_STATUS data */
+struct FriendStatusData {
+    uint8_t status = 0;  // 0 = offline, 1 = online, etc.
+    uint64_t guid = 0;
+    std::string note;
+    uint8_t chatFlag = 0;
+};
+
+/** SMSG_FRIEND_STATUS parser */
+class FriendStatusParser {
+public:
+    static bool parse(network::Packet& packet, FriendStatusData& data);
+};
+
+// ============================================================
+// Random Roll
+// ============================================================
+
+/** CMSG_RANDOM_ROLL packet builder */
+class RandomRollPacket {
+public:
+    static network::Packet build(uint32_t minRoll, uint32_t maxRoll);
+};
+
+/** SMSG_RANDOM_ROLL data */
+struct RandomRollData {
+    uint64_t rollerGuid = 0;
+    uint64_t targetGuid = 0;  // 0 for party roll
+    uint32_t minRoll = 0;
+    uint32_t maxRoll = 0;
+    uint32_t result = 0;
+};
+
+/** SMSG_RANDOM_ROLL parser */
+class RandomRollParser {
+public:
+    static bool parse(network::Packet& packet, RandomRollData& data);
+};
+
+// ============================================================
 // Phase 1: Foundation — Targeting, Name Queries
 // ============================================================
 

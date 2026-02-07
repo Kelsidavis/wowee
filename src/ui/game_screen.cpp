@@ -988,6 +988,97 @@ void GameScreen::sendChatMessage(game::GameHandler& gameHandler) {
                 return;
             }
 
+            // /roll command
+            if (cmdLower == "roll" || cmdLower == "random" || cmdLower == "rnd") {
+                uint32_t minRoll = 1;
+                uint32_t maxRoll = 100;
+
+                if (spacePos != std::string::npos) {
+                    std::string args = command.substr(spacePos + 1);
+                    size_t dashPos = args.find('-');
+                    size_t spacePos2 = args.find(' ');
+
+                    if (dashPos != std::string::npos) {
+                        // Format: /roll 1-100
+                        try {
+                            minRoll = std::stoul(args.substr(0, dashPos));
+                            maxRoll = std::stoul(args.substr(dashPos + 1));
+                        } catch (...) {}
+                    } else if (spacePos2 != std::string::npos) {
+                        // Format: /roll 1 100
+                        try {
+                            minRoll = std::stoul(args.substr(0, spacePos2));
+                            maxRoll = std::stoul(args.substr(spacePos2 + 1));
+                        } catch (...) {}
+                    } else {
+                        // Format: /roll 100 (means 1-100)
+                        try {
+                            maxRoll = std::stoul(args);
+                        } catch (...) {}
+                    }
+                }
+
+                gameHandler.randomRoll(minRoll, maxRoll);
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            // /friend or /addfriend command
+            if (cmdLower == "friend" || cmdLower == "addfriend") {
+                if (spacePos != std::string::npos) {
+                    std::string args = command.substr(spacePos + 1);
+                    size_t subCmdSpace = args.find(' ');
+
+                    if (cmdLower == "friend" && subCmdSpace != std::string::npos) {
+                        std::string subCmd = args.substr(0, subCmdSpace);
+                        std::transform(subCmd.begin(), subCmd.end(), subCmd.begin(), ::tolower);
+
+                        if (subCmd == "add") {
+                            std::string playerName = args.substr(subCmdSpace + 1);
+                            gameHandler.addFriend(playerName);
+                            chatInputBuffer[0] = '\0';
+                            return;
+                        } else if (subCmd == "remove" || subCmd == "delete" || subCmd == "rem") {
+                            std::string playerName = args.substr(subCmdSpace + 1);
+                            gameHandler.removeFriend(playerName);
+                            chatInputBuffer[0] = '\0';
+                            return;
+                        }
+                    } else {
+                        // /addfriend name or /friend name (assume add)
+                        gameHandler.addFriend(args);
+                        chatInputBuffer[0] = '\0';
+                        return;
+                    }
+                }
+
+                game::MessageChatData msg;
+                msg.type = game::ChatType::SYSTEM;
+                msg.language = game::ChatLanguage::UNIVERSAL;
+                msg.message = "Usage: /friend add <name> or /friend remove <name>";
+                gameHandler.addLocalChatMessage(msg);
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            // /removefriend or /delfriend command
+            if (cmdLower == "removefriend" || cmdLower == "delfriend" || cmdLower == "remfriend") {
+                if (spacePos != std::string::npos) {
+                    std::string playerName = command.substr(spacePos + 1);
+                    gameHandler.removeFriend(playerName);
+                    chatInputBuffer[0] = '\0';
+                    return;
+                }
+
+                game::MessageChatData msg;
+                msg.type = game::ChatType::SYSTEM;
+                msg.language = game::ChatLanguage::UNIVERSAL;
+                msg.message = "Usage: /removefriend <name>";
+                gameHandler.addLocalChatMessage(msg);
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
             // Chat channel slash commands
             bool isChannelCommand = false;
             if (cmdLower == "s" || cmdLower == "say") {

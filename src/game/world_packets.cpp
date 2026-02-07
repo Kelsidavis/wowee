@@ -1230,6 +1230,67 @@ network::Packet WhoPacket::build(uint32_t minLevel, uint32_t maxLevel,
     return packet;
 }
 
+// ============================================================
+// Social Commands
+// ============================================================
+
+network::Packet AddFriendPacket::build(const std::string& playerName, const std::string& note) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ADD_FRIEND));
+    packet.writeString(playerName);
+    packet.writeString(note);
+    LOG_DEBUG("Built CMSG_ADD_FRIEND: player=", playerName);
+    return packet;
+}
+
+network::Packet DelFriendPacket::build(uint64_t friendGuid) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_DEL_FRIEND));
+    packet.writeUInt64(friendGuid);
+    LOG_DEBUG("Built CMSG_DEL_FRIEND: guid=0x", std::hex, friendGuid, std::dec);
+    return packet;
+}
+
+network::Packet SetContactNotesPacket::build(uint64_t friendGuid, const std::string& note) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SET_CONTACT_NOTES));
+    packet.writeUInt64(friendGuid);
+    packet.writeString(note);
+    LOG_DEBUG("Built CMSG_SET_CONTACT_NOTES: guid=0x", std::hex, friendGuid, std::dec);
+    return packet;
+}
+
+bool FriendStatusParser::parse(network::Packet& packet, FriendStatusData& data) {
+    data.status = packet.readUInt8();
+    data.guid = packet.readUInt64();
+    if (data.status == 1) {  // Online
+        data.note = packet.readString();
+        data.chatFlag = packet.readUInt8();
+    }
+    LOG_DEBUG("Parsed SMSG_FRIEND_STATUS: status=", (int)data.status, " guid=0x", std::hex, data.guid, std::dec);
+    return true;
+}
+
+// ============================================================
+// Random Roll
+// ============================================================
+
+network::Packet RandomRollPacket::build(uint32_t minRoll, uint32_t maxRoll) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::MSG_RANDOM_ROLL));
+    packet.writeUInt32(minRoll);
+    packet.writeUInt32(maxRoll);
+    LOG_DEBUG("Built MSG_RANDOM_ROLL: ", minRoll, "-", maxRoll);
+    return packet;
+}
+
+bool RandomRollParser::parse(network::Packet& packet, RandomRollData& data) {
+    data.rollerGuid = packet.readUInt64();
+    data.targetGuid = packet.readUInt64();
+    data.minRoll = packet.readUInt32();
+    data.maxRoll = packet.readUInt32();
+    data.result = packet.readUInt32();
+    LOG_DEBUG("Parsed SMSG_RANDOM_ROLL: roller=0x", std::hex, data.rollerGuid, std::dec,
+              " result=", data.result, " (", data.minRoll, "-", data.maxRoll, ")");
+    return true;
+}
+
 network::Packet NameQueryPacket::build(uint64_t playerGuid) {
     network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_NAME_QUERY));
     packet.writeUInt64(playerGuid);
