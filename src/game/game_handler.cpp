@@ -3576,6 +3576,12 @@ void GameHandler::useItemById(uint32_t itemId) {
 void GameHandler::handleLootResponse(network::Packet& packet) {
     if (!LootResponseParser::parse(packet, currentLoot)) return;
     lootWindowOpen = true;
+
+    // Query item info so loot window can show names instead of IDs
+    for (const auto& item : currentLoot.items) {
+        queryItemInfo(item.itemId, 0);
+    }
+
     if (currentLoot.gold > 0) {
         if (state == WorldState::IN_WORLD && socket) {
             // Auto-loot gold by sending CMSG_LOOT_MONEY (server handles the rest)
