@@ -3155,7 +3155,48 @@ void GameHandler::detectInventorySlotBases(const std::map<uint16_t, uint32_t>& f
     std::sort(matchingPairs.begin(), matchingPairs.end());
 
     if (invSlotBase_ < 0) {
-        invSlotBase_ = matchingPairs.front();
+        // The lowest matching field is the first EQUIPPED slot (not necessarily HEAD).
+        // With 2+ matches we can derive the true base: all matches must be at
+        // even offsets from the base, spaced 2 fields per slot.
+        // Use the known 3.3.5a default (324) and verify matches align to it.
+        constexpr int knownBase = 324;
+        constexpr int slotStride = 2;
+        bool allAlign = true;
+        for (uint16_t p : matchingPairs) {
+            if (p < knownBase || (p - knownBase) % slotStride != 0) {
+                allAlign = false;
+                break;
+            }
+        }
+        if (allAlign) {
+            invSlotBase_ = knownBase;
+        } else {
+            // Fallback: if we have 2+ matches, derive base from their spacing
+            if (matchingPairs.size() >= 2) {
+                uint16_t lo = matchingPairs[0];
+                // lo must be base + 2*slotN, and slotN is 0..22
+                // Try each possible slot for 'lo' and see if all others also land on valid slots
+                for (int s = 0; s <= 22; s++) {
+                    int candidate = lo - s * slotStride;
+                    if (candidate < 0) break;
+                    bool ok = true;
+                    for (uint16_t p : matchingPairs) {
+                        int off = p - candidate;
+                        if (off < 0 || off % slotStride != 0 || off / slotStride > 22) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (ok) {
+                        invSlotBase_ = candidate;
+                        break;
+                    }
+                }
+                if (invSlotBase_ < 0) invSlotBase_ = knownBase;
+            } else {
+                invSlotBase_ = knownBase;
+            }
+        }
         packSlotBase_ = invSlotBase_ + (game::Inventory::NUM_EQUIP_SLOTS * 2);
         LOG_INFO("Detected inventory field base: equip=", invSlotBase_,
                  " pack=", packSlotBase_);
@@ -3164,8 +3205,10 @@ void GameHandler::detectInventorySlotBases(const std::map<uint16_t, uint32_t>& f
 
 bool GameHandler::applyInventoryFields(const std::map<uint16_t, uint32_t>& fields) {
     bool slotsChanged = false;
-    int equipBase = (invSlotBase_ >= 0) ? invSlotBase_ : 322;
-    int packBase = (packSlotBase_ >= 0) ? packSlotBase_ : 368;
+    // WoW 3.3.5a: PLAYER_FIELD_INV_SLOT_HEAD = UNIT_END + 0x00B0 = 324
+    //             PLAYER_FIELD_PACK_SLOT_1  = UNIT_END + 0x00DE = 370
+    int equipBase = (invSlotBase_ >= 0) ? invSlotBase_ : 324;
+    int packBase = (packSlotBase_ >= 0) ? packSlotBase_ : 370;
 
     for (const auto& [key, val] : fields) {
         if (key >= equipBase && key <= equipBase + (game::Inventory::NUM_EQUIP_SLOTS * 2 - 1)) {
@@ -4074,15 +4117,10 @@ void GameHandler::autoEquipItemBySlot(int backpackIndex) {
         return;
     }
 
-    uint64_t itemGuid = backpackSlotGuids_[backpackIndex];
-    if (itemGuid == 0) {
-        itemGuid = resolveOnlineItemGuid(slot.item.itemId);
-    }
-    if (itemGuid != 0 && state == WorldState::IN_WORLD && socket) {
-        auto packet = AutoEquipItemPacket::build(itemGuid);
+    if (state == WorldState::IN_WORLD && socket) {
+        // WoW inventory: equipment 0-18, bags 19-22, backpack 23-38
+        auto packet = AutoEquipItemPacket::build(0xFF, static_cast<uint8_t>(23 + backpackIndex));
         socket->send(packet);
-    } else if (itemGuid == 0) {
-        LOG_WARNING("Auto-equip failed: missing item GUID for slot ", backpackIndex);
     }
 }
 
@@ -4101,7 +4139,8 @@ void GameHandler::useItemBySlot(int backpackIndex) {
         itemGuid = resolveOnlineItemGuid(slot.item.itemId);
     }
     if (itemGuid != 0 && state == WorldState::IN_WORLD && socket) {
-        auto packet = UseItemPacket::build(0xFF, static_cast<uint8_t>(backpackIndex), itemGuid);
+        // WoW inventory: equipment 0-18, bags 19-22, backpack 23-38
+        auto packet = UseItemPacket::build(0xFF, static_cast<uint8_t>(23 + backpackIndex), itemGuid);
         socket->send(packet);
     } else if (itemGuid == 0) {
         LOG_WARNING("Use item failed: missing item GUID for slot ", backpackIndex);

@@ -1921,9 +1921,10 @@ network::Packet UseItemPacket::build(uint8_t bagIndex, uint8_t slotIndex, uint64
     return packet;
 }
 
-network::Packet AutoEquipItemPacket::build(uint64_t itemGuid) {
+network::Packet AutoEquipItemPacket::build(uint8_t srcBag, uint8_t srcSlot) {
     network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_AUTOEQUIP_ITEM));
-    packet.writeUInt64(itemGuid);
+    packet.writeUInt8(srcBag);
+    packet.writeUInt8(srcSlot);
     return packet;
 }
 

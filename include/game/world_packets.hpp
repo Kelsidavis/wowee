@@ -1134,7 +1134,7 @@ public:
 /** CMSG_AUTOEQUIP_ITEM packet builder */
 class AutoEquipItemPacket {
 public:
-    static network::Packet build(uint64_t itemGuid);
+    static network::Packet build(uint8_t srcBag, uint8_t srcSlot);
 };
 
 /** CMSG_LOOT_RELEASE packet builder */

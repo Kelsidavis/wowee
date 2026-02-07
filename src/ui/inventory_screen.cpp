@@ -1097,18 +1097,16 @@ void InventoryScreen::renderItemSlot(game::Inventory& inventory, const game::Ite
                     inventoryDirty = true;
                 }
             } else if (kind == SlotKind::BACKPACK && backpackIndex >= 0) {
-                bool looksEquipable = (item.inventoryType > 0) ||
-                                      (item.armor > 0) ||
-                                      (!item.subclassName.empty());
                 if (gameHandler_ && !gameHandler_->isSinglePlayerMode()) {
-                    if (looksEquipable) {
+                    if (item.inventoryType > 0) {
                         // Auto-equip (online)
                         gameHandler_->autoEquipItemBySlot(backpackIndex);
                     } else {
                         // Use consumable (online)
                         gameHandler_->useItemBySlot(backpackIndex);
                     }
-                } else if (looksEquipable) {
+                } else if (item.inventoryType > 0 || item.armor > 0 ||
+                           !item.subclassName.empty()) {
                     // Auto-equip (single-player)
                     uint8_t equippingType = item.inventoryType;
                     game::EquipSlot targetSlot = getEquipSlotForType(equippingType, inventory);
