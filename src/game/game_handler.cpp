@@ -2675,7 +2675,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                 if (ch.guid == playerGuid) { ch.level = val; break; }
                             }
                         }
-                        else if (key == 1219) { playerMoneyCopper_ = val; }  // PLAYER_FIELD_COINAGE
+                        else if (key == 1170) { playerMoneyCopper_ = val; }  // PLAYER_FIELD_COINAGE
                     }
                     if (applyInventoryFields(block.fields)) slotsChanged = true;
                     if (slotsChanged) rebuildOnlineInventory();
@@ -2768,7 +2768,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                     }
                                 }
                             }
-                            else if (key == 1219) {
+                            else if (key == 1170) {
                                 playerMoneyCopper_ = val;
                                 LOG_INFO("Money updated via VALUES: ", val, " copper");
                             }
