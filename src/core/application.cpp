@@ -1982,9 +1982,12 @@ void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         terrainMgr->update(*camera, 1.0f);
 
         auto startTime = std::chrono::high_resolution_clock::now();
-        const float maxWaitSeconds = 30.0f;
+        auto lastProgressTime = startTime;
+        const float maxWaitSeconds = 20.0f;
+        const float stallSeconds = 5.0f;
         int initialRemaining = terrainMgr->getRemainingTileCount();
         if (initialRemaining < 1) initialRemaining = 1;
+        int lastRemaining = initialRemaining;
 
         // Wait until all pending + ready-queue tiles are finalized
         while (terrainMgr->getRemainingTileCount() > 0) {
@@ -2024,11 +2027,22 @@ void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 loadingScreen.setProgress(progress);
                 loadingScreen.render();
                 window->swapBuffers();
+
+                if (remaining != lastRemaining) {
+                    lastRemaining = remaining;
+                    lastProgressTime = std::chrono::high_resolution_clock::now();
+                }
             }
 
             auto elapsed = std::chrono::high_resolution_clock::now() - startTime;
             if (std::chrono::duration<float>(elapsed).count() > maxWaitSeconds) {
                 LOG_WARNING("Online terrain streaming timeout after ", maxWaitSeconds, "s");
+                break;
+            }
+            auto stalledFor = std::chrono::high_resolution_clock::now() - lastProgressTime;
+            if (std::chrono::duration<float>(stalledFor).count() > stallSeconds) {
+                LOG_WARNING("Online terrain streaming stalled for ", stallSeconds,
+                            "s (remaining=", lastRemaining, "), continuing without full preload");
                 break;
             }
 
