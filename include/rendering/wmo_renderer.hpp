@@ -270,6 +270,25 @@ private:
         // Collision geometry (positions only, for floor raycasting)
         std::vector<glm::vec3> collisionVertices;
         std::vector<uint16_t> collisionIndices;
+
+        // 2D spatial grid for fast triangle lookup (built at load time).
+        // Bins triangles by their XY bounding box into grid cells.
+        static constexpr float COLLISION_CELL_SIZE = 4.0f;
+        int gridCellsX = 0;
+        int gridCellsY = 0;
+        glm::vec2 gridOrigin;  // XY of bounding box min
+        // cellTriangles[cellY * gridCellsX + cellX] = list of triangle start indices
+        std::vector<std::vector<uint32_t>> cellTriangles;
+
+        // Build the spatial grid from collision geometry
+        void buildCollisionGrid();
+
+        // Get triangle indices for a local-space XY point
+        const std::vector<uint32_t>* getTrianglesAtLocal(float localX, float localY) const;
+
+        // Get triangle indices for a local-space XY range (for wall collision)
+        void getTrianglesInRange(float minX, float minY, float maxX, float maxY,
+                                 std::vector<uint32_t>& out) const;
     };
 
     /**
@@ -497,6 +516,7 @@ private:
     std::unordered_map<GridCell, std::vector<uint32_t>, GridCellHash> spatialGrid;
     std::unordered_map<uint32_t, size_t> instanceIndexById;
     mutable std::vector<size_t> candidateScratch;
+    mutable std::vector<uint32_t> wallTriScratch;  // Scratch for wall collision grid queries
     mutable std::unordered_set<uint32_t> candidateIdScratch;
 
     // Parallel visibility culling

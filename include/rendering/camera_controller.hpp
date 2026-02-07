@@ -133,6 +133,11 @@ private:
     static constexpr float JUMP_BUFFER_TIME = 0.15f;  // 150ms input buffer
     static constexpr float COYOTE_TIME = 0.10f;        // 100ms grace after leaving ground
 
+    // Cached isInsideWMO result (throttled to avoid per-frame cost)
+    bool cachedInsideWMO = false;
+    int insideWMOCheckCounter = 0;
+    glm::vec3 lastInsideWMOCheckPos = glm::vec3(0.0f);
+
     // Swimming
     bool swimming = false;
     bool wasSwimming = false;

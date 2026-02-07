@@ -1089,6 +1089,9 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
         }
     }
 
+    // Build 2D spatial grid for fast collision triangle lookup
+    resources.buildCollisionGrid();
+
     // Create batches
     if (!group.batches.empty()) {
         for (const auto& batch : group.batches) {
@@ -1510,6 +1513,105 @@ static glm::vec3 closestPointOnTriangle(const glm::vec3& p, const glm::vec3& a,
     return a + ab * v + ac * w;
 }
 
+// ---- Per-group 2D collision grid ----
+
+void WMORenderer::GroupResources::buildCollisionGrid() {
+    if (collisionVertices.empty() || collisionIndices.size() < 3) {
+        gridCellsX = 0;
+        gridCellsY = 0;
+        return;
+    }
+
+    gridOrigin = glm::vec2(boundingBoxMin.x, boundingBoxMin.y);
+    float extentX = boundingBoxMax.x - boundingBoxMin.x;
+    float extentY = boundingBoxMax.y - boundingBoxMin.y;
+
+    gridCellsX = std::max(1, static_cast<int>(std::ceil(extentX / COLLISION_CELL_SIZE)));
+    gridCellsY = std::max(1, static_cast<int>(std::ceil(extentY / COLLISION_CELL_SIZE)));
+
+    // Cap grid size to avoid excessive memory for huge groups
+    if (gridCellsX > 64) gridCellsX = 64;
+    if (gridCellsY > 64) gridCellsY = 64;
+
+    cellTriangles.resize(gridCellsX * gridCellsY);
+
+    float invCellW = gridCellsX / std::max(0.01f, extentX);
+    float invCellH = gridCellsY / std::max(0.01f, extentY);
+
+    for (size_t i = 0; i + 2 < collisionIndices.size(); i += 3) {
+        const glm::vec3& v0 = collisionVertices[collisionIndices[i]];
+        const glm::vec3& v1 = collisionVertices[collisionIndices[i + 1]];
+        const glm::vec3& v2 = collisionVertices[collisionIndices[i + 2]];
+
+        // Triangle XY bounding box
+        float triMinX = std::min({v0.x, v1.x, v2.x});
+        float triMinY = std::min({v0.y, v1.y, v2.y});
+        float triMaxX = std::max({v0.x, v1.x, v2.x});
+        float triMaxY = std::max({v0.y, v1.y, v2.y});
+
+        int cellMinX = std::max(0, static_cast<int>((triMinX - gridOrigin.x) * invCellW));
+        int cellMinY = std::max(0, static_cast<int>((triMinY - gridOrigin.y) * invCellH));
+        int cellMaxX = std::min(gridCellsX - 1, static_cast<int>((triMaxX - gridOrigin.x) * invCellW));
+        int cellMaxY = std::min(gridCellsY - 1, static_cast<int>((triMaxY - gridOrigin.y) * invCellH));
+
+        uint32_t triIdx = static_cast<uint32_t>(i);
+        for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
+            for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
+                cellTriangles[cy * gridCellsX + cx].push_back(triIdx);
+            }
+        }
+    }
+}
+
+const std::vector<uint32_t>* WMORenderer::GroupResources::getTrianglesAtLocal(float localX, float localY) const {
+    if (gridCellsX == 0 || gridCellsY == 0) return nullptr;
+
+    float extentX = boundingBoxMax.x - boundingBoxMin.x;
+    float extentY = boundingBoxMax.y - boundingBoxMin.y;
+    float invCellW = gridCellsX / std::max(0.01f, extentX);
+    float invCellH = gridCellsY / std::max(0.01f, extentY);
+
+    int cx = static_cast<int>((localX - gridOrigin.x) * invCellW);
+    int cy = static_cast<int>((localY - gridOrigin.y) * invCellH);
+
+    if (cx < 0 || cx >= gridCellsX || cy < 0 || cy >= gridCellsY) return nullptr;
+
+    return &cellTriangles[cy * gridCellsX + cx];
+}
+
+void WMORenderer::GroupResources::getTrianglesInRange(
+        float minX, float minY, float maxX, float maxY,
+        std::vector<uint32_t>& out) const {
+    out.clear();
+    if (gridCellsX == 0 || gridCellsY == 0) return;
+
+    float extentX = boundingBoxMax.x - boundingBoxMin.x;
+    float extentY = boundingBoxMax.y - boundingBoxMin.y;
+    float invCellW = gridCellsX / std::max(0.01f, extentX);
+    float invCellH = gridCellsY / std::max(0.01f, extentY);
+
+    int cellMinX = std::max(0, static_cast<int>((minX - gridOrigin.x) * invCellW));
+    int cellMinY = std::max(0, static_cast<int>((minY - gridOrigin.y) * invCellH));
+    int cellMaxX = std::min(gridCellsX - 1, static_cast<int>((maxX - gridOrigin.x) * invCellW));
+    int cellMaxY = std::min(gridCellsY - 1, static_cast<int>((maxY - gridOrigin.y) * invCellH));
+
+    if (cellMinX > cellMaxX || cellMinY > cellMaxY) return;
+
+    // Collect unique triangle indices from all overlapping cells
+    for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
+        for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
+            const auto& cell = cellTriangles[cy * gridCellsX + cx];
+            out.insert(out.end(), cell.begin(), cell.end());
+        }
+    }
+
+    // Remove duplicates (triangles spanning multiple cells)
+    if (cellMinX != cellMaxX || cellMinY != cellMaxY) {
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+    }
+}
+
 std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ) const {
     // Check persistent grid cache first (computed lazily, never expires)
     uint64_t gridKey = floorGridKey(glX, glY);
@@ -1592,23 +1694,27 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
             const auto& verts = group.collisionVertices;
             const auto& indices = group.collisionIndices;
 
-            for (size_t i = 0; i + 2 < indices.size(); i += 3) {
-                const glm::vec3& v0 = verts[indices[i]];
-                const glm::vec3& v1 = verts[indices[i + 1]];
-                const glm::vec3& v2 = verts[indices[i + 2]];
+            // Use spatial grid to only test triangles near the query XY
+            const auto* cellTris = group.getTrianglesAtLocal(localOrigin.x, localOrigin.y);
+            if (cellTris) {
+                for (uint32_t triStart : *cellTris) {
+                    const glm::vec3& v0 = verts[indices[triStart]];
+                    const glm::vec3& v1 = verts[indices[triStart + 1]];
+                    const glm::vec3& v2 = verts[indices[triStart + 2]];
 
-                float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
-                if (t <= 0.0f) {
-                    t = rayTriangleIntersect(localOrigin, localDir, v0, v2, v1);
-                }
+                    float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
+                    if (t <= 0.0f) {
+                        t = rayTriangleIntersect(localOrigin, localDir, v0, v2, v1);
+                    }
 
-                if (t > 0.0f) {
-                    glm::vec3 hitLocal = localOrigin + localDir * t;
-                    glm::vec3 hitWorld = glm::vec3(instance.modelMatrix * glm::vec4(hitLocal, 1.0f));
+                    if (t > 0.0f) {
+                        glm::vec3 hitLocal = localOrigin + localDir * t;
+                        glm::vec3 hitWorld = glm::vec3(instance.modelMatrix * glm::vec4(hitLocal, 1.0f));
 
-                    if (hitWorld.z <= glZ + 0.5f) {
-                        if (!bestFloor || hitWorld.z > *bestFloor) {
-                            bestFloor = hitWorld.z;
+                        if (hitWorld.z <= glZ + 0.5f) {
+                            if (!bestFloor || hitWorld.z > *bestFloor) {
+                                bestFloor = hitWorld.z;
+                            }
                         }
                     }
                 }
@@ -1645,6 +1751,7 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
     gatherCandidates(queryMin, queryMax, candidateScratch);
 
     for (size_t idx : candidateScratch) {
+        if (blocked) break;  // Early-out once a wall is found
         const auto& instance = instances[idx];
         if (collisionFocusEnabled &&
             pointAABBDistanceSq(collisionFocusPos, instance.worldBoundsMin, instance.worldBoundsMax) > collisionFocusRadiusSq) {
@@ -1682,7 +1789,7 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
         glm::vec3 localFrom = glm::vec3(instance.invModelMatrix * glm::vec4(from, 1.0f));
         glm::vec3 localTo = glm::vec3(instance.invModelMatrix * glm::vec4(to, 1.0f));
         float localFeetZ = localTo.z;
-        for (size_t gi = 0; gi < model.groups.size(); ++gi) {
+        for (size_t gi = 0; gi < model.groups.size() && !blocked; ++gi) {
             // World-space group cull
             if (gi < instance.worldGroupBounds.size()) {
                 const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
@@ -1705,10 +1812,18 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
             const auto& verts = group.collisionVertices;
             const auto& indices = group.collisionIndices;
 
-            for (size_t i = 0; i + 2 < indices.size(); i += 3) {
-                const glm::vec3& v0 = verts[indices[i]];
-                const glm::vec3& v1 = verts[indices[i + 1]];
-                const glm::vec3& v2 = verts[indices[i + 2]];
+            // Use spatial grid: query range covering the movement segment + player radius
+            float rangeMinX = std::min(localFrom.x, localTo.x) - PLAYER_RADIUS - 1.0f;
+            float rangeMinY = std::min(localFrom.y, localTo.y) - PLAYER_RADIUS - 1.0f;
+            float rangeMaxX = std::max(localFrom.x, localTo.x) + PLAYER_RADIUS + 1.0f;
+            float rangeMaxY = std::max(localFrom.y, localTo.y) + PLAYER_RADIUS + 1.0f;
+            group.getTrianglesInRange(rangeMinX, rangeMinY, rangeMaxX, rangeMaxY, wallTriScratch);
+
+            for (uint32_t triStart : wallTriScratch) {
+                if (blocked) break;
+                const glm::vec3& v0 = verts[indices[triStart]];
+                const glm::vec3& v1 = verts[indices[triStart + 1]];
+                const glm::vec3& v2 = verts[indices[triStart + 2]];
 
                 // Get triangle normal
                 glm::vec3 edge1 = v1 - v0;

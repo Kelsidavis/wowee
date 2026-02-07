@@ -415,11 +415,8 @@ void CameraController::update(float deltaTime) {
             glm::vec3 startPos = *followTarget;
             glm::vec3 desiredPos = targetPos;
             float moveDist = glm::length(desiredPos - startPos);
-            // Adaptive CCD: keep per-step movement short to avoid clipping through walls.
-            int sweepSteps = std::max(1, std::min(12, static_cast<int>(std::ceil(moveDist / 0.20f))));
-            if (deltaTime > 0.04f) {
-                sweepSteps = std::min(16, std::max(sweepSteps, static_cast<int>(std::ceil(deltaTime / 0.016f))));
-            }
+            // Adaptive CCD: larger step size to reduce collision call count.
+            int sweepSteps = std::max(1, std::min(4, static_cast<int>(std::ceil(moveDist / 0.50f))));
             glm::vec3 stepPos = startPos;
             glm::vec3 stepDelta = (desiredPos - startPos) / static_cast<float>(sweepSteps);
 
@@ -577,25 +574,8 @@ void CameraController::update(float deltaTime) {
                 return base;
             };
 
-            // Sample center + movement-aligned offsets to avoid slipping through narrow floor pieces.
-            // Use 3 samples instead of 5 — center plus two movement-direction probes.
-            std::optional<float> groundH;
-            groundH = sampleGround(targetPos.x, targetPos.y);
-            {
-                constexpr float FOOTPRINT = 0.4f;
-                glm::vec2 moveXY(targetPos.x - followTarget->x, targetPos.y - followTarget->y);
-                float moveLen = glm::length(moveXY);
-                if (moveLen > 0.01f) {
-                    glm::vec2 moveDir2 = moveXY / moveLen;
-                    glm::vec2 perpDir(-moveDir2.y, moveDir2.x);
-                    auto h1 = sampleGround(targetPos.x + moveDir2.x * FOOTPRINT,
-                                           targetPos.y + moveDir2.y * FOOTPRINT);
-                    if (h1 && (!groundH || *h1 > *groundH)) groundH = h1;
-                    auto h2 = sampleGround(targetPos.x + perpDir.x * FOOTPRINT,
-                                           targetPos.y + perpDir.y * FOOTPRINT);
-                    if (h2 && (!groundH || *h2 > *groundH)) groundH = h2;
-                }
-            }
+            // Single center probe — extra probes are too expensive in WMO-heavy areas.
+            std::optional<float> groundH = sampleGround(targetPos.x, targetPos.y);
 
             if (groundH) {
                 float groundDiff = *groundH - lastGroundZ;
@@ -640,9 +620,16 @@ void CameraController::update(float deltaTime) {
         currentDistance += (userTargetDistance - currentDistance) * zoomLerp;
 
         // Limit max zoom when inside a WMO (building interior)
+        // Throttle: only recheck every 10 frames or when position changes >2 units.
         static constexpr float WMO_MAX_DISTANCE = 5.0f;
-        if (wmoRenderer && wmoRenderer->isInsideWMO(targetPos.x, targetPos.y, targetPos.z + 1.0f, nullptr)) {
-            if (currentDistance > WMO_MAX_DISTANCE) {
+        if (wmoRenderer) {
+            float distFromLastCheck = glm::length(targetPos - lastInsideWMOCheckPos);
+            if (++insideWMOCheckCounter >= 10 || distFromLastCheck > 2.0f) {
+                cachedInsideWMO = wmoRenderer->isInsideWMO(targetPos.x, targetPos.y, targetPos.z + 1.0f, nullptr);
+                insideWMOCheckCounter = 0;
+                lastInsideWMOCheckPos = targetPos;
+            }
+            if (cachedInsideWMO && currentDistance > WMO_MAX_DISTANCE) {
                 currentDistance = WMO_MAX_DISTANCE;
             }
         }
@@ -676,17 +663,13 @@ void CameraController::update(float deltaTime) {
 
         // Intentionally ignore M2 doodads for camera collision to match WoW feel.
 
-        // Check floor collision along the camera path
-        // Sample a few points to find where camera would go underground
-        for (int i = 1; i <= 2; i++) {
-            float testDist = collisionDistance * (float(i) / 2.0f);
-            glm::vec3 testPos = pivot + camDir * testDist;
+        // Check floor collision at the camera's target position
+        {
+            glm::vec3 testPos = pivot + camDir * collisionDistance;
             auto floorH = getFloorAt(testPos.x, testPos.y, testPos.z);
 
             if (floorH && testPos.z < *floorH + CAM_SPHERE_RADIUS + CAM_EPSILON) {
-                // Camera would be underground at this distance
-                collisionDistance = std::max(MIN_DISTANCE, testDist - CAM_SPHERE_RADIUS);
-                break;
+                collisionDistance = std::max(MIN_DISTANCE, collisionDistance - CAM_SPHERE_RADIUS);
             }
         }
 
@@ -710,22 +693,8 @@ void CameraController::update(float deltaTime) {
         smoothedCamPos += (actualCam - smoothedCamPos) * camLerp;
 
         // ===== Final floor clearance check =====
-        // Sample a small footprint around the camera to avoid peeking through ramps/stairs
-        // when zoomed out and pitched down.
         constexpr float MIN_FLOOR_CLEARANCE = 0.35f;
-        constexpr float FLOOR_SAMPLE_R = 0.35f;
-        std::optional<float> finalFloorH;
-        const glm::vec2 floorOffsets[] = {
-            {0.0f, 0.0f},
-            {FLOOR_SAMPLE_R * 0.7f, FLOOR_SAMPLE_R * 0.7f},
-            {-FLOOR_SAMPLE_R * 0.7f, -FLOOR_SAMPLE_R * 0.7f}
-        };
-        for (const auto& o : floorOffsets) {
-            auto h = getFloorAt(smoothedCamPos.x + o.x, smoothedCamPos.y + o.y, smoothedCamPos.z);
-            if (h && (!finalFloorH || *h > *finalFloorH)) {
-                finalFloorH = h;
-            }
-        }
+        auto finalFloorH = getFloorAt(smoothedCamPos.x, smoothedCamPos.y, smoothedCamPos.z);
         if (finalFloorH && smoothedCamPos.z < *finalFloorH + MIN_FLOOR_CLEARANCE) {
             smoothedCamPos.z = *finalFloorH + MIN_FLOOR_CLEARANCE;
         }
@@ -854,11 +823,8 @@ void CameraController::update(float deltaTime) {
             glm::vec3 startFeet = camera->getPosition() - glm::vec3(0, 0, eyeHeight);
             glm::vec3 desiredFeet = newPos - glm::vec3(0, 0, eyeHeight);
             float moveDist = glm::length(desiredFeet - startFeet);
-            // Adaptive CCD: keep per-step movement short to avoid clipping through walls.
-            int sweepSteps = std::max(1, std::min(12, static_cast<int>(std::ceil(moveDist / 0.20f))));
-            if (deltaTime > 0.04f) {
-                sweepSteps = std::min(16, std::max(sweepSteps, static_cast<int>(std::ceil(deltaTime / 0.016f))));
-            }
+            // Adaptive CCD: larger step size to reduce collision call count.
+            int sweepSteps = std::max(1, std::min(4, static_cast<int>(std::ceil(moveDist / 0.50f))));
             glm::vec3 stepPos = startFeet;
             glm::vec3 stepDelta = (desiredFeet - startFeet) / static_cast<float>(sweepSteps);
 
