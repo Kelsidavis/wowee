@@ -1238,6 +1238,62 @@ public:
     static bool parse(network::Packet& packet, QuestDetailsData& data);
 };
 
+/** Reward item entry (shared by quest detail/offer windows) */
+struct QuestRewardItem {
+    uint32_t itemId = 0;
+    uint32_t count = 0;
+    uint32_t displayInfoId = 0;
+};
+
+/** SMSG_QUESTGIVER_REQUEST_ITEMS data (turn-in progress check) */
+struct QuestRequestItemsData {
+    uint64_t npcGuid = 0;
+    uint32_t questId = 0;
+    std::string title;
+    std::string completionText;
+    uint32_t requiredMoney = 0;
+    uint32_t completableFlags = 0;  // 0x03 = completable
+    std::vector<QuestRewardItem> requiredItems;
+
+    bool isCompletable() const { return (completableFlags & 0x03) != 0; }
+};
+
+/** SMSG_QUESTGIVER_REQUEST_ITEMS parser */
+class QuestRequestItemsParser {
+public:
+    static bool parse(network::Packet& packet, QuestRequestItemsData& data);
+};
+
+/** SMSG_QUESTGIVER_OFFER_REWARD data (choose reward) */
+struct QuestOfferRewardData {
+    uint64_t npcGuid = 0;
+    uint32_t questId = 0;
+    std::string title;
+    std::string rewardText;
+    uint32_t rewardMoney = 0;
+    uint32_t rewardXp = 0;
+    std::vector<QuestRewardItem> choiceRewards;  // Pick one
+    std::vector<QuestRewardItem> fixedRewards;   // Always given
+};
+
+/** SMSG_QUESTGIVER_OFFER_REWARD parser */
+class QuestOfferRewardParser {
+public:
+    static bool parse(network::Packet& packet, QuestOfferRewardData& data);
+};
+
+/** CMSG_QUESTGIVER_COMPLETE_QUEST packet builder */
+class QuestgiverCompleteQuestPacket {
+public:
+    static network::Packet build(uint64_t npcGuid, uint32_t questId);
+};
+
+/** CMSG_QUESTGIVER_CHOOSE_REWARD packet builder */
+class QuestgiverChooseRewardPacket {
+public:
+    static network::Packet build(uint64_t npcGuid, uint32_t questId, uint32_t rewardIndex);
+};
+
 // ============================================================
 // Phase 5: Vendor
 // ============================================================

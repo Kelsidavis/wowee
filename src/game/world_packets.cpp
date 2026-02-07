@@ -2087,6 +2087,124 @@ bool GossipMessageParser::parse(network::Packet& packet, GossipMessageData& data
     return true;
 }
 
+bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsData& data) {
+    if (packet.getSize() - packet.getReadPos() < 20) return false;
+    data.npcGuid = packet.readUInt64();
+    data.questId = packet.readUInt32();
+    data.title = packet.readString();
+    data.completionText = packet.readString();
+
+    if (packet.getReadPos() + 20 > packet.getSize()) {
+        LOG_INFO("Quest request items (short): id=", data.questId, " title='", data.title, "'");
+        return true;
+    }
+
+    /*emoteDelay*/ packet.readUInt32();
+    /*emote*/ packet.readUInt32();
+    /*autoCloseOnCancel*/ packet.readUInt32();
+    /*flags*/ packet.readUInt32();
+    /*suggestedPlayers*/ packet.readUInt32();
+
+    if (packet.getReadPos() + 4 > packet.getSize()) return true;
+    data.requiredMoney = packet.readUInt32();
+
+    if (packet.getReadPos() + 4 > packet.getSize()) return true;
+    uint32_t requiredItemCount = packet.readUInt32();
+    for (uint32_t i = 0; i < requiredItemCount; ++i) {
+        if (packet.getReadPos() + 12 > packet.getSize()) break;
+        QuestRewardItem item;
+        item.itemId = packet.readUInt32();
+        item.count = packet.readUInt32();
+        item.displayInfoId = packet.readUInt32();
+        if (item.itemId > 0)
+            data.requiredItems.push_back(item);
+    }
+
+    if (packet.getReadPos() + 4 > packet.getSize()) return true;
+    data.completableFlags = packet.readUInt32();
+
+    LOG_INFO("Quest request items: id=", data.questId, " title='", data.title,
+             "' items=", data.requiredItems.size(), " completable=", data.isCompletable());
+    return true;
+}
+
+bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData& data) {
+    if (packet.getSize() - packet.getReadPos() < 20) return false;
+    data.npcGuid = packet.readUInt64();
+    data.questId = packet.readUInt32();
+    data.title = packet.readString();
+    data.rewardText = packet.readString();
+
+    if (packet.getReadPos() + 10 > packet.getSize()) {
+        LOG_INFO("Quest offer reward (short): id=", data.questId, " title='", data.title, "'");
+        return true;
+    }
+
+    /*autoFinish*/ packet.readUInt8();
+    /*flags*/ packet.readUInt32();
+    /*suggestedPlayers*/ packet.readUInt32();
+
+    // Emotes
+    if (packet.getReadPos() + 4 > packet.getSize()) return true;
+    uint32_t emoteCount = packet.readUInt32();
+    for (uint32_t i = 0; i < emoteCount; ++i) {
+        if (packet.getReadPos() + 8 > packet.getSize()) break;
+        packet.readUInt32(); // delay
+        packet.readUInt32(); // emote
+    }
+
+    // Choice reward items (pick one): count + 6 * (id, count, displayInfo)
+    if (packet.getReadPos() + 4 > packet.getSize()) return true;
+    /*choiceCount*/ packet.readUInt32();
+    for (uint32_t i = 0; i < 6; ++i) {
+        if (packet.getReadPos() + 12 > packet.getSize()) break;
+        QuestRewardItem item;
+        item.itemId = packet.readUInt32();
+        item.count = packet.readUInt32();
+        item.displayInfoId = packet.readUInt32();
+        if (item.itemId > 0)
+            data.choiceRewards.push_back(item);
+    }
+
+    // Fixed reward items: count + 4 * (id, count, displayInfo)
+    if (packet.getReadPos() + 4 > packet.getSize()) return true;
+    /*rewardCount*/ packet.readUInt32();
+    for (uint32_t i = 0; i < 4; ++i) {
+        if (packet.getReadPos() + 12 > packet.getSize()) break;
+        QuestRewardItem item;
+        item.itemId = packet.readUInt32();
+        item.count = packet.readUInt32();
+        item.displayInfoId = packet.readUInt32();
+        if (item.itemId > 0)
+            data.fixedRewards.push_back(item);
+    }
+
+    // Money and XP
+    if (packet.getReadPos() + 4 <= packet.getSize())
+        data.rewardMoney = packet.readUInt32();
+    if (packet.getReadPos() + 4 <= packet.getSize())
+        data.rewardXp = packet.readUInt32();
+
+    LOG_INFO("Quest offer reward: id=", data.questId, " title='", data.title,
+             "' choices=", data.choiceRewards.size(), " fixed=", data.fixedRewards.size());
+    return true;
+}
+
+network::Packet QuestgiverCompleteQuestPacket::build(uint64_t npcGuid, uint32_t questId) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_COMPLETE_QUEST));
+    packet.writeUInt64(npcGuid);
+    packet.writeUInt32(questId);
+    return packet;
+}
+
+network::Packet QuestgiverChooseRewardPacket::build(uint64_t npcGuid, uint32_t questId, uint32_t rewardIndex) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_CHOOSE_REWARD));
+    packet.writeUInt64(npcGuid);
+    packet.writeUInt32(questId);
+    packet.writeUInt32(rewardIndex);
+    return packet;
+}
+
 // ============================================================
 // Phase 5: Vendor
 // ============================================================
@@ -2103,6 +2221,7 @@ network::Packet BuyItemPacket::build(uint64_t vendorGuid, uint32_t itemId, uint3
     packet.writeUInt32(itemId);
     packet.writeUInt32(slot);
     packet.writeUInt8(count);
+    packet.writeUInt8(0);  // bag slot (0 = find any available bag slot)
     return packet;
 }
 

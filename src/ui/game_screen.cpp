@@ -93,6 +93,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     renderLootWindow(gameHandler);
     renderGossipWindow(gameHandler);
     renderQuestDetailsWindow(gameHandler);
+    renderQuestRequestItemsWindow(gameHandler);
+    renderQuestOfferRewardWindow(gameHandler);
     renderVendorWindow(gameHandler);
     renderQuestMarkers(gameHandler);
     renderMinimapMarkers(gameHandler);
@@ -2270,6 +2272,179 @@ void GameScreen::renderQuestDetailsWindow(game::GameHandler& gameHandler) {
 
     if (!open) {
         gameHandler.declineQuest();
+    }
+}
+
+// ============================================================
+// Quest Request Items Window (turn-in progress check)
+// ============================================================
+
+void GameScreen::renderQuestRequestItemsWindow(game::GameHandler& gameHandler) {
+    if (!gameHandler.isQuestRequestItemsOpen()) return;
+
+    auto* window = core::Application::getInstance().getWindow();
+    float screenW = window ? static_cast<float>(window->getWidth()) : 1280.0f;
+    float screenH = window ? static_cast<float>(window->getHeight()) : 720.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(screenW / 2 - 225, screenH / 2 - 200), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(450, 350), ImGuiCond_Appearing);
+
+    bool open = true;
+    const auto& quest = gameHandler.getQuestRequestItems();
+    if (ImGui::Begin(quest.title.c_str(), &open, ImGuiWindowFlags_NoCollapse)) {
+        if (!quest.completionText.empty()) {
+            ImGui::TextWrapped("%s", quest.completionText.c_str());
+        }
+
+        // Required items
+        if (!quest.requiredItems.empty()) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.0f, 1.0f), "Required Items:");
+            for (const auto& item : quest.requiredItems) {
+                auto* info = gameHandler.getItemInfo(item.itemId);
+                if (info && info->valid)
+                    ImGui::Text("  %s x%u", info->name.c_str(), item.count);
+                else
+                    ImGui::Text("  Item %u x%u", item.itemId, item.count);
+            }
+        }
+
+        if (quest.requiredMoney > 0) {
+            ImGui::Spacing();
+            uint32_t g = quest.requiredMoney / 10000;
+            uint32_t s = (quest.requiredMoney % 10000) / 100;
+            uint32_t c = quest.requiredMoney % 100;
+            ImGui::Text("Required money: %ug %us %uc", g, s, c);
+        }
+
+        // Complete / Cancel buttons
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        float buttonW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (quest.isCompletable()) {
+            if (ImGui::Button("Complete Quest", ImVec2(buttonW, 0))) {
+                gameHandler.completeQuest();
+            }
+        } else {
+            ImGui::BeginDisabled();
+            ImGui::Button("Incomplete", ImVec2(buttonW, 0));
+            ImGui::EndDisabled();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(buttonW, 0))) {
+            gameHandler.closeQuestRequestItems();
+        }
+    }
+    ImGui::End();
+
+    if (!open) {
+        gameHandler.closeQuestRequestItems();
+    }
+}
+
+// ============================================================
+// Quest Offer Reward Window (choose reward)
+// ============================================================
+
+void GameScreen::renderQuestOfferRewardWindow(game::GameHandler& gameHandler) {
+    if (!gameHandler.isQuestOfferRewardOpen()) return;
+
+    auto* window = core::Application::getInstance().getWindow();
+    float screenW = window ? static_cast<float>(window->getWidth()) : 1280.0f;
+    float screenH = window ? static_cast<float>(window->getHeight()) : 720.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(screenW / 2 - 225, screenH / 2 - 200), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(450, 400), ImGuiCond_Appearing);
+
+    bool open = true;
+    const auto& quest = gameHandler.getQuestOfferReward();
+    static int selectedChoice = -1;
+
+    if (ImGui::Begin(quest.title.c_str(), &open, ImGuiWindowFlags_NoCollapse)) {
+        if (!quest.rewardText.empty()) {
+            ImGui::TextWrapped("%s", quest.rewardText.c_str());
+        }
+
+        // Choice rewards (pick one)
+        if (!quest.choiceRewards.empty()) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.0f, 1.0f), "Choose a reward:");
+            for (size_t i = 0; i < quest.choiceRewards.size(); ++i) {
+                const auto& item = quest.choiceRewards[i];
+                auto* info = gameHandler.getItemInfo(item.itemId);
+                char label[256];
+                if (info && info->valid)
+                    snprintf(label, sizeof(label), "%s x%u", info->name.c_str(), item.count);
+                else
+                    snprintf(label, sizeof(label), "Item %u x%u", item.itemId, item.count);
+
+                bool selected = (selectedChoice == static_cast<int>(i));
+                if (ImGui::Selectable(label, selected)) {
+                    selectedChoice = static_cast<int>(i);
+                }
+            }
+        }
+
+        // Fixed rewards (always given)
+        if (!quest.fixedRewards.empty()) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.0f, 1.0f), "You will also receive:");
+            for (const auto& item : quest.fixedRewards) {
+                auto* info = gameHandler.getItemInfo(item.itemId);
+                if (info && info->valid)
+                    ImGui::Text("  %s x%u", info->name.c_str(), item.count);
+                else
+                    ImGui::Text("  Item %u x%u", item.itemId, item.count);
+            }
+        }
+
+        // Money / XP rewards
+        if (quest.rewardXp > 0 || quest.rewardMoney > 0) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.0f, 1.0f), "Rewards:");
+            if (quest.rewardXp > 0)
+                ImGui::Text("  %u experience", quest.rewardXp);
+            if (quest.rewardMoney > 0) {
+                uint32_t g = quest.rewardMoney / 10000;
+                uint32_t s = (quest.rewardMoney % 10000) / 100;
+                uint32_t c = quest.rewardMoney % 100;
+                if (g > 0) ImGui::Text("  %ug %us %uc", g, s, c);
+                else if (s > 0) ImGui::Text("  %us %uc", s, c);
+                else ImGui::Text("  %uc", c);
+            }
+        }
+
+        // Complete button
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        float buttonW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+
+        bool canComplete = quest.choiceRewards.empty() || selectedChoice >= 0;
+        if (!canComplete) ImGui::BeginDisabled();
+        if (ImGui::Button("Complete Quest", ImVec2(buttonW, 0))) {
+            uint32_t rewardIdx = quest.choiceRewards.empty() ? 0 : static_cast<uint32_t>(selectedChoice);
+            gameHandler.chooseQuestReward(rewardIdx);
+            selectedChoice = -1;
+        }
+        if (!canComplete) ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(buttonW, 0))) {
+            gameHandler.closeQuestOfferReward();
+            selectedChoice = -1;
+        }
+    }
+    ImGui::End();
+
+    if (!open) {
+        gameHandler.closeQuestOfferReward();
+        selectedChoice = -1;
     }
 }
 

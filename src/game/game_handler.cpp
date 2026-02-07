@@ -1285,7 +1285,11 @@ void GameHandler::handlePacket(network::Packet& packet) {
             break;
         }
         case Opcode::SMSG_QUESTGIVER_REQUEST_ITEMS:
+            handleQuestRequestItems(packet);
+            break;
         case Opcode::SMSG_QUESTGIVER_OFFER_REWARD:
+            handleQuestOfferReward(packet);
+            break;
         case Opcode::SMSG_GROUP_SET_LEADER:
             LOG_DEBUG("Ignoring known opcode: 0x", std::hex, opcode, std::dec);
             break;
@@ -4142,6 +4146,78 @@ void GameHandler::abandonQuest(uint32_t questId) {
             return;
         }
     }
+}
+
+void GameHandler::handleQuestRequestItems(network::Packet& packet) {
+    QuestRequestItemsData data;
+    if (!QuestRequestItemsParser::parse(packet, data)) {
+        LOG_WARNING("Failed to parse SMSG_QUESTGIVER_REQUEST_ITEMS");
+        return;
+    }
+    currentQuestRequestItems_ = data;
+    questRequestItemsOpen_ = true;
+    gossipWindowOpen = false;
+    questDetailsOpen = false;
+
+    // Query item names for required items
+    for (const auto& item : data.requiredItems) {
+        queryItemInfo(item.itemId, 0);
+    }
+}
+
+void GameHandler::handleQuestOfferReward(network::Packet& packet) {
+    QuestOfferRewardData data;
+    if (!QuestOfferRewardParser::parse(packet, data)) {
+        LOG_WARNING("Failed to parse SMSG_QUESTGIVER_OFFER_REWARD");
+        return;
+    }
+    currentQuestOfferReward_ = data;
+    questOfferRewardOpen_ = true;
+    questRequestItemsOpen_ = false;
+    gossipWindowOpen = false;
+    questDetailsOpen = false;
+
+    // Query item names for reward items
+    for (const auto& item : data.choiceRewards)
+        queryItemInfo(item.itemId, 0);
+    for (const auto& item : data.fixedRewards)
+        queryItemInfo(item.itemId, 0);
+}
+
+void GameHandler::completeQuest() {
+    if (!questRequestItemsOpen_ || state != WorldState::IN_WORLD || !socket) return;
+    auto packet = QuestgiverCompleteQuestPacket::build(
+        currentQuestRequestItems_.npcGuid, currentQuestRequestItems_.questId);
+    socket->send(packet);
+    questRequestItemsOpen_ = false;
+    currentQuestRequestItems_ = QuestRequestItemsData{};
+}
+
+void GameHandler::closeQuestRequestItems() {
+    questRequestItemsOpen_ = false;
+    currentQuestRequestItems_ = QuestRequestItemsData{};
+}
+
+void GameHandler::chooseQuestReward(uint32_t rewardIndex) {
+    if (!questOfferRewardOpen_ || state != WorldState::IN_WORLD || !socket) return;
+    uint64_t npcGuid = currentQuestOfferReward_.npcGuid;
+    auto packet = QuestgiverChooseRewardPacket::build(
+        npcGuid, currentQuestOfferReward_.questId, rewardIndex);
+    socket->send(packet);
+    questOfferRewardOpen_ = false;
+    currentQuestOfferReward_ = QuestOfferRewardData{};
+
+    // Re-query quest giver status so markers update
+    if (npcGuid) {
+        network::Packet qsPkt(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_STATUS_QUERY));
+        qsPkt.writeUInt64(npcGuid);
+        socket->send(qsPkt);
+    }
+}
+
+void GameHandler::closeQuestOfferReward() {
+    questOfferRewardOpen_ = false;
+    currentQuestOfferReward_ = QuestOfferRewardData{};
 }
 
 void GameHandler::closeGossip() {

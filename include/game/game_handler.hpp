@@ -363,6 +363,17 @@ public:
     bool isQuestDetailsOpen() const { return questDetailsOpen; }
     const QuestDetailsData& getQuestDetails() const { return currentQuestDetails; }
 
+    // Quest turn-in
+    bool isQuestRequestItemsOpen() const { return questRequestItemsOpen_; }
+    const QuestRequestItemsData& getQuestRequestItems() const { return currentQuestRequestItems_; }
+    void completeQuest();       // Send CMSG_QUESTGIVER_COMPLETE_QUEST
+    void closeQuestRequestItems();
+
+    bool isQuestOfferRewardOpen() const { return questOfferRewardOpen_; }
+    const QuestOfferRewardData& getQuestOfferReward() const { return currentQuestOfferReward_; }
+    void chooseQuestReward(uint32_t rewardIndex);  // Send CMSG_QUESTGIVER_CHOOSE_REWARD
+    void closeQuestOfferReward();
+
     // Quest log
     struct QuestLogEntry {
         uint32_t questId = 0;
@@ -538,6 +549,8 @@ private:
     void handleGossipMessage(network::Packet& packet);
     void handleGossipComplete(network::Packet& packet);
     void handleQuestDetails(network::Packet& packet);
+    void handleQuestRequestItems(network::Packet& packet);
+    void handleQuestOfferReward(network::Packet& packet);
     void handleListInventory(network::Packet& packet);
     LootResponseData generateLocalLoot(uint64_t guid);
     void simulateLootResponse(const LootResponseData& data);
@@ -688,6 +701,12 @@ private:
     // Quest details
     bool questDetailsOpen = false;
     QuestDetailsData currentQuestDetails;
+
+    // Quest turn-in
+    bool questRequestItemsOpen_ = false;
+    QuestRequestItemsData currentQuestRequestItems_;
+    bool questOfferRewardOpen_ = false;
+    QuestOfferRewardData currentQuestOfferReward_;
 
     // Quest log
     std::vector<QuestLogEntry> questLog_;

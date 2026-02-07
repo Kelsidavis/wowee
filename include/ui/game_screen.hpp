@@ -146,6 +146,8 @@ private:
     void renderLootWindow(game::GameHandler& gameHandler);
     void renderGossipWindow(game::GameHandler& gameHandler);
     void renderQuestDetailsWindow(game::GameHandler& gameHandler);
+    void renderQuestRequestItemsWindow(game::GameHandler& gameHandler);
+    void renderQuestOfferRewardWindow(game::GameHandler& gameHandler);
     void renderVendorWindow(game::GameHandler& gameHandler);
     void renderTeleporterPanel();
     void renderDeathScreen(game::GameHandler& gameHandler);
