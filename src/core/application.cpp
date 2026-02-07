@@ -397,8 +397,13 @@ void Application::logoutToLogin() {
     }
     singlePlayerMode = false;
     npcsSpawned = false;
+    playerCharacterSpawned = false;
     world.reset();
     if (renderer) {
+        // Remove old player model so it doesn't persist into next session
+        if (auto* charRenderer = renderer->getCharacterRenderer()) {
+            charRenderer->removeInstance(1);
+        }
         if (auto* music = renderer->getMusicManager()) {
             music->stopMusic(0.0f);
         }
