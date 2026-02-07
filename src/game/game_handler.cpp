@@ -2116,6 +2116,109 @@ void GameHandler::replyToLastWhisper(const std::string& message) {
     LOG_INFO("Replied to ", lastWhisperSender_, ": ", message);
 }
 
+void GameHandler::uninvitePlayer(const std::string& playerName) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot uninvite player: not in world or not connected");
+        return;
+    }
+
+    if (playerName.empty()) {
+        addSystemChatMessage("You must specify a player name to uninvite.");
+        return;
+    }
+
+    auto packet = GroupUninvitePacket::build(playerName);
+    socket->send(packet);
+    addSystemChatMessage("Removed " + playerName + " from the group.");
+    LOG_INFO("Uninvited player: ", playerName);
+}
+
+void GameHandler::leaveParty() {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot leave party: not in world or not connected");
+        return;
+    }
+
+    auto packet = GroupDisbandPacket::build();
+    socket->send(packet);
+    addSystemChatMessage("You have left the group.");
+    LOG_INFO("Left party/raid");
+}
+
+void GameHandler::setMainTank(uint64_t targetGuid) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot set main tank: not in world or not connected");
+        return;
+    }
+
+    if (targetGuid == 0) {
+        addSystemChatMessage("You must have a target selected.");
+        return;
+    }
+
+    // Main tank uses index 0
+    auto packet = RaidTargetUpdatePacket::build(0, targetGuid);
+    socket->send(packet);
+    addSystemChatMessage("Main tank set.");
+    LOG_INFO("Set main tank: 0x", std::hex, targetGuid, std::dec);
+}
+
+void GameHandler::setMainAssist(uint64_t targetGuid) {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot set main assist: not in world or not connected");
+        return;
+    }
+
+    if (targetGuid == 0) {
+        addSystemChatMessage("You must have a target selected.");
+        return;
+    }
+
+    // Main assist uses index 1
+    auto packet = RaidTargetUpdatePacket::build(1, targetGuid);
+    socket->send(packet);
+    addSystemChatMessage("Main assist set.");
+    LOG_INFO("Set main assist: 0x", std::hex, targetGuid, std::dec);
+}
+
+void GameHandler::clearMainTank() {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot clear main tank: not in world or not connected");
+        return;
+    }
+
+    // Clear main tank by setting GUID to 0
+    auto packet = RaidTargetUpdatePacket::build(0, 0);
+    socket->send(packet);
+    addSystemChatMessage("Main tank cleared.");
+    LOG_INFO("Cleared main tank");
+}
+
+void GameHandler::clearMainAssist() {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot clear main assist: not in world or not connected");
+        return;
+    }
+
+    // Clear main assist by setting GUID to 0
+    auto packet = RaidTargetUpdatePacket::build(1, 0);
+    socket->send(packet);
+    addSystemChatMessage("Main assist cleared.");
+    LOG_INFO("Cleared main assist");
+}
+
+void GameHandler::requestRaidInfo() {
+    if (state != WorldState::IN_WORLD || !socket) {
+        LOG_WARNING("Cannot request raid info: not in world or not connected");
+        return;
+    }
+
+    auto packet = RequestRaidInfoPacket::build();
+    socket->send(packet);
+    addSystemChatMessage("Requesting raid lockout information...");
+    LOG_INFO("Requested raid info");
+}
+
 void GameHandler::releaseSpirit() {
     if (!playerDead_) return;
     if (socket && state == WorldState::IN_WORLD) {

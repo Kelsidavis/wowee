@@ -1330,6 +1330,74 @@ void GameScreen::sendChatMessage(game::GameHandler& gameHandler) {
                 return;
             }
 
+            // Party/Raid management commands
+            if (cmdLower == "uninvite" || cmdLower == "kick") {
+                if (spacePos != std::string::npos) {
+                    std::string playerName = command.substr(spacePos + 1);
+                    gameHandler.uninvitePlayer(playerName);
+                } else {
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::SYSTEM;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = "Usage: /uninvite <player name>";
+                    gameHandler.addLocalChatMessage(msg);
+                }
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            if (cmdLower == "leave" || cmdLower == "leaveparty") {
+                gameHandler.leaveParty();
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            if (cmdLower == "maintank" || cmdLower == "mt") {
+                if (gameHandler.hasTarget()) {
+                    gameHandler.setMainTank(gameHandler.getTargetGuid());
+                } else {
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::SYSTEM;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = "You must target a player to set as main tank.";
+                    gameHandler.addLocalChatMessage(msg);
+                }
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            if (cmdLower == "mainassist" || cmdLower == "ma") {
+                if (gameHandler.hasTarget()) {
+                    gameHandler.setMainAssist(gameHandler.getTargetGuid());
+                } else {
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::SYSTEM;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = "You must target a player to set as main assist.";
+                    gameHandler.addLocalChatMessage(msg);
+                }
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            if (cmdLower == "clearmaintank") {
+                gameHandler.clearMainTank();
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            if (cmdLower == "clearmainassist") {
+                gameHandler.clearMainAssist();
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            if (cmdLower == "raidinfo") {
+                gameHandler.requestRaidInfo();
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
             // Chat channel slash commands
             bool isChannelCommand = false;
             if (cmdLower == "s" || cmdLower == "say") {

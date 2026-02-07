@@ -261,6 +261,15 @@ public:
     std::string getLastWhisperSender() const { return lastWhisperSender_; }
     void setLastWhisperSender(const std::string& name) { lastWhisperSender_ = name; }
 
+    // Party/Raid management
+    void uninvitePlayer(const std::string& playerName);
+    void leaveParty();
+    void setMainTank(uint64_t targetGuid);
+    void setMainAssist(uint64_t targetGuid);
+    void clearMainTank();
+    void clearMainAssist();
+    void requestRaidInfo();
+
     // ---- Phase 1: Name queries ----
     void queryPlayerName(uint64_t guid);
     void queryCreatureInfo(uint32_t entry, uint64_t guid);

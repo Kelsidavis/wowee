@@ -175,6 +175,8 @@ enum class Opcode : uint16_t {
     SMSG_GROUP_LIST                  = 0x07D,
     SMSG_PARTY_COMMAND_RESULT        = 0x07E,
     MSG_RAID_TARGET_UPDATE           = 0x321,
+    CMSG_REQUEST_RAID_INFO           = 0x2CD,
+    SMSG_RAID_INSTANCE_INFO          = 0x2CC,
 
     // ---- Phase 5: Loot ----
     CMSG_AUTOSTORE_LOOT_ITEM         = 0x108,

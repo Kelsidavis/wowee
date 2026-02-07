@@ -1422,6 +1422,37 @@ network::Packet DuelCancelPacket::build() {
 }
 
 // ============================================================
+// Party/Raid Management
+// ============================================================
+
+network::Packet GroupUninvitePacket::build(const std::string& playerName) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_UNINVITE_GUID));
+    packet.writeString(playerName);
+    LOG_DEBUG("Built CMSG_GROUP_UNINVITE_GUID for player: ", playerName);
+    return packet;
+}
+
+network::Packet GroupDisbandPacket::build() {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_DISBAND));
+    LOG_DEBUG("Built CMSG_GROUP_DISBAND");
+    return packet;
+}
+
+network::Packet RaidTargetUpdatePacket::build(uint8_t targetIndex, uint64_t targetGuid) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::MSG_RAID_TARGET_UPDATE));
+    packet.writeUInt8(targetIndex);
+    packet.writeUInt64(targetGuid);
+    LOG_DEBUG("Built MSG_RAID_TARGET_UPDATE, index: ", (uint32_t)targetIndex, ", guid: 0x", std::hex, targetGuid, std::dec);
+    return packet;
+}
+
+network::Packet RequestRaidInfoPacket::build() {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_REQUEST_RAID_INFO));
+    LOG_DEBUG("Built CMSG_REQUEST_RAID_INFO");
+    return packet;
+}
+
+// ============================================================
 // Random Roll
 // ============================================================
 
@@ -2089,11 +2120,6 @@ network::Packet GroupAcceptPacket::build() {
 
 network::Packet GroupDeclinePacket::build() {
     network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_DECLINE));
-    return packet;
-}
-
-network::Packet GroupDisbandPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_DISBAND));
     return packet;
 }
 

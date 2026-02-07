@@ -885,6 +885,39 @@ public:
 };
 
 // ============================================================
+// Party/Raid Management
+// ============================================================
+
+/** CMSG_GROUP_UNINVITE_GUID packet builder */
+class GroupUninvitePacket {
+public:
+    static network::Packet build(const std::string& playerName);
+};
+
+/** CMSG_GROUP_DISBAND packet builder */
+class GroupDisbandPacket {
+public:
+    static network::Packet build();
+};
+
+/** MSG_RAID_TARGET_UPDATE packet builder */
+class RaidTargetUpdatePacket {
+public:
+    /**
+     * Build raid target marker update packet
+     * @param targetIndex 0-7 for raid icons, 0 = MainTank, 1 = MainAssist
+     * @param targetGuid GUID to mark, or 0 to clear
+     */
+    static network::Packet build(uint8_t targetIndex, uint64_t targetGuid);
+};
+
+/** CMSG_REQUEST_RAID_INFO packet builder */
+class RequestRaidInfoPacket {
+public:
+    static network::Packet build();
+};
+
+// ============================================================
 // Random Roll
 // ============================================================
 
@@ -1311,12 +1344,6 @@ public:
 
 /** CMSG_GROUP_DECLINE packet builder */
 class GroupDeclinePacket {
-public:
-    static network::Packet build();
-};
-
-/** CMSG_GROUP_DISBAND (leave party) packet builder */
-class GroupDisbandPacket {
 public:
     static network::Packet build();
 };
