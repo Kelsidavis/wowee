@@ -6,6 +6,7 @@
 #include "pipeline/blp_loader.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
+#include <map>
 
 namespace wowee { namespace ui {
 
@@ -87,30 +88,92 @@ void SpellbookScreen::loadSpellIconDBC(pipeline::AssetManager* assetManager) {
     LOG_INFO("Spellbook: Loaded ", spellIconPaths.size(), " spell icon paths");
 }
 
+void SpellbookScreen::loadSkillLineDBCs(pipeline::AssetManager* assetManager) {
+    if (skillLineDbLoaded) return;
+    skillLineDbLoaded = true;
+
+    if (!assetManager || !assetManager->isInitialized()) return;
+
+    // Load SkillLine.dbc: field 0 = ID, field 1 = categoryID, field 3 = name_enUS
+    auto skillLineDbc = assetManager->loadDBC("SkillLine.dbc");
+    if (skillLineDbc && skillLineDbc->isLoaded()) {
+        for (uint32_t i = 0; i < skillLineDbc->getRecordCount(); i++) {
+            uint32_t id = skillLineDbc->getUInt32(i, 0);
+            std::string name = skillLineDbc->getString(i, 3);
+            if (id > 0 && !name.empty()) {
+                skillLineNames[id] = name;
+            }
+        }
+        LOG_INFO("Spellbook: Loaded ", skillLineNames.size(), " skill lines");
+    } else {
+        LOG_WARNING("Spellbook: Could not load SkillLine.dbc");
+    }
+
+    // Load SkillLineAbility.dbc: field 0 = ID, field 1 = skillLineID, field 2 = spellID
+    auto slaDbc = assetManager->loadDBC("SkillLineAbility.dbc");
+    if (slaDbc && slaDbc->isLoaded()) {
+        for (uint32_t i = 0; i < slaDbc->getRecordCount(); i++) {
+            uint32_t skillLineId = slaDbc->getUInt32(i, 1);
+            uint32_t spellId = slaDbc->getUInt32(i, 2);
+            if (spellId > 0 && skillLineId > 0) {
+                spellToSkillLine[spellId] = skillLineId;
+            }
+        }
+        LOG_INFO("Spellbook: Loaded ", spellToSkillLine.size(), " skill line abilities");
+    } else {
+        LOG_WARNING("Spellbook: Could not load SkillLineAbility.dbc");
+    }
+}
+
 void SpellbookScreen::categorizeSpells(const std::vector<uint32_t>& knownSpells) {
-    generalSpells.clear();
-    activeSpells.clear();
-    passiveSpells.clear();
+    spellTabs.clear();
+
+    // Group spells by skill line, preserving order of first appearance
+    std::map<uint32_t, std::vector<const SpellInfo*>> skillLineSpells;
+    std::vector<const SpellInfo*> generalSpells;
 
     for (uint32_t spellId : knownSpells) {
         auto it = spellData.find(spellId);
         if (it == spellData.end()) continue;
 
         const SpellInfo* info = &it->second;
+
         if (isGeneralSpell(spellId)) {
             generalSpells.push_back(info);
-        } else if (info->isPassive()) {
-            passiveSpells.push_back(info);
+            continue;
+        }
+
+        auto slIt = spellToSkillLine.find(spellId);
+        if (slIt != spellToSkillLine.end()) {
+            skillLineSpells[slIt->second].push_back(info);
         } else {
-            activeSpells.push_back(info);
+            generalSpells.push_back(info);
         }
     }
 
-    // Sort each tab alphabetically
     auto byName = [](const SpellInfo* a, const SpellInfo* b) { return a->name < b->name; };
-    std::sort(generalSpells.begin(), generalSpells.end(), byName);
-    std::sort(activeSpells.begin(), activeSpells.end(), byName);
-    std::sort(passiveSpells.begin(), passiveSpells.end(), byName);
+
+    // General tab first
+    if (!generalSpells.empty()) {
+        std::sort(generalSpells.begin(), generalSpells.end(), byName);
+        spellTabs.push_back({"General", std::move(generalSpells)});
+    }
+
+    // Skill line tabs sorted by name
+    std::vector<std::pair<std::string, std::vector<const SpellInfo*>>> named;
+    for (auto& [skillLineId, spells] : skillLineSpells) {
+        auto nameIt = skillLineNames.find(skillLineId);
+        std::string tabName = (nameIt != skillLineNames.end()) ? nameIt->second
+                              : "Unknown (" + std::to_string(skillLineId) + ")";
+        std::sort(spells.begin(), spells.end(), byName);
+        named.push_back({std::move(tabName), std::move(spells)});
+    }
+    std::sort(named.begin(), named.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    for (auto& [name, spells] : named) {
+        spellTabs.push_back({std::move(name), std::move(spells)});
+    }
 
     lastKnownSpellCount = knownSpells.size();
 }
@@ -175,6 +238,7 @@ void SpellbookScreen::render(game::GameHandler& gameHandler, pipeline::AssetMana
     if (!dbcLoadAttempted) {
         loadSpellDBC(assetManager);
         loadSpellIconDBC(assetManager);
+        loadSkillLineDBCs(assetManager);
     }
 
     // Rebuild categories if spell list changed
@@ -209,26 +273,29 @@ void SpellbookScreen::render(game::GameHandler& gameHandler, pipeline::AssetMana
 
         // Tab bar
         if (ImGui::BeginTabBar("SpellbookTabs")) {
-            auto renderTab = [&](const char* label, SpellTab tab, const std::vector<const SpellInfo*>& spellList) {
-                if (ImGui::BeginTabItem(label)) {
-                    currentTab = tab;
+            for (size_t tabIdx = 0; tabIdx < spellTabs.size(); tabIdx++) {
+                const auto& tab = spellTabs[tabIdx];
 
-                    if (spellList.empty()) {
+                char tabLabel[64];
+                snprintf(tabLabel, sizeof(tabLabel), "%s (%zu)",
+                    tab.name.c_str(), tab.spells.size());
+
+                if (ImGui::BeginTabItem(tabLabel)) {
+                    if (tab.spells.empty()) {
                         ImGui::TextDisabled("No spells in this category.");
                     }
 
-                    // Spell list with icons
                     ImGui::BeginChild("SpellList", ImVec2(0, 0), true);
 
                     float iconSize = 32.0f;
-                    bool isPassiveTab = (tab == SpellTab::PASSIVE);
 
-                    for (const SpellInfo* info : spellList) {
+                    for (const SpellInfo* info : tab.spells) {
                         ImGui::PushID(static_cast<int>(info->spellId));
 
                         float cd = gameHandler.getSpellCooldown(info->spellId);
                         bool onCooldown = cd > 0.0f;
-                        bool isDim = isPassiveTab || onCooldown;
+                        bool isPassive = info->isPassive();
+                        bool isDim = isPassive || onCooldown;
 
                         GLuint iconTex = getSpellIcon(info->iconId, assetManager);
 
@@ -268,13 +335,13 @@ void SpellbookScreen::render(game::GameHandler& gameHandler, pipeline::AssetMana
 
                         if (rowHovered) {
                             // Start drag on click (not passive)
-                            if (rowClicked && !isPassiveTab) {
+                            if (rowClicked && !isPassive) {
                                 draggingSpell_ = true;
                                 dragSpellId_ = info->spellId;
                                 dragSpellIconTex_ = iconTex;
                             }
 
-                            if (ImGui::IsMouseDoubleClicked(0) && !isPassiveTab && !onCooldown) {
+                            if (ImGui::IsMouseDoubleClicked(0) && !isPassive && !onCooldown) {
                                 draggingSpell_ = false;
                                 dragSpellId_ = 0;
                                 dragSpellIconTex_ = 0;
@@ -290,7 +357,7 @@ void SpellbookScreen::render(game::GameHandler& gameHandler, pipeline::AssetMana
                                     ImGui::TextDisabled("%s", info->rank.c_str());
                                 }
                                 ImGui::TextDisabled("Spell ID: %u", info->spellId);
-                                if (isPassiveTab) {
+                                if (isPassive) {
                                     ImGui::TextDisabled("Passive");
                                 } else {
                                     ImGui::TextDisabled("Drag to action bar to assign");
@@ -308,16 +375,7 @@ void SpellbookScreen::render(game::GameHandler& gameHandler, pipeline::AssetMana
                     ImGui::EndChild();
                     ImGui::EndTabItem();
                 }
-            };
-
-            char generalLabel[32], activeLabel[32], passiveLabel[32];
-            snprintf(generalLabel, sizeof(generalLabel), "General (%zu)", generalSpells.size());
-            snprintf(activeLabel, sizeof(activeLabel), "Active (%zu)", activeSpells.size());
-            snprintf(passiveLabel, sizeof(passiveLabel), "Passive (%zu)", passiveSpells.size());
-
-            renderTab(generalLabel, SpellTab::GENERAL, generalSpells);
-            renderTab(activeLabel, SpellTab::ACTIVE, activeSpells);
-            renderTab(passiveLabel, SpellTab::PASSIVE, passiveSpells);
+            }
 
             ImGui::EndTabBar();
         }

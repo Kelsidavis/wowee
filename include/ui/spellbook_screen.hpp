@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <string>
 #include <vector>
+#include <map>
 #include <unordered_map>
 
 namespace wowee {
@@ -22,7 +23,10 @@ struct SpellInfo {
     bool isPassive() const { return (attributes & 0x40) != 0; }
 };
 
-enum class SpellTab { GENERAL, ACTIVE, PASSIVE };
+struct SpellTabInfo {
+    std::string name;
+    std::vector<const SpellInfo*> spells;
+};
 
 class SpellbookScreen {
 public:
@@ -50,14 +54,15 @@ private:
     std::unordered_map<uint32_t, std::string> spellIconPaths; // SpellIconID -> path
     std::unordered_map<uint32_t, GLuint> spellIconCache;      // SpellIconID -> GL texture
 
-    // Categorized spell lists (rebuilt when spell list changes)
-    std::vector<const SpellInfo*> generalSpells;
-    std::vector<const SpellInfo*> activeSpells;
-    std::vector<const SpellInfo*> passiveSpells;
-    size_t lastKnownSpellCount = 0;
+    // Skill line data (loaded from SkillLine.dbc + SkillLineAbility.dbc)
+    bool skillLineDbLoaded = false;
+    std::unordered_map<uint32_t, std::string> skillLineNames;    // skillLineID -> name
+    std::unordered_map<uint32_t, uint32_t> spellToSkillLine;     // spellID -> skillLineID
 
-    // Tab state
-    SpellTab currentTab = SpellTab::GENERAL;
+    // Categorized spell tabs (rebuilt when spell list changes)
+    // ordered map so tabs appear in consistent order
+    std::vector<SpellTabInfo> spellTabs;
+    size_t lastKnownSpellCount = 0;
 
     // Drag-and-drop from spellbook to action bar
     bool draggingSpell_ = false;
@@ -66,6 +71,7 @@ private:
 
     void loadSpellDBC(pipeline::AssetManager* assetManager);
     void loadSpellIconDBC(pipeline::AssetManager* assetManager);
+    void loadSkillLineDBCs(pipeline::AssetManager* assetManager);
     void categorizeSpells(const std::vector<uint32_t>& knownSpells);
     GLuint getSpellIcon(uint32_t iconId, pipeline::AssetManager* assetManager);
     const SpellInfo* getSpellInfo(uint32_t spellId) const;
