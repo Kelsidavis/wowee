@@ -629,96 +629,7 @@ void Application::setupUICallbacks() {
         loadOnlineWorldTerrain(mapId, x, y, z);
     });
 
-    // Load faction hostility map from FactionTemplate.dbc + Faction.dbc
-    if (assetManager && assetManager->isInitialized()) {
-        auto ftDbc = assetManager->loadDBC("FactionTemplate.dbc");
-        auto fDbc = assetManager->loadDBC("Faction.dbc");
-        if (ftDbc && ftDbc->isLoaded()) {
-            // Build set of hostile parent faction IDs from Faction.dbc base reputation
-            // Faction.dbc: field 0=ID, fields 13-16=ReputationBase[4], fields 5-8=ReputationRaceMask[4]
-            // Human = race 1 = raceMask bit 0 (0x1)
-            std::unordered_set<uint32_t> hostileParentFactions;
-            if (fDbc && fDbc->isLoaded()) {
-                for (uint32_t i = 0; i < fDbc->getRecordCount(); i++) {
-                    uint32_t factionId = fDbc->getUInt32(i, 0);
-                    // Check each of the 4 reputation slots for Human race mask
-                    for (int slot = 0; slot < 4; slot++) {
-                        uint32_t raceMask = fDbc->getUInt32(i, 2 + slot);  // ReputationRaceMask[4] at fields 2-5
-                        if (raceMask & 0x1) { // Human race bit
-                            int32_t baseRep = fDbc->getInt32(i, 10 + slot);  // ReputationBase[4] at fields 10-13
-                            if (baseRep < 0) {
-                                hostileParentFactions.insert(factionId);
-                            }
-                            break;
-                        }
-                    }
-                }
-                LOG_INFO("Faction.dbc: ", hostileParentFactions.size(), " factions hostile to Humans");
-            }
-
-            // Get player faction template data
-            uint32_t playerFriendGroup = 0;
-            uint32_t playerEnemyGroup = 0;
-            uint32_t playerFactionId = 0;
-            for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
-                if (ftDbc->getUInt32(i, 0) == 1) { // Human player faction template
-                    playerFriendGroup = ftDbc->getUInt32(i, 4) | ftDbc->getUInt32(i, 3);
-                    playerEnemyGroup = ftDbc->getUInt32(i, 5);
-                    playerFactionId = ftDbc->getUInt32(i, 1);
-                    break;
-                }
-            }
-
-            // Build hostility map for each faction template
-            std::unordered_map<uint32_t, bool> factionMap;
-            for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
-                uint32_t id = ftDbc->getUInt32(i, 0);
-                uint32_t parentFaction = ftDbc->getUInt32(i, 1);
-                uint32_t factionGroup = ftDbc->getUInt32(i, 3);
-                uint32_t friendGroup = ftDbc->getUInt32(i, 4);
-                uint32_t enemyGroup = ftDbc->getUInt32(i, 5);
-
-                // 1. Symmetric group check (WoW's actual hostility formula)
-                bool hostile = (enemyGroup & playerFriendGroup) != 0
-                            || (factionGroup & playerEnemyGroup) != 0;
-
-                // 2. Monster factionGroup bit (8)
-                if (!hostile && (factionGroup & 8) != 0) {
-                    hostile = true;
-                }
-
-                // 3. Individual enemy faction IDs (fields 6-9)
-                if (!hostile && playerFactionId > 0) {
-                    for (int e = 6; e <= 9; e++) {
-                        if (ftDbc->getUInt32(i, e) == playerFactionId) {
-                            hostile = true;
-                            break;
-                        }
-                    }
-                }
-
-                // 4. Parent faction base reputation check (Faction.dbc)
-                if (!hostile && parentFaction > 0) {
-                    if (hostileParentFactions.count(parentFaction)) {
-                        hostile = true;
-                    }
-                }
-
-                // 5. If explicitly friendly (friendGroup includes player), override to non-hostile
-                if (hostile && (friendGroup & playerFriendGroup) != 0) {
-                    hostile = false;
-                }
-
-                factionMap[id] = hostile;
-            }
-
-            uint32_t hostileCount = 0;
-            for (const auto& [fid, h] : factionMap) { if (h) hostileCount++; }
-            gameHandler->setFactionHostileMap(std::move(factionMap));
-            LOG_INFO("Loaded faction hostility: ", hostileCount, "/", ftDbc->getRecordCount(),
-                " hostile (playerFriendGroup=0x", std::hex, playerFriendGroup, std::dec, ")");
-        }
-    }
+    // Faction hostility map is built in buildFactionHostilityMap() when character enters world
 
     // Creature spawn callback (online mode) - spawn creature models
     gameHandler->setCreatureSpawnCallback([this](uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation) {
@@ -850,16 +761,30 @@ void Application::spawnPlayerCharacter() {
                     LOG_INFO("  Texture ", ti, ": type=", tex.type, " name='", tex.filename, "'");
                 }
 
-                // Look up underwear textures from CharSections.dbc (humans only for now)
-                bool useCharSections = (spRace_ == game::Race::HUMAN);
+                // Look up textures from CharSections.dbc for all races
+                bool useCharSections = true;
                 uint32_t targetRaceId = static_cast<uint32_t>(spRace_);
                 uint32_t targetSexId = (spGender_ == game::Gender::FEMALE) ? 1u : 0u;
-                std::string bodySkinPath = (spGender_ == game::Gender::FEMALE)
-                    ? "Character\\Human\\Female\\HumanFemaleSkin00_00.blp"
-                    : "Character\\Human\\Male\\HumanMaleSkin00_00.blp";
-                std::string pelvisPath = (spGender_ == game::Gender::FEMALE)
-                    ? "Character\\Human\\Female\\HumanFemaleNakedPelvisSkin00_00.blp"
-                    : "Character\\Human\\Male\\HumanMaleNakedPelvisSkin00_00.blp";
+
+                // Race name for fallback texture paths
+                const char* raceFolderName = "Human";
+                switch (spRace_) {
+                    case game::Race::HUMAN:    raceFolderName = "Human"; break;
+                    case game::Race::ORC:      raceFolderName = "Orc"; break;
+                    case game::Race::DWARF:    raceFolderName = "Dwarf"; break;
+                    case game::Race::NIGHT_ELF: raceFolderName = "NightElf"; break;
+                    case game::Race::UNDEAD:    raceFolderName = "Scourge"; break;
+                    case game::Race::TAUREN:    raceFolderName = "Tauren"; break;
+                    case game::Race::GNOME:     raceFolderName = "Gnome"; break;
+                    case game::Race::TROLL:     raceFolderName = "Troll"; break;
+                    case game::Race::BLOOD_ELF: raceFolderName = "BloodElf"; break;
+                    case game::Race::DRAENEI:   raceFolderName = "Draenei"; break;
+                    default: break;
+                }
+                const char* genderFolder = (spGender_ == game::Gender::FEMALE) ? "Female" : "Male";
+                std::string raceGender = std::string(raceFolderName) + genderFolder;
+                std::string bodySkinPath = std::string("Character\\") + raceFolderName + "\\" + genderFolder + "\\" + raceGender + "Skin00_00.blp";
+                std::string pelvisPath = std::string("Character\\") + raceFolderName + "\\" + genderFolder + "\\" + raceGender + "NakedPelvisSkin00_00.blp";
                 std::string faceLowerTexturePath;
                 std::vector<std::string> underwearPaths;
 
@@ -955,7 +880,7 @@ void Application::spawnPlayerCharacter() {
                             if (!hairTexturePath.empty()) {
                                 tex.filename = hairTexturePath;
                             } else if (tex.filename.empty()) {
-                                tex.filename = "Character\\Human\\Hair00_00.blp";
+                                tex.filename = std::string("Character\\") + raceFolderName + "\\Hair00_00.blp";
                             }
                         } else if (tex.type == 8 && tex.filename.empty()) {
                             if (!underwearPaths.empty()) {
@@ -1819,6 +1744,123 @@ void Application::teleportTo(int presetIndex) {
     LOG_INFO("Teleport to ", preset.label, " complete");
 }
 
+void Application::buildFactionHostilityMap(uint8_t playerRace) {
+    if (!assetManager || !assetManager->isInitialized() || !gameHandler) return;
+
+    auto ftDbc = assetManager->loadDBC("FactionTemplate.dbc");
+    auto fDbc = assetManager->loadDBC("Faction.dbc");
+    if (!ftDbc || !ftDbc->isLoaded()) return;
+
+    // Race enum → race mask bit: race 1=0x1, 2=0x2, 3=0x4, 4=0x8, 5=0x10, 6=0x20, 7=0x40, 8=0x80, 10=0x200, 11=0x400
+    uint32_t playerRaceMask = 0;
+    if (playerRace >= 1 && playerRace <= 8) {
+        playerRaceMask = 1u << (playerRace - 1);
+    } else if (playerRace == 10) {
+        playerRaceMask = 0x200;  // Blood Elf
+    } else if (playerRace == 11) {
+        playerRaceMask = 0x400;  // Draenei
+    }
+
+    // Race → player faction template ID
+    // Human=1, Orc=2, Dwarf=3, NightElf=4, Undead=5, Tauren=6, Gnome=115, Troll=116, BloodElf=1610, Draenei=1629
+    uint32_t playerFtId = 0;
+    switch (playerRace) {
+        case 1: playerFtId = 1; break;     // Human
+        case 2: playerFtId = 2; break;     // Orc
+        case 3: playerFtId = 3; break;     // Dwarf
+        case 4: playerFtId = 4; break;     // Night Elf
+        case 5: playerFtId = 5; break;     // Undead
+        case 6: playerFtId = 6; break;     // Tauren
+        case 7: playerFtId = 115; break;   // Gnome
+        case 8: playerFtId = 116; break;   // Troll
+        case 10: playerFtId = 1610; break; // Blood Elf
+        case 11: playerFtId = 1629; break; // Draenei
+        default: playerFtId = 1; break;
+    }
+
+    // Build set of hostile parent faction IDs from Faction.dbc base reputation
+    std::unordered_set<uint32_t> hostileParentFactions;
+    if (fDbc && fDbc->isLoaded()) {
+        for (uint32_t i = 0; i < fDbc->getRecordCount(); i++) {
+            uint32_t factionId = fDbc->getUInt32(i, 0);
+            for (int slot = 0; slot < 4; slot++) {
+                uint32_t raceMask = fDbc->getUInt32(i, 2 + slot);  // ReputationRaceMask[4] at fields 2-5
+                if (raceMask & playerRaceMask) {
+                    int32_t baseRep = fDbc->getInt32(i, 10 + slot);  // ReputationBase[4] at fields 10-13
+                    if (baseRep < 0) {
+                        hostileParentFactions.insert(factionId);
+                    }
+                    break;
+                }
+            }
+        }
+        LOG_INFO("Faction.dbc: ", hostileParentFactions.size(), " factions hostile to race ", (int)playerRace);
+    }
+
+    // Get player faction template data
+    uint32_t playerFriendGroup = 0;
+    uint32_t playerEnemyGroup = 0;
+    uint32_t playerFactionId = 0;
+    for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
+        if (ftDbc->getUInt32(i, 0) == playerFtId) {
+            playerFriendGroup = ftDbc->getUInt32(i, 4) | ftDbc->getUInt32(i, 3);
+            playerEnemyGroup = ftDbc->getUInt32(i, 5);
+            playerFactionId = ftDbc->getUInt32(i, 1);
+            break;
+        }
+    }
+
+    // Build hostility map for each faction template
+    std::unordered_map<uint32_t, bool> factionMap;
+    for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
+        uint32_t id = ftDbc->getUInt32(i, 0);
+        uint32_t parentFaction = ftDbc->getUInt32(i, 1);
+        uint32_t factionGroup = ftDbc->getUInt32(i, 3);
+        uint32_t friendGroup = ftDbc->getUInt32(i, 4);
+        uint32_t enemyGroup = ftDbc->getUInt32(i, 5);
+
+        // 1. Symmetric group check
+        bool hostile = (enemyGroup & playerFriendGroup) != 0
+                    || (factionGroup & playerEnemyGroup) != 0;
+
+        // 2. Monster factionGroup bit (8)
+        if (!hostile && (factionGroup & 8) != 0) {
+            hostile = true;
+        }
+
+        // 3. Individual enemy faction IDs (fields 6-9)
+        if (!hostile && playerFactionId > 0) {
+            for (int e = 6; e <= 9; e++) {
+                if (ftDbc->getUInt32(i, e) == playerFactionId) {
+                    hostile = true;
+                    break;
+                }
+            }
+        }
+
+        // 4. Parent faction base reputation check (Faction.dbc)
+        if (!hostile && parentFaction > 0) {
+            if (hostileParentFactions.count(parentFaction)) {
+                hostile = true;
+            }
+        }
+
+        // 5. If explicitly friendly (friendGroup includes player), override to non-hostile
+        if (hostile && (friendGroup & playerFriendGroup) != 0) {
+            hostile = false;
+        }
+
+        factionMap[id] = hostile;
+    }
+
+    uint32_t hostileCount = 0;
+    for (const auto& [fid, h] : factionMap) { if (h) hostileCount++; }
+    gameHandler->setFactionHostileMap(std::move(factionMap));
+    LOG_INFO("Faction hostility for race ", (int)playerRace, " (FT ", playerFtId, "): ",
+        hostileCount, "/", ftDbc->getRecordCount(),
+        " hostile (friendGroup=0x", std::hex, playerFriendGroup, ", enemyGroup=0x", playerEnemyGroup, std::dec, ")");
+}
+
 void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float z) {
     if (!renderer || !assetManager || !assetManager->isInitialized()) {
         LOG_WARNING("Cannot load online terrain: renderer or assets not ready");
@@ -1883,6 +1925,14 @@ void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     }
 
     showProgress("Loading character model...", 0.05f);
+
+    // Build faction hostility map for this character's race
+    if (gameHandler) {
+        const game::Character* activeChar = gameHandler->getActiveCharacter();
+        if (activeChar) {
+            buildFactionHostilityMap(static_cast<uint8_t>(activeChar->race));
+        }
+    }
 
     // Spawn player model for online mode
     if (gameHandler) {

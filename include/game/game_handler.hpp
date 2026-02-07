@@ -314,6 +314,10 @@ public:
     uint64_t getPlayerGuid() const { return playerGuid; }
     void setPlayerGuid(uint64_t guid) { playerGuid = guid; }
 
+    // Player death state
+    bool isPlayerDead() const { return playerDead_; }
+    void releaseSpirit();
+
     // ---- Phase 4: Group ----
     void inviteToGroup(const std::string& playerName);
     void acceptGroupInvite();
@@ -693,6 +697,7 @@ private:
     uint32_t localPlayerHealth_ = 0;
     uint32_t localPlayerMaxHealth_ = 0;
     uint32_t localPlayerLevel_ = 1;
+    bool playerDead_ = false;
 
     struct NpcAggroEntry {
         uint64_t guid;

@@ -2112,5 +2112,15 @@ bool ListInventoryParser::parse(network::Packet& packet, ListInventoryData& data
     return true;
 }
 
+// ============================================================
+// Death/Respawn
+// ============================================================
+
+network::Packet RepopRequestPacket::build() {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_REPOP_REQUEST));
+    packet.writeUInt8(0);  // auto-release flag (0 = manual)
+    return packet;
+}
+
 } // namespace game
 } // namespace wowee

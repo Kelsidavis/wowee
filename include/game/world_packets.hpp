@@ -1268,5 +1268,11 @@ public:
     static bool parse(network::Packet& packet, ListInventoryData& data);
 };
 
+/** CMSG_REPOP_REQUEST packet builder */
+class RepopRequestPacket {
+public:
+    static network::Packet build();
+};
+
 } // namespace game
 } // namespace wowee

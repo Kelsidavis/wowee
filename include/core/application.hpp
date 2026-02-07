@@ -82,6 +82,7 @@ private:
     std::string getPlayerModelPath() const;
     static const char* mapIdToName(uint32_t mapId);
     void loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float z);
+    void buildFactionHostilityMap(uint8_t playerRace);
     void spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation);
     void despawnOnlineCreature(uint64_t guid);
     void buildCreatureDisplayLookups();

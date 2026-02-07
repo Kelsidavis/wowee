@@ -164,6 +164,9 @@ enum class Opcode : uint16_t {
     SMSG_ITEM_QUERY_SINGLE_RESPONSE  = 0x058,
     CMSG_AUTOEQUIP_ITEM              = 0x10A,
     SMSG_INVENTORY_CHANGE_FAILURE    = 0x112,
+
+    // ---- Death/Respawn ----
+    CMSG_REPOP_REQUEST               = 0x015A,
 };
 
 } // namespace game

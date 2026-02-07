@@ -88,6 +88,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     renderGossipWindow(gameHandler);
     renderQuestDetailsWindow(gameHandler);
     renderVendorWindow(gameHandler);
+    renderDeathScreen(gameHandler);
     renderEscapeMenu();
     renderSettingsWindow();
 
@@ -662,8 +663,12 @@ void GameScreen::renderPlayerFrame(game::GameHandler& gameHandler) {
             playerHp = playerMaxHp;
         }
 
-        // Name in green (friendly player color)
-        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", playerName.c_str());
+        // Name in green (friendly player color) — clickable for self-target
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+        if (ImGui::Selectable(playerName.c_str(), false, 0, ImVec2(0, 0))) {
+            gameHandler.setTarget(gameHandler.getPlayerGuid());
+        }
+        ImGui::PopStyleColor();
         ImGui::SameLine();
         ImGui::TextDisabled("Lv %u", playerLevel);
 
@@ -2274,6 +2279,66 @@ void GameScreen::renderEscapeMenu() {
         ImGui::PopStyleVar();
     }
     ImGui::End();
+}
+
+// ============================================================
+// Death Screen
+// ============================================================
+
+void GameScreen::renderDeathScreen(game::GameHandler& gameHandler) {
+    if (!gameHandler.isPlayerDead()) return;
+
+    auto* window = core::Application::getInstance().getWindow();
+    float screenW = window ? static_cast<float>(window->getWidth()) : 1280.0f;
+    float screenH = window ? static_cast<float>(window->getHeight()) : 720.0f;
+
+    // Dark red overlay covering the whole screen
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(screenW, screenH));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.0f, 0.0f, 0.45f));
+    ImGui::Begin("##DeathOverlay", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    // "Release Spirit" dialog centered on screen
+    float dlgW = 280.0f;
+    float dlgH = 100.0f;
+    ImGui::SetNextWindowPos(ImVec2(screenW / 2 - dlgW / 2, screenH * 0.35f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(dlgW, dlgH), ImGuiCond_Always);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.0f, 0.0f, 0.9f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+
+    if (ImGui::Begin("##DeathDialog", nullptr,
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar)) {
+
+        ImGui::Spacing();
+        // Center "You are dead." text
+        const char* deathText = "You are dead.";
+        float textW = ImGui::CalcTextSize(deathText).x;
+        ImGui::SetCursorPosX((dlgW - textW) / 2);
+        ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "%s", deathText);
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        // Center the Release Spirit button
+        float btnW = 180.0f;
+        ImGui::SetCursorPosX((dlgW - btnW) / 2);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.1f, 0.1f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.15f, 0.15f, 1.0f));
+        if (ImGui::Button("Release Spirit", ImVec2(btnW, 30))) {
+            gameHandler.releaseSpirit();
+        }
+        ImGui::PopStyleColor(2);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
 }
 
 // ============================================================

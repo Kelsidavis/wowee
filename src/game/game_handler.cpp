@@ -2562,7 +2562,14 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     auto unit = std::static_pointer_cast<Unit>(entity);
                     for (const auto& [key, val] : block.fields) {
                         switch (key) {
-                            case 24: unit->setHealth(val); break;
+                            case 24:
+                                unit->setHealth(val);
+                                // Detect dead player on login
+                                if (block.guid == playerGuid && val == 0) {
+                                    playerDead_ = true;
+                                    LOG_INFO("Player logged in dead");
+                                }
+                                break;
                             case 25: unit->setPower(val); break;
                             case 32: unit->setMaxHealth(val); break;
                             case 33: unit->setMaxPower(val); break;
@@ -2659,11 +2666,22 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                         if (block.guid == autoAttackTarget) {
                                             stopAutoAttack();
                                         }
+                                        // Player death
+                                        if (block.guid == playerGuid) {
+                                            playerDead_ = true;
+                                            stopAutoAttack();
+                                            LOG_INFO("Player died!");
+                                        }
                                         // Trigger death animation for NPC units
                                         if (entity->getType() == ObjectType::UNIT && npcDeathCallback_) {
                                             npcDeathCallback_(block.guid);
                                         }
                                     } else if (oldHealth == 0 && val > 0) {
+                                        // Player resurrection
+                                        if (block.guid == playerGuid) {
+                                            playerDead_ = false;
+                                            LOG_INFO("Player resurrected!");
+                                        }
                                         // Respawn: health went from 0 to >0, reset animation
                                         if (entity->getType() == ObjectType::UNIT && npcRespawnCallback_) {
                                             npcRespawnCallback_(block.guid);
@@ -2946,6 +2964,15 @@ void GameHandler::clearTarget() {
 std::shared_ptr<Entity> GameHandler::getTarget() const {
     if (targetGuid == 0) return nullptr;
     return entityManager.getEntity(targetGuid);
+}
+
+void GameHandler::releaseSpirit() {
+    if (!playerDead_) return;
+    if (socket && state == WorldState::IN_WORLD) {
+        auto packet = RepopRequestPacket::build();
+        socket->send(packet);
+        LOG_INFO("Sent CMSG_REPOP_REQUEST (Release Spirit)");
+    }
 }
 
 void GameHandler::tabTarget(float playerX, float playerY, float playerZ) {

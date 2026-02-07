@@ -140,6 +140,7 @@ private:
     void renderQuestDetailsWindow(game::GameHandler& gameHandler);
     void renderVendorWindow(game::GameHandler& gameHandler);
     void renderTeleporterPanel();
+    void renderDeathScreen(game::GameHandler& gameHandler);
     void renderEscapeMenu();
     void renderSettingsWindow();
 
