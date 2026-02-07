@@ -720,8 +720,14 @@ void GameScreen::renderPlayerFrame(game::GameHandler& gameHandler) {
         uint32_t playerMaxHp = 100;
 
         const auto& characters = gameHandler.getCharacters();
-        if (!characters.empty()) {
-            const auto& ch = characters[0];
+        uint64_t activeGuid = gameHandler.getActiveCharacterGuid();
+        const game::Character* activeChar = nullptr;
+        for (const auto& c : characters) {
+            if (c.guid == activeGuid) { activeChar = &c; break; }
+        }
+        if (!activeChar && !characters.empty()) activeChar = &characters[0];
+        if (activeChar) {
+            const auto& ch = *activeChar;
             playerName = ch.name;
             // Use live server level if available, otherwise character struct
             playerLevel = gameHandler.getPlayerLevel();
@@ -1510,7 +1516,7 @@ void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
             }
 
             bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
-            bool hoveredOnRelease = ImGui::IsItemHovered() &&
+            bool hoveredOnRelease = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
                                     ImGui::IsMouseReleased(ImGuiMouseButton_Left);
 
             // Drop dragged spell from spellbook onto this slot

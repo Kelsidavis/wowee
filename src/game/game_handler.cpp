@@ -806,6 +806,8 @@ void GameHandler::disconnect() {
         socket.reset();
     }
     activeCharacterGuid_ = 0;
+    playerNameCache.clear();
+    pendingNameQueries.clear();
     setState(WorldState::DISCONNECTED);
     LOG_INFO("Disconnected from world server");
 }
