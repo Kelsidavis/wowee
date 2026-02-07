@@ -364,7 +364,7 @@ public:
     void openVendor(uint64_t npcGuid);
     void closeVendor();
     void buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint8_t count);
-    void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint8_t count);
+    void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void autoEquipItemBySlot(int backpackIndex);
     void useItemBySlot(int backpackIndex);

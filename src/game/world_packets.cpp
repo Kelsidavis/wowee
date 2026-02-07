@@ -2104,11 +2104,11 @@ network::Packet BuyItemPacket::build(uint64_t vendorGuid, uint32_t itemId, uint3
     return packet;
 }
 
-network::Packet SellItemPacket::build(uint64_t vendorGuid, uint64_t itemGuid, uint8_t count) {
+network::Packet SellItemPacket::build(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count) {
     network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SELL_ITEM));
     packet.writeUInt64(vendorGuid);
     packet.writeUInt64(itemGuid);
-    packet.writeUInt8(count);
+    packet.writeUInt32(count);
     return packet;
 }
 

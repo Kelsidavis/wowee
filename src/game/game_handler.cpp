@@ -1183,9 +1183,49 @@ void GameHandler::handlePacket(network::Packet& packet) {
         }
         case Opcode::SMSG_LOOT_CLEAR_MONEY:
         case Opcode::SMSG_NPC_TEXT_UPDATE:
-        case Opcode::SMSG_SELL_ITEM:
+            break;
+        case Opcode::SMSG_SELL_ITEM: {
+            // uint64 vendorGuid, uint64 itemGuid, uint8 result
+            if ((packet.getSize() - packet.getReadPos()) >= 17) {
+                packet.readUInt64(); // vendorGuid
+                packet.readUInt64(); // itemGuid
+                uint8_t result = packet.readUInt8();
+                if (result != 0) {
+                    static const char* sellErrors[] = {
+                        "OK", "Can't find item", "Can't sell item",
+                        "Can't find vendor", "You don't own that item",
+                        "Unknown error", "Only empty bag"
+                    };
+                    const char* msg = (result < 7) ? sellErrors[result] : "Unknown sell error";
+                    addSystemChatMessage(std::string("Sell failed: ") + msg);
+                    LOG_WARNING("SMSG_SELL_ITEM error: ", (int)result, " (", msg, ")");
+                }
+            }
+            break;
+        }
+        case Opcode::SMSG_INVENTORY_CHANGE_FAILURE: {
+            if ((packet.getSize() - packet.getReadPos()) >= 1) {
+                uint8_t error = packet.readUInt8();
+                if (error != 0) {
+                    LOG_WARNING("SMSG_INVENTORY_CHANGE_FAILURE: error=", (int)error);
+                    // Common error codes
+                    std::string msg;
+                    switch (error) {
+                        case 1: msg = "Item slots occupied."; break;
+                        case 4: msg = "Item doesn't go there."; break;
+                        case 5: msg = "Bag is full."; break;
+                        case 14: msg = "Can't equip that."; break;
+                        case 23: msg = "Can't equip with two-handed weapon."; break;
+                        case 26: msg = "Inventory full."; break;
+                        case 29: msg = "Item is locked."; break;
+                        default: msg = "Inventory error (" + std::to_string(error) + ")."; break;
+                    }
+                    addSystemChatMessage(msg);
+                }
+            }
+            break;
+        }
         case Opcode::SMSG_BUY_FAILED:
-        case Opcode::SMSG_INVENTORY_CHANGE_FAILURE:
         case Opcode::SMSG_GAMEOBJECT_QUERY_RESPONSE:
         case Opcode::MSG_RAID_TARGET_UPDATE:
         case Opcode::SMSG_QUESTGIVER_STATUS:
@@ -2635,7 +2675,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                 if (ch.guid == playerGuid) { ch.level = val; break; }
                             }
                         }
-                        else if (key == 632) { playerMoneyCopper_ = val; }  // PLAYER_FIELD_COINAGE
+                        else if (key == 1219) { playerMoneyCopper_ = val; }  // PLAYER_FIELD_COINAGE
                     }
                     if (applyInventoryFields(block.fields)) slotsChanged = true;
                     if (slotsChanged) rebuildOnlineInventory();
@@ -2728,7 +2768,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                     }
                                 }
                             }
-                            else if (key == 632) {
+                            else if (key == 1219) {
                                 playerMoneyCopper_ = val;
                                 LOG_INFO("Money updated via VALUES: ", val, " copper");
                             }
@@ -4072,7 +4112,7 @@ void GameHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, u
     socket->send(packet);
 }
 
-void GameHandler::sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint8_t count) {
+void GameHandler::sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count) {
     if (state != WorldState::IN_WORLD || !socket) return;
     auto packet = SellItemPacket::build(vendorGuid, itemGuid, count);
     socket->send(packet);
@@ -4099,10 +4139,17 @@ void GameHandler::sellItemBySlot(int backpackIndex) {
         if (itemGuid == 0) {
             itemGuid = resolveOnlineItemGuid(slot.item.itemId);
         }
+        LOG_DEBUG("sellItemBySlot: slot=", backpackIndex,
+                  " item=", slot.item.name,
+                  " itemGuid=0x", std::hex, itemGuid, std::dec,
+                  " vendorGuid=0x", std::hex, currentVendorItems.vendorGuid, std::dec);
         if (itemGuid != 0 && currentVendorItems.vendorGuid != 0) {
             sellItem(currentVendorItems.vendorGuid, itemGuid, 1);
         } else if (itemGuid == 0) {
+            addSystemChatMessage("Cannot sell: item not found in inventory.");
             LOG_WARNING("Sell failed: missing item GUID for slot ", backpackIndex);
+        } else {
+            addSystemChatMessage("Cannot sell: no vendor.");
         }
     }
 }

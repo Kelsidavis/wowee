@@ -1277,7 +1277,7 @@ public:
 /** CMSG_SELL_ITEM packet builder */
 class SellItemPacket {
 public:
-    static network::Packet build(uint64_t vendorGuid, uint64_t itemGuid, uint8_t count);
+    static network::Packet build(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
 };
 
 /** SMSG_LIST_INVENTORY parser */

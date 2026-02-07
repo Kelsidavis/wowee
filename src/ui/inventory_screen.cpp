@@ -1084,6 +1084,10 @@ void InventoryScreen::renderItemSlot(game::Inventory& inventory, const game::Ite
 
         // Right-click: vendor sell (if vendor mode) or auto-equip/unequip
         if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !holdingItem) {
+            LOG_DEBUG("Right-click slot: kind=", (int)kind,
+                      " backpackIndex=", backpackIndex,
+                      " vendorMode=", vendorMode_,
+                      " hasHandler=", (gameHandler_ != nullptr));
             if (vendorMode_ && gameHandler_ && kind == SlotKind::BACKPACK && backpackIndex >= 0) {
                 // Sell to vendor
                 gameHandler_->sellItemBySlot(backpackIndex);
