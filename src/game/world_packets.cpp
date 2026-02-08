@@ -2682,9 +2682,10 @@ bool TrainerListParser::parse(network::Packet& packet, TrainerListData& data) {
     return true;
 }
 
-network::Packet TrainerBuySpellPacket::build(uint64_t trainerGuid, uint32_t spellId) {
+network::Packet TrainerBuySpellPacket::build(uint64_t trainerGuid, uint32_t trainerId, uint32_t spellId) {
     network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_TRAINER_BUY_SPELL));
     packet.writeUInt64(trainerGuid);
+    packet.writeUInt32(trainerId);
     packet.writeUInt32(spellId);
     return packet;
 }

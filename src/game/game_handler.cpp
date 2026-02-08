@@ -4582,7 +4582,10 @@ void GameHandler::handleTrainerList(network::Packet& packet) {
 
 void GameHandler::trainSpell(uint32_t spellId) {
     if (state != WorldState::IN_WORLD || !socket) return;
-    auto packet = TrainerBuySpellPacket::build(currentTrainerList_.trainerGuid, spellId);
+    auto packet = TrainerBuySpellPacket::build(
+        currentTrainerList_.trainerGuid,
+        currentTrainerList_.trainerType,
+        spellId);
     socket->send(packet);
 }
 

@@ -3566,8 +3566,10 @@ void GameScreen::renderTrainerWindow(game::GameHandler& gameHandler) {
             // Known spells for checking
             const auto& knownSpells = gameHandler.getKnownSpells();
             auto isKnown = [&](uint32_t id) {
+                if (id == 0) return true;
                 return std::find(knownSpells.begin(), knownSpells.end(), id) != knownSpells.end();
             };
+            uint32_t playerLevel = gameHandler.getPlayerLevel();
 
             // Renders spell rows into the current table
             auto renderSpellRows = [&](const std::vector<const game::TrainerSpell*>& spells) {
@@ -3575,12 +3577,19 @@ void GameScreen::renderTrainerWindow(game::GameHandler& gameHandler) {
                     ImGui::TableNextRow();
                     ImGui::PushID(static_cast<int>(spell->spellId));
 
+                    // Check prerequisites client-side
+                    bool prereqsMet = isKnown(spell->chainNode1)
+                                   && isKnown(spell->chainNode2)
+                                   && isKnown(spell->chainNode3);
+                    bool levelMet = (spell->reqLevel == 0 || playerLevel >= spell->reqLevel);
+                    bool alreadyKnown = (spell->state == 0) || isKnown(spell->spellId);
+
                     ImVec4 color;
                     const char* statusLabel;
-                    if (spell->state == 0 || isKnown(spell->spellId)) {
+                    if (alreadyKnown) {
                         color = ImVec4(0.3f, 0.9f, 0.3f, 1.0f);
                         statusLabel = "Known";
-                    } else if (spell->state == 1) {
+                    } else if (spell->state == 1 && prereqsMet && levelMet) {
                         color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
                         statusLabel = "Available";
                     } else {
@@ -3608,13 +3617,24 @@ void GameScreen::renderTrainerWindow(game::GameHandler& gameHandler) {
                             if (!rank.empty()) ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", rank.c_str());
                         }
                         ImGui::Text("Status: %s", statusLabel);
-                        if (spell->reqLevel > 0) ImGui::Text("Required Level: %u", spell->reqLevel);
-                        if (spell->reqSkill > 0) ImGui::Text("Required Skill: %u (value %u)", spell->reqSkill, spell->reqSkillValue);
-                        if (spell->chainNode1 > 0) {
-                            const std::string& prereq = gameHandler.getSpellName(spell->chainNode1);
-                            if (!prereq.empty()) ImGui::Text("Requires: %s", prereq.c_str());
-                            else ImGui::Text("Requires: Spell #%u", spell->chainNode1);
+                        if (spell->reqLevel > 0) {
+                            ImVec4 lvlColor = levelMet ? ImVec4(0.7f, 0.7f, 0.7f, 1.0f) : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+                            ImGui::TextColored(lvlColor, "Required Level: %u", spell->reqLevel);
                         }
+                        if (spell->reqSkill > 0) ImGui::Text("Required Skill: %u (value %u)", spell->reqSkill, spell->reqSkillValue);
+                        auto showPrereq = [&](uint32_t node) {
+                            if (node == 0) return;
+                            bool met = isKnown(node);
+                            const std::string& pname = gameHandler.getSpellName(node);
+                            ImVec4 pcolor = met ? ImVec4(0.3f, 0.9f, 0.3f, 1.0f) : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+                            if (!pname.empty())
+                                ImGui::TextColored(pcolor, "Requires: %s%s", pname.c_str(), met ? " (known)" : "");
+                            else
+                                ImGui::TextColored(pcolor, "Requires: Spell #%u%s", node, met ? " (known)" : "");
+                        };
+                        showPrereq(spell->chainNode1);
+                        showPrereq(spell->chainNode2);
+                        showPrereq(spell->chainNode3);
                         ImGui::EndTooltip();
                     }
 
@@ -3635,9 +3655,11 @@ void GameScreen::renderTrainerWindow(game::GameHandler& gameHandler) {
                         ImGui::TextColored(color, "Free");
                     }
 
-                    // Train button
+                    // Train button - only enabled if available, affordable, prereqs met
                     ImGui::TableSetColumnIndex(3);
-                    bool canTrain = (spell->state == 1) && (money >= spell->spellCost);
+                    bool canTrain = !alreadyKnown && spell->state == 1
+                                  && prereqsMet && levelMet
+                                  && (money >= spell->spellCost);
                     if (!canTrain) ImGui::BeginDisabled();
                     if (ImGui::SmallButton("Train")) {
                         gameHandler.trainSpell(spell->spellId);

@@ -1749,7 +1749,7 @@ public:
 
 class TrainerBuySpellPacket {
 public:
-    static network::Packet build(uint64_t trainerGuid, uint32_t spellId);
+    static network::Packet build(uint64_t trainerGuid, uint32_t trainerId, uint32_t spellId);
 };
 
 // ============================================================
