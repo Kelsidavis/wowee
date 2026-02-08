@@ -662,8 +662,10 @@ void GameHandler::handlePacket(network::Packet& packet) {
             break;
         }
         case Opcode::SMSG_BUY_FAILED:
-        case Opcode::SMSG_GAMEOBJECT_QUERY_RESPONSE:
         case Opcode::MSG_RAID_TARGET_UPDATE:
+            break;
+        case Opcode::SMSG_GAMEOBJECT_QUERY_RESPONSE:
+            handleGameObjectQueryResponse(packet);
             break;
         case Opcode::SMSG_QUESTGIVER_STATUS: {
             // uint64 npcGuid + uint8 status
@@ -731,9 +733,18 @@ void GameHandler::handlePacket(network::Packet& packet) {
         case Opcode::MSG_MOVE_TELEPORT_ACK:
             handleTeleportAck(packet);
             break;
-        case Opcode::SMSG_TRANSFER_PENDING:
-            LOG_INFO("SMSG_TRANSFER_PENDING received - map transfer incoming");
+        case Opcode::SMSG_TRANSFER_PENDING: {
+            // SMSG_TRANSFER_PENDING: uint32 mapId, then optional transport data
+            uint32_t pendingMapId = packet.readUInt32();
+            LOG_INFO("SMSG_TRANSFER_PENDING: mapId=", pendingMapId);
+            // Optional: if remaining data, there's a transport entry + mapId
+            if (packet.getReadPos() + 8 <= packet.getSize()) {
+                uint32_t transportEntry = packet.readUInt32();
+                uint32_t transportMapId = packet.readUInt32();
+                LOG_INFO("  Transport entry=", transportEntry, " transportMapId=", transportMapId);
+            }
             break;
+        }
 
         // ---- Taxi / Flight Paths ----
         case Opcode::SMSG_SHOWTAXINODES:
@@ -1356,6 +1367,11 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     gameObjectDespawnCallback_(guid);
                 }
             }
+            transportGuids_.erase(guid);
+            if (playerTransportGuid_ == guid) {
+                playerTransportGuid_ = 0;
+                playerTransportOffset_ = glm::vec3(0.0f);
+            }
             entityManager.removeEntity(guid);
         }
     }
@@ -1399,6 +1415,21 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     LOG_DEBUG("  Position: (", pos.x, ", ", pos.y, ", ", pos.z, ")");
                     if (block.guid == playerGuid && block.runSpeed > 0.1f && block.runSpeed < 100.0f) {
                         serverRunSpeed_ = block.runSpeed;
+                    }
+                    // Track player-on-transport state
+                    if (block.guid == playerGuid) {
+                        if (block.onTransport) {
+                            playerTransportGuid_ = block.transportGuid;
+                            playerTransportOffset_ = glm::vec3(block.transportX, block.transportY, block.transportZ);
+                            LOG_INFO("Player on transport: 0x", std::hex, playerTransportGuid_, std::dec,
+                                     " offset=(", playerTransportOffset_.x, ", ", playerTransportOffset_.y, ", ", playerTransportOffset_.z, ")");
+                        } else {
+                            if (playerTransportGuid_ != 0) {
+                                LOG_INFO("Player left transport");
+                            }
+                            playerTransportGuid_ = 0;
+                            playerTransportOffset_ = glm::vec3(0.0f);
+                        }
                     }
                 }
 
@@ -1501,15 +1532,37 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                         }
                     }
                 }
-                // Extract displayId for gameobjects (3.3.5a: GAMEOBJECT_DISPLAYID = field 8)
+                // Extract displayId and entry for gameobjects (3.3.5a: GAMEOBJECT_DISPLAYID = field 8)
                 if (block.objectType == ObjectType::GAMEOBJECT) {
                     auto go = std::static_pointer_cast<GameObject>(entity);
                     auto itDisp = block.fields.find(8);
                     if (itDisp != block.fields.end()) {
                         go->setDisplayId(itDisp->second);
                     }
+                    // Extract entry and query name (OBJECT_FIELD_ENTRY = index 3)
+                    auto itEntry = block.fields.find(3);
+                    if (itEntry != block.fields.end() && itEntry->second != 0) {
+                        go->setEntry(itEntry->second);
+                        auto cacheIt = gameObjectInfoCache_.find(itEntry->second);
+                        if (cacheIt != gameObjectInfoCache_.end()) {
+                            go->setName(cacheIt->second.name);
+                        }
+                        queryGameObjectInfo(itEntry->second, block.guid);
+                    }
+                    // Detect transport GameObjects via UPDATEFLAG_TRANSPORT (0x0002)
+                    if (block.updateFlags & 0x0002) {
+                        transportGuids_.insert(block.guid);
+                        LOG_INFO("Detected transport GameObject: 0x", std::hex, block.guid, std::dec,
+                                 " displayId=", go->getDisplayId(),
+                                 " pos=(", go->getX(), ", ", go->getY(), ", ", go->getZ(), ")");
+                    }
                     if (go->getDisplayId() != 0 && gameObjectSpawnCallback_) {
                         gameObjectSpawnCallback_(block.guid, go->getDisplayId(),
+                            go->getX(), go->getY(), go->getZ(), go->getOrientation());
+                    }
+                    // Fire transport move callback for transports (position update on re-creation)
+                    if (transportGuids_.count(block.guid) && transportMoveCallback_) {
+                        transportMoveCallback_(block.guid,
                             go->getX(), go->getY(), go->getZ(), go->getOrientation());
                     }
                 }
@@ -1724,6 +1777,11 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
                     entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
                     LOG_DEBUG("Updated entity position: 0x", std::hex, block.guid, std::dec);
+
+                    // Fire transport move callback if this is a known transport
+                    if (transportGuids_.count(block.guid) && transportMoveCallback_) {
+                        transportMoveCallback_(block.guid, pos.x, pos.y, pos.z, block.orientation);
+                    }
                 } else {
                     LOG_WARNING("MOVEMENT update for unknown entity: 0x", std::hex, block.guid, std::dec);
                 }
@@ -2454,7 +2512,19 @@ void GameHandler::togglePvp() {
 
     auto packet = TogglePvpPacket::build();
     socket->send(packet);
-    addSystemChatMessage("PvP flag toggled.");
+    // Check current PVP state from player's UNIT_FIELD_FLAGS (index 59)
+    // UNIT_FLAG_PVP = 0x00001000
+    auto entity = entityManager.getEntity(playerGuid);
+    bool currentlyPvp = false;
+    if (entity) {
+        currentlyPvp = (entity->getField(59) & 0x00001000) != 0;
+    }
+    // We're toggling, so report the NEW state
+    if (currentlyPvp) {
+        addSystemChatMessage("PvP flag disabled.");
+    } else {
+        addSystemChatMessage("PvP flag enabled.");
+    }
     LOG_INFO("Toggled PvP flag");
 }
 
@@ -2939,6 +3009,15 @@ void GameHandler::queryCreatureInfo(uint32_t entry, uint64_t guid) {
     socket->send(packet);
 }
 
+void GameHandler::queryGameObjectInfo(uint32_t entry, uint64_t guid) {
+    if (gameObjectInfoCache_.count(entry) || pendingGameObjectQueries_.count(entry)) return;
+    if (state != WorldState::IN_WORLD || !socket) return;
+
+    pendingGameObjectQueries_.insert(entry);
+    auto packet = GameObjectQueryPacket::build(entry, guid);
+    socket->send(packet);
+}
+
 std::string GameHandler::getCachedPlayerName(uint64_t guid) const {
     auto it = playerNameCache.find(guid);
     return (it != playerNameCache.end()) ? it->second : "";
@@ -2980,6 +3059,30 @@ void GameHandler::handleCreatureQueryResponse(network::Packet& packet) {
                 auto unit = std::static_pointer_cast<Unit>(entity);
                 if (unit->getEntry() == data.entry) {
                     unit->setName(data.name);
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+// GameObject Query
+// ============================================================
+
+void GameHandler::handleGameObjectQueryResponse(network::Packet& packet) {
+    GameObjectQueryResponseData data;
+    if (!GameObjectQueryResponseParser::parse(packet, data)) return;
+
+    pendingGameObjectQueries_.erase(data.entry);
+
+    if (data.isValid()) {
+        gameObjectInfoCache_[data.entry] = data;
+        // Update all gameobject entities with this entry
+        for (auto& [guid, entity] : entityManager.getEntities()) {
+            if (entity->getType() == ObjectType::GAMEOBJECT) {
+                auto go = std::static_pointer_cast<GameObject>(entity);
+                if (go->getEntry() == data.entry) {
+                    go->setName(data.name);
                 }
             }
         }
@@ -3959,9 +4062,6 @@ void GameHandler::interactWithGameObject(uint64_t guid) {
     if (state != WorldState::IN_WORLD || !socket) return;
     auto packet = GameObjectUsePacket::build(guid);
     socket->send(packet);
-    // Many lootable chests require a loot request after use.
-    auto loot = LootPacket::build(guid);
-    socket->send(loot);
 }
 
 void GameHandler::selectGossipOption(uint32_t optionId) {

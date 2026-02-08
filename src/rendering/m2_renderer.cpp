@@ -2148,6 +2148,21 @@ void M2Renderer::renderSmokeParticles(const Camera& /*camera*/, const glm::mat4&
     glEnable(GL_CULL_FACE);
 }
 
+void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& position) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    inst.position = position;
+    inst.updateModelMatrix();
+    auto modelIt = models.find(inst.modelId);
+    if (modelIt != models.end()) {
+        glm::vec3 localMin, localMax;
+        getTightCollisionBounds(modelIt->second, localMin, localMax);
+        transformAABB(inst.modelMatrix, localMin, localMax, inst.worldBoundsMin, inst.worldBoundsMax);
+    }
+    rebuildSpatialIndex();
+}
+
 void M2Renderer::removeInstance(uint32_t instanceId) {
     for (auto it = instances.begin(); it != instances.end(); ++it) {
         if (it->id == instanceId) {

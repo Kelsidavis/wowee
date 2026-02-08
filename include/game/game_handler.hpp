@@ -5,6 +5,7 @@
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
+#include <glm/glm.hpp>
 #include <memory>
 #include <string>
 #include <vector>
@@ -297,6 +298,7 @@ public:
     // ---- Phase 1: Name queries ----
     void queryPlayerName(uint64_t guid);
     void queryCreatureInfo(uint32_t entry, uint64_t guid);
+    void queryGameObjectInfo(uint32_t entry, uint64_t guid);
     std::string getCachedPlayerName(uint64_t guid) const;
     std::string getCachedCreatureName(uint32_t entry) const;
 
@@ -394,6 +396,16 @@ public:
     // Parameters: guid, x, y, z (canonical), duration_ms (0 = instant)
     using CreatureMoveCallback = std::function<void(uint64_t guid, float x, float y, float z, uint32_t durationMs)>;
     void setCreatureMoveCallback(CreatureMoveCallback cb) { creatureMoveCallback_ = std::move(cb); }
+
+    // Transport move callback (online mode - triggered when transport position updates)
+    // Parameters: guid, x, y, z (canonical), orientation
+    using TransportMoveCallback = std::function<void(uint64_t guid, float x, float y, float z, float orientation)>;
+    void setTransportMoveCallback(TransportMoveCallback cb) { transportMoveCallback_ = std::move(cb); }
+
+    // Transport state for player-on-transport
+    bool isOnTransport() const { return playerTransportGuid_ != 0; }
+    uint64_t getPlayerTransportGuid() const { return playerTransportGuid_; }
+    glm::vec3 getPlayerTransportOffset() const { return playerTransportOffset_; }
 
     // Cooldowns
     float getSpellCooldown(uint32_t spellId) const;
@@ -600,6 +612,7 @@ private:
     // ---- Phase 1 handlers ----
     void handleNameQueryResponse(network::Packet& packet);
     void handleCreatureQueryResponse(network::Packet& packet);
+    void handleGameObjectQueryResponse(network::Packet& packet);
     void handleItemQueryResponse(network::Packet& packet);
     void queryItemInfo(uint32_t entry, uint64_t guid);
     void rebuildOnlineInventory();
@@ -766,6 +779,8 @@ private:
     std::unordered_set<uint64_t> pendingNameQueries;
     std::unordered_map<uint32_t, CreatureQueryResponseData> creatureInfoCache;
     std::unordered_set<uint32_t> pendingCreatureQueries;
+    std::unordered_map<uint32_t, GameObjectQueryResponseData> gameObjectInfoCache_;
+    std::unordered_set<uint32_t> pendingGameObjectQueries_;
 
     // ---- Friend list cache ----
     std::unordered_map<std::string, uint64_t> friendsCache;  // name -> guid
@@ -818,8 +833,14 @@ private:
     CreatureSpawnCallback creatureSpawnCallback_;
     CreatureDespawnCallback creatureDespawnCallback_;
     CreatureMoveCallback creatureMoveCallback_;
+    TransportMoveCallback transportMoveCallback_;
     GameObjectSpawnCallback gameObjectSpawnCallback_;
     GameObjectDespawnCallback gameObjectDespawnCallback_;
+
+    // Transport tracking
+    std::unordered_set<uint64_t> transportGuids_;  // GUIDs of known transport GameObjects
+    uint64_t playerTransportGuid_ = 0;             // Transport the player is riding (0 = none)
+    glm::vec3 playerTransportOffset_ = glm::vec3(0.0f); // Player offset on transport
     std::vector<uint32_t> knownSpells;
     std::unordered_map<uint32_t, float> spellCooldowns;    // spellId -> remaining seconds
     uint8_t castCount = 0;

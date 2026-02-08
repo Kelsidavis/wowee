@@ -624,6 +624,7 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
 
     // Update flags (3.3.5a uses 2 bytes for flags)
     uint16_t updateFlags = packet.readUInt16();
+    block.updateFlags = updateFlags;
 
     LOG_DEBUG("  UpdateFlags: 0x", std::hex, updateFlags, std::dec);
 
@@ -667,13 +668,17 @@ bool UpdateObjectParser::parseMovementBlock(network::Packet& packet, UpdateBlock
 
         // Transport data (if on transport)
         if (moveFlags & 0x00000200) { // MOVEMENTFLAG_ONTRANSPORT
-            /*uint64_t transportGuid =*/ readPackedGuid(packet);
-            /*float tX =*/ packet.readFloat();
-            /*float tY =*/ packet.readFloat();
-            /*float tZ =*/ packet.readFloat();
-            /*float tO =*/ packet.readFloat();
+            block.onTransport = true;
+            block.transportGuid = readPackedGuid(packet);
+            block.transportX = packet.readFloat();
+            block.transportY = packet.readFloat();
+            block.transportZ = packet.readFloat();
+            block.transportO = packet.readFloat();
             /*uint32_t tTime =*/ packet.readUInt32();
             /*int8_t tSeat =*/ packet.readUInt8();
+
+            LOG_DEBUG("  OnTransport: guid=0x", std::hex, block.transportGuid, std::dec,
+                      " offset=(", block.transportX, ", ", block.transportY, ", ", block.transportZ, ")");
 
             if (moveFlags2 & 0x0200) { // MOVEMENTFLAG2_INTERPOLATED_MOVEMENT
                 /*uint32_t tTime2 =*/ packet.readUInt32();
@@ -1584,6 +1589,40 @@ bool CreatureQueryResponseParser::parse(network::Packet& packet, CreatureQueryRe
     return true;
 }
 
+// ---- GameObject Query ----
+
+network::Packet GameObjectQueryPacket::build(uint32_t entry, uint64_t guid) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GAMEOBJECT_QUERY));
+    packet.writeUInt32(entry);
+    packet.writeUInt64(guid);
+    LOG_DEBUG("Built CMSG_GAMEOBJECT_QUERY: entry=", entry, " guid=0x", std::hex, guid, std::dec);
+    return packet;
+}
+
+bool GameObjectQueryResponseParser::parse(network::Packet& packet, GameObjectQueryResponseData& data) {
+    data.entry = packet.readUInt32();
+
+    // High bit set means gameobject not found
+    if (data.entry & 0x80000000) {
+        data.entry &= ~0x80000000;
+        LOG_DEBUG("GameObject query: entry ", data.entry, " not found");
+        data.name = "";
+        return true;
+    }
+
+    data.type = packet.readUInt32();       // GameObjectType
+    /*uint32_t displayId =*/ packet.readUInt32();
+    // 4 name strings (only first is usually populated)
+    data.name = packet.readString();
+    // name2, name3, name4
+    packet.readString();
+    packet.readString();
+    packet.readString();
+
+    LOG_INFO("GameObject query response: ", data.name, " (type=", data.type, " entry=", data.entry, ")");
+    return true;
+}
+
 // ---- Item Query ----
 
 network::Packet ItemQueryPacket::build(uint32_t entry, uint64_t guid) {
@@ -2229,9 +2268,8 @@ network::Packet UseItemPacket::build(uint8_t bagIndex, uint8_t slotIndex, uint64
     network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_USE_ITEM));
     packet.writeUInt8(bagIndex);
     packet.writeUInt8(slotIndex);
-    packet.writeUInt8(0); // spell index
-    packet.writeUInt8(0); // cast count
-    packet.writeUInt32(0); // spell id (unused)
+    packet.writeUInt8(0);  // cast count
+    packet.writeUInt32(0); // spell id
     packet.writeUInt64(itemGuid);
     packet.writeUInt32(0); // glyph index
     packet.writeUInt8(0);  // cast flags

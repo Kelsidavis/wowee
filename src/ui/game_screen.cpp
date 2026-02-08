@@ -46,6 +46,9 @@ namespace {
         } else if (entity->getType() == wowee::game::ObjectType::UNIT) {
             auto unit = std::static_pointer_cast<wowee::game::Unit>(entity);
             if (!unit->getName().empty()) return unit->getName();
+        } else if (entity->getType() == wowee::game::ObjectType::GAMEOBJECT) {
+            auto go = std::static_pointer_cast<wowee::game::GameObject>(entity);
+            if (!go->getName().empty()) return go->getName();
         }
         return "Unknown";
     }

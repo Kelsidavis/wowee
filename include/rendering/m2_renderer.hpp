@@ -209,6 +209,13 @@ public:
     void renderM2Particles(const glm::mat4& view, const glm::mat4& proj);
 
     /**
+     * Update the world position of an existing instance (e.g., for transports)
+     * @param instanceId Instance ID returned by createInstance()
+     * @param position New world position
+     */
+    void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
+
+    /**
      * Remove a specific instance by ID
      * @param instanceId Instance ID returned by createInstance()
      */

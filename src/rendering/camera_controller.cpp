@@ -453,16 +453,16 @@ void CameraController::update(float deltaTime) {
                     if (wmoRenderer) {
                         glm::vec3 adjusted;
                         if (wmoRenderer->checkWallCollision(stepPos, candidate, adjusted)) {
-                            // Before blocking, check if there's a floor at the
-                            // destination above current feet (stair step-up).
+                            // Before blocking, check if there's a walkable floor at the
+                            // destination (stair step-up or ramp continuation).
                             float feetZ = stepPos.z;
                             float probeZ = feetZ + 2.5f;
                             auto floorH = wmoRenderer->getFloorHeight(
                                 candidate.x, candidate.y, probeZ);
-                            bool isStair = floorH &&
-                                           *floorH > feetZ + 0.1f &&
-                                           *floorH <= feetZ + 1.6f;
-                            if (!isStair) {
+                            bool walkable = floorH &&
+                                            *floorH >= feetZ - 0.5f &&
+                                            *floorH <= feetZ + 1.6f;
+                            if (!walkable) {
                                 candidate.x = adjusted.x;
                                 candidate.y = adjusted.y;
                             }

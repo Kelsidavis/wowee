@@ -451,6 +451,14 @@ struct UpdateBlock {
     float x = 0.0f, y = 0.0f, z = 0.0f, orientation = 0.0f;
     float runSpeed = 0.0f;
 
+    // Update flags from movement block (for detecting transports, etc.)
+    uint16_t updateFlags = 0;
+
+    // Transport data from LIVING movement block (MOVEMENTFLAG_ONTRANSPORT)
+    bool onTransport = false;
+    uint64_t transportGuid = 0;
+    float transportX = 0.0f, transportY = 0.0f, transportZ = 0.0f, transportO = 0.0f;
+
     // Field data (for VALUES and CREATE updates)
     std::map<uint16_t, uint32_t> fields;
 };
@@ -1048,6 +1056,31 @@ struct CreatureQueryResponseData {
 class CreatureQueryResponseParser {
 public:
     static bool parse(network::Packet& packet, CreatureQueryResponseData& data);
+};
+
+// ============================================================
+// GameObject Query
+// ============================================================
+
+/** CMSG_GAMEOBJECT_QUERY packet builder */
+class GameObjectQueryPacket {
+public:
+    static network::Packet build(uint32_t entry, uint64_t guid);
+};
+
+/** SMSG_GAMEOBJECT_QUERY_RESPONSE data */
+struct GameObjectQueryResponseData {
+    uint32_t entry = 0;
+    std::string name;
+    uint32_t type = 0;       // GameObjectType (e.g. 3=chest, 2=questgiver)
+
+    bool isValid() const { return entry != 0 && !name.empty(); }
+};
+
+/** SMSG_GAMEOBJECT_QUERY_RESPONSE parser */
+class GameObjectQueryResponseParser {
+public:
+    static bool parse(network::Packet& packet, GameObjectQueryResponseData& data);
 };
 
 // ============================================================

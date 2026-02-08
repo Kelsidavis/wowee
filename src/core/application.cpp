@@ -606,6 +606,39 @@ void Application::setupUICallbacks() {
         }
     });
 
+    // Transport move callback (online mode) - update transport gameobject positions
+    gameHandler->setTransportMoveCallback([this](uint64_t guid, float x, float y, float z, float /*orientation*/) {
+        auto it = gameObjectInstances_.find(guid);
+        if (it == gameObjectInstances_.end()) return;
+        glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
+        if (renderer) {
+            if (it->second.isWmo) {
+                if (auto* wmoRenderer = renderer->getWMORenderer()) {
+                    wmoRenderer->setInstancePosition(it->second.instanceId, renderPos);
+                }
+            } else {
+                if (auto* m2Renderer = renderer->getM2Renderer()) {
+                    m2Renderer->setInstancePosition(it->second.instanceId, renderPos);
+                }
+            }
+
+            // Move player with transport if riding it
+            if (gameHandler && gameHandler->isOnTransport() && gameHandler->getPlayerTransportGuid() == guid) {
+                auto* cc = renderer->getCameraController();
+                if (cc) {
+                    glm::vec3* ft = cc->getFollowTargetMutable();
+                    if (ft) {
+                        // Transport offset is in server/canonical coords — convert to render
+                        glm::vec3 offset = gameHandler->getPlayerTransportOffset();
+                        glm::vec3 canonicalPlayerPos = glm::vec3(x + offset.x, y + offset.y, z + offset.z);
+                        glm::vec3 playerRenderPos = core::coords::canonicalToRender(canonicalPlayerPos);
+                        *ft = playerRenderPos;
+                    }
+                }
+            }
+        }
+    });
+
     // NPC death callback (online mode) - play death animation
     gameHandler->setNpcDeathCallback([this](uint64_t guid) {
         auto it = creatureInstances_.find(guid);
@@ -2202,7 +2235,21 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t displayId, float
     }
     if (!gameObjectLookupsBuilt_) return;
 
-    if (gameObjectInstances_.count(guid)) return;
+    if (gameObjectInstances_.count(guid)) {
+        // Already have a render instance — update its position (e.g. transport re-creation)
+        auto& info = gameObjectInstances_[guid];
+        glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
+        if (renderer) {
+            if (info.isWmo) {
+                if (auto* wr = renderer->getWMORenderer())
+                    wr->setInstancePosition(info.instanceId, renderPos);
+            } else {
+                if (auto* mr = renderer->getM2Renderer())
+                    mr->setInstancePosition(info.instanceId, renderPos);
+            }
+        }
+        return;
+    }
 
     std::string modelPath = getGameObjectModelPathForDisplayId(displayId);
     if (modelPath.empty()) {
@@ -2218,6 +2265,7 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t displayId, float
     glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
     float renderYaw = orientation + glm::radians(90.0f);
 
+    bool loadedAsWmo = false;
     if (isWmo) {
         auto* wmoRenderer = renderer->getWMORenderer();
         if (!wmoRenderer) return;
@@ -2226,62 +2274,84 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t displayId, float
         auto itCache = gameObjectDisplayIdWmoCache_.find(displayId);
         if (itCache != gameObjectDisplayIdWmoCache_.end()) {
             modelId = itCache->second;
+            loadedAsWmo = true;
         } else {
-            modelId = nextGameObjectWmoModelId_++;
             auto wmoData = assetManager->readFile(modelPath);
-            if (wmoData.empty()) {
-                LOG_WARNING("Failed to read gameobject WMO: ", modelPath);
-                return;
-            }
+            if (!wmoData.empty()) {
+                pipeline::WMOModel wmoModel = pipeline::WMOLoader::load(wmoData);
+                LOG_INFO("Gameobject WMO root loaded: ", modelPath, " nGroups=", wmoModel.nGroups);
+                int loadedGroups = 0;
+                if (wmoModel.nGroups > 0) {
+                    std::string basePath = modelPath;
+                    std::string extension;
+                    if (basePath.size() > 4) {
+                        extension = basePath.substr(basePath.size() - 4);
+                        std::string extLower = extension;
+                        for (char& c : extLower) c = static_cast<char>(std::tolower(c));
+                        if (extLower == ".wmo") {
+                            basePath = basePath.substr(0, basePath.size() - 4);
+                        }
+                    }
 
-            pipeline::WMOModel wmoModel = pipeline::WMOLoader::load(wmoData);
-            if (wmoModel.nGroups > 0) {
-                std::string basePath = modelPath;
-                std::string extension;
-                if (basePath.size() > 4) {
-                    extension = basePath.substr(basePath.size() - 4);
-                    std::string extLower = extension;
-                    for (char& c : extLower) c = static_cast<char>(std::tolower(c));
-                    if (extLower == ".wmo") {
-                        basePath = basePath.substr(0, basePath.size() - 4);
+                    for (uint32_t gi = 0; gi < wmoModel.nGroups; gi++) {
+                        char groupSuffix[16];
+                        snprintf(groupSuffix, sizeof(groupSuffix), "_%03u%s", gi, extension.c_str());
+                        std::string groupPath = basePath + groupSuffix;
+                        std::vector<uint8_t> groupData = assetManager->readFile(groupPath);
+                        if (groupData.empty()) {
+                            snprintf(groupSuffix, sizeof(groupSuffix), "_%03u.wmo", gi);
+                            groupData = assetManager->readFile(basePath + groupSuffix);
+                        }
+                        if (groupData.empty()) {
+                            snprintf(groupSuffix, sizeof(groupSuffix), "_%03u.WMO", gi);
+                            groupData = assetManager->readFile(basePath + groupSuffix);
+                        }
+                        if (!groupData.empty()) {
+                            pipeline::WMOLoader::loadGroup(groupData, wmoModel, gi);
+                            loadedGroups++;
+                        } else {
+                            LOG_WARNING("  Failed to load WMO group ", gi, " for: ", basePath);
+                        }
                     }
                 }
 
-                for (uint32_t gi = 0; gi < wmoModel.nGroups; gi++) {
-                    char groupSuffix[16];
-                    snprintf(groupSuffix, sizeof(groupSuffix), "_%03u%s", gi, extension.c_str());
-                    std::string groupPath = basePath + groupSuffix;
-                    std::vector<uint8_t> groupData = assetManager->readFile(groupPath);
-                    if (groupData.empty()) {
-                        snprintf(groupSuffix, sizeof(groupSuffix), "_%03u.wmo", gi);
-                        groupData = assetManager->readFile(basePath + groupSuffix);
+                if (loadedGroups > 0 || wmoModel.nGroups == 0) {
+                    modelId = nextGameObjectWmoModelId_++;
+                    if (wmoRenderer->loadModel(wmoModel, modelId)) {
+                        gameObjectDisplayIdWmoCache_[displayId] = modelId;
+                        loadedAsWmo = true;
+                    } else {
+                        LOG_WARNING("Failed to load gameobject WMO model: ", modelPath);
                     }
-                    if (groupData.empty()) {
-                        snprintf(groupSuffix, sizeof(groupSuffix), "_%03u.WMO", gi);
-                        groupData = assetManager->readFile(basePath + groupSuffix);
-                    }
-                    if (!groupData.empty()) {
-                        pipeline::WMOLoader::loadGroup(groupData, wmoModel, gi);
-                    }
+                } else {
+                    LOG_WARNING("No WMO groups loaded for gameobject: ", modelPath,
+                                " — falling back to M2");
                 }
+            } else {
+                LOG_WARNING("Failed to read gameobject WMO: ", modelPath, " — falling back to M2");
             }
-
-            if (!wmoRenderer->loadModel(wmoModel, modelId)) {
-                LOG_WARNING("Failed to load gameobject WMO: ", modelPath);
-                return;
-            }
-            gameObjectDisplayIdWmoCache_[displayId] = modelId;
         }
 
-        uint32_t instanceId = wmoRenderer->createInstance(modelId, renderPos,
-            glm::vec3(0.0f, 0.0f, renderYaw), 1.0f);
-        if (instanceId == 0) {
-            LOG_WARNING("Failed to create gameobject WMO instance for guid 0x", std::hex, guid, std::dec);
+        if (loadedAsWmo) {
+            uint32_t instanceId = wmoRenderer->createInstance(modelId, renderPos,
+                glm::vec3(0.0f, 0.0f, renderYaw), 1.0f);
+            if (instanceId == 0) {
+                LOG_WARNING("Failed to create gameobject WMO instance for guid 0x", std::hex, guid, std::dec);
+                return;
+            }
+
+            gameObjectInstances_[guid] = {modelId, instanceId, true};
+            LOG_INFO("Spawned gameobject WMO: guid=0x", std::hex, guid, std::dec,
+                     " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
             return;
         }
 
-        gameObjectInstances_[guid] = {modelId, instanceId, true};
-    } else {
+        // WMO failed — fall through to try as M2
+        // Convert .wmo path to .m2 for fallback
+        modelPath = modelPath.substr(0, modelPath.size() - 4) + ".m2";
+    }
+
+    {
         auto* m2Renderer = renderer->getM2Renderer();
         if (!m2Renderer) return;
 

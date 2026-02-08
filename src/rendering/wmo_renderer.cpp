@@ -528,6 +528,30 @@ uint32_t WMORenderer::createInstance(uint32_t modelId, const glm::vec3& position
     return instance.id;
 }
 
+void WMORenderer::setInstancePosition(uint32_t instanceId, const glm::vec3& position) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+    inst.position = position;
+    inst.updateModelMatrix();
+    auto modelIt = loadedModels.find(inst.modelId);
+    if (modelIt != loadedModels.end()) {
+        const ModelData& model = modelIt->second;
+        transformAABB(inst.modelMatrix, model.boundingBoxMin, model.boundingBoxMax,
+                      inst.worldBoundsMin, inst.worldBoundsMax);
+        inst.worldGroupBounds.clear();
+        inst.worldGroupBounds.reserve(model.groups.size());
+        for (const auto& group : model.groups) {
+            glm::vec3 gMin, gMax;
+            transformAABB(inst.modelMatrix, group.boundingBoxMin, group.boundingBoxMax, gMin, gMax);
+            gMin -= glm::vec3(0.5f);
+            gMax += glm::vec3(0.5f);
+            inst.worldGroupBounds.emplace_back(gMin, gMax);
+        }
+    }
+    rebuildSpatialIndex();
+}
+
 void WMORenderer::removeInstance(uint32_t instanceId) {
     auto it = std::find_if(instances.begin(), instances.end(),
                           [instanceId](const WMOInstance& inst) { return inst.id == instanceId; });

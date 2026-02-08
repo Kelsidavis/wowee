@@ -76,6 +76,13 @@ public:
                            float scale = 1.0f);
 
     /**
+     * Update the world position of an existing instance (e.g., for transports)
+     * @param instanceId Instance to update
+     * @param position New world position
+     */
+    void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
+
+    /**
      * Remove WMO instance
      * @param instanceId Instance to remove
      */

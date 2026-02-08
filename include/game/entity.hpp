@@ -256,10 +256,18 @@ public:
     GameObject() { type = ObjectType::GAMEOBJECT; }
     explicit GameObject(uint64_t guid) : Entity(guid) { type = ObjectType::GAMEOBJECT; }
 
+    const std::string& getName() const { return name; }
+    void setName(const std::string& n) { name = n; }
+
+    uint32_t getEntry() const { return entry; }
+    void setEntry(uint32_t e) { entry = e; }
+
     uint32_t getDisplayId() const { return displayId; }
     void setDisplayId(uint32_t id) { displayId = id; }
 
 protected:
+    std::string name;
+    uint32_t entry = 0;
     uint32_t displayId = 0;
 };
 
