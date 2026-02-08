@@ -1287,6 +1287,33 @@ void CameraController::reset() {
     LOG_INFO("Camera reset to default position");
 }
 
+void CameraController::teleportTo(const glm::vec3& pos) {
+    if (!camera) return;
+
+    verticalVelocity = 0.0f;
+    grounded = true;
+    swimming = false;
+    lastGroundZ = pos.z;
+
+    if (thirdPerson && followTarget) {
+        *followTarget = pos;
+        camera->setRotation(yaw, pitch);
+        glm::vec3 forward3D = camera->getForward();
+        float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
+        glm::vec3 pivot = pos + glm::vec3(0.0f, 0.0f, PIVOT_HEIGHT + mountedOffset);
+        glm::vec3 camDir = -forward3D;
+        glm::vec3 camPos = pivot + camDir * currentDistance;
+        smoothedCamPos = camPos;
+        camera->setPosition(camPos);
+    } else {
+        glm::vec3 camPos = pos + glm::vec3(0.0f, 0.0f, eyeHeight);
+        smoothedCamPos = camPos;
+        camera->setPosition(camPos);
+    }
+
+    LOG_INFO("Teleported to (", pos.x, ", ", pos.y, ", ", pos.z, ")");
+}
+
 void CameraController::processMouseWheel(float delta) {
     // Adjust user's target distance (collision may limit actual distance)
     userTargetDistance -= delta * 2.0f;  // 2.0 units per scroll notch

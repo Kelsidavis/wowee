@@ -42,6 +42,7 @@ public:
     }
 
     void reset();
+    void teleportTo(const glm::vec3& pos);
     void setOnlineMode(bool online) { onlineMode = online; }
     void startIntroPan(float durationSec = 2.8f, float orbitDegrees = 140.0f);
     bool isIntroActive() const { return introActive; }

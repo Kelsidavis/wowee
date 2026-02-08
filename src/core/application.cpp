@@ -627,9 +627,8 @@ void Application::setupUICallbacks() {
         }
 
         glm::vec3 safePos = core::coords::canonicalToRender(safeCanonical);
-        *ft = safePos;
         cc->setDefaultSpawn(safePos, cc->getYaw(), cc->getPitch());
-        cc->reset();
+        cc->teleportTo(safePos);
     });
 
     // Bind point update (innkeeper)
