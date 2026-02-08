@@ -44,6 +44,15 @@ public:
     void reset();
     void teleportTo(const glm::vec3& pos);
     void setOnlineMode(bool online) { onlineMode = online; }
+
+    // Last known safe position (grounded, not falling)
+    bool hasLastSafePosition() const { return hasLastSafe_; }
+    const glm::vec3& getLastSafePosition() const { return lastSafePos_; }
+    float getContinuousFallTime() const { return continuousFallTime_; }
+
+    // Auto-unstuck callback (triggered when falling too long)
+    using AutoUnstuckCallback = std::function<void()>;
+    void setAutoUnstuckCallback(AutoUnstuckCallback cb) { autoUnstuckCallback_ = std::move(cb); }
     void startIntroPan(float durationSec = 2.8f, float orbitDegrees = 140.0f);
     bool isIntroActive() const { return introActive; }
     bool isIdleOrbit() const { return idleOrbit_; }
@@ -227,6 +236,23 @@ private:
     float idleTimer_ = 0.0f;
     bool idleOrbit_ = false;  // true when current intro pan is an idle orbit (loops)
     static constexpr float IDLE_TIMEOUT = 120.0f; // 2 minutes
+
+    // Last known safe position (saved periodically when grounded on real geometry)
+    bool hasLastSafe_ = false;
+    glm::vec3 lastSafePos_ = glm::vec3(0.0f);
+    float safePosSaveTimer_ = 0.0f;
+    bool hasRealGround_ = false; // True only when terrain/WMO/M2 floor is detected
+    static constexpr float SAFE_POS_SAVE_INTERVAL = 2.0f; // Save every 2 seconds
+
+    // No-ground timer: after grace period, let the player fall instead of hovering
+    float noGroundTimer_ = 0.0f;
+    static constexpr float NO_GROUND_GRACE = 0.5f; // 500ms grace for terrain streaming
+
+    // Continuous fall time (for auto-unstuck detection)
+    float continuousFallTime_ = 0.0f;
+    bool autoUnstuckFired_ = false;
+    AutoUnstuckCallback autoUnstuckCallback_;
+    static constexpr float AUTO_UNSTUCK_FALL_TIME = 5.0f; // 5 seconds of falling
 };
 
 } // namespace rendering

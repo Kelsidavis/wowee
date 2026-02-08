@@ -4494,14 +4494,14 @@ void GameHandler::useItemById(uint32_t itemId) {
 void GameHandler::unstuck() {
     if (unstuckCallback_) {
         unstuckCallback_();
-        addSystemChatMessage("Unstuck: moved 5 units forward.");
+        addSystemChatMessage("Unstuck: snapped upward. Use /unstuckgy for full teleport.");
     }
 }
 
 void GameHandler::unstuckGy() {
     if (unstuckGyCallback_) {
         unstuckGyCallback_();
-        addSystemChatMessage("Unstuck: moved to nearest graveyard.");
+        addSystemChatMessage("Unstuck: teleported to safe location.");
     }
 }
 

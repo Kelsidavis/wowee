@@ -593,50 +593,56 @@ void Application::setupUICallbacks() {
         loadOnlineWorldTerrain(mapId, x, y, z);
     });
 
-    // Unstuck callback — move 5 units forward
+    // /unstuck — snap upward 10m to escape minor WMO cracks
     gameHandler->setUnstuckCallback([this]() {
         if (!renderer || !renderer->getCameraController()) return;
         auto* cc = renderer->getCameraController();
         auto* ft = cc->getFollowTargetMutable();
         if (!ft) return;
-        float yaw = cc->getYaw();
-        ft->x += 5.0f * std::sin(yaw);
-        ft->y += 5.0f * std::cos(yaw);
-        cc->setDefaultSpawn(*ft, yaw, cc->getPitch());
-        cc->reset();
+        glm::vec3 pos = *ft;
+        pos.z += 10.0f;
+        cc->teleportTo(pos);
     });
 
-    // Unstuck to nearest graveyard (WorldSafeLocs.dbc)
+    // /unstuckgy — snap upward 50m to clear all WMO geometry, gravity re-settles onto terrain
     gameHandler->setUnstuckGyCallback([this]() {
-        if (!renderer || !renderer->getCameraController() || !assetManager) return;
+        if (!renderer || !renderer->getCameraController()) return;
         auto* cc = renderer->getCameraController();
         auto* ft = cc->getFollowTargetMutable();
         if (!ft) return;
 
-        // Hardcoded safe locations per map (canonical WoW coords)
-        uint32_t mapId = gameHandler ? gameHandler->getCurrentMapId() : 0;
-        glm::vec3 safeCanonical;
-        switch (mapId) {
-            case 0:  safeCanonical = glm::vec3(-8833.38f, 628.63f, 94.0f); break; // Stormwind Trade District
-            case 1:  safeCanonical = glm::vec3(1629.36f, -4373.34f, 31.2f); break; // Orgrimmar
-            case 530: safeCanonical = glm::vec3(-3961.64f, -13931.2f, 100.6f); break; // Shattrath
-            case 571: safeCanonical = glm::vec3(5804.14f, 624.77f, 647.8f); break; // Dalaran
-            default:
-                LOG_WARNING("No hardcoded safe location for map ", mapId);
-                return;
+        // Try last safe position first (nearby, terrain already loaded)
+        if (cc->hasLastSafePosition()) {
+            glm::vec3 safePos = cc->getLastSafePosition();
+            safePos.z += 5.0f;
+            cc->teleportTo(safePos);
+            LOG_INFO("Unstuck: teleported to last safe position");
+            return;
         }
 
-        glm::vec3 safePos = core::coords::canonicalToRender(safeCanonical);
-        cc->setDefaultSpawn(safePos, cc->getYaw(), cc->getPitch());
-        cc->teleportTo(safePos);
+        // No safe position — snap 50m upward to clear all WMO geometry
+        glm::vec3 pos = *ft;
+        pos.z += 50.0f;
+        cc->teleportTo(pos);
+        LOG_INFO("Unstuck: snapped 50m upward");
     });
 
-    // Bind point update (innkeeper)
+    // Auto-unstuck: falling for > 5 seconds = void fall, teleport to map entry
+    if (renderer->getCameraController()) {
+        renderer->getCameraController()->setAutoUnstuckCallback([this]() {
+            if (!renderer || !renderer->getCameraController()) return;
+            auto* cc = renderer->getCameraController();
+
+            // Last resort: teleport to map entry point (terrain guaranteed loaded here)
+            glm::vec3 spawnPos = cc->getDefaultPosition();
+            spawnPos.z += 5.0f;
+            cc->teleportTo(spawnPos);
+            LOG_INFO("Auto-unstuck: teleported to map entry point");
+        });
+    }
+
+    // Bind point update (innkeeper) — position stored in gameHandler->getHomeBind()
     gameHandler->setBindPointCallback([this](uint32_t mapId, float x, float y, float z) {
-        if (!renderer || !renderer->getCameraController()) return;
-        glm::vec3 canonical(x, y, z);
-        glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
-        renderer->getCameraController()->setDefaultSpawn(renderPos, 0.0f, 15.0f);
         LOG_INFO("Bindpoint set: mapId=", mapId, " pos=(", x, ", ", y, ", ", z, ")");
     });
 

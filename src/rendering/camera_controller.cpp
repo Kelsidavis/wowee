@@ -654,6 +654,8 @@ void CameraController::update(float deltaTime) {
             }
 
             if (groundH) {
+                hasRealGround_ = true;
+                noGroundTimer_ = 0.0f;
                 float groundDiff = *groundH - lastGroundZ;
                 if (groundDiff > 2.0f) {
                     // Landing on a higher ledge - snap up
@@ -674,15 +676,44 @@ void CameraController::update(float deltaTime) {
                     grounded = false;
                 }
             } else {
-                // No terrain found — hold at last known ground
-                targetPos.z = lastGroundZ;
-                verticalVelocity = 0.0f;
-                grounded = true;
+                hasRealGround_ = false;
+                noGroundTimer_ += deltaTime;
+                if (noGroundTimer_ < NO_GROUND_GRACE) {
+                    // Brief grace period for terrain streaming — hold position
+                    targetPos.z = lastGroundZ;
+                    verticalVelocity = 0.0f;
+                    grounded = true;
+                } else {
+                    // No geometry found for too long — let player fall
+                    grounded = false;
+                }
             }
         }
 
         // Update follow target position
         *followTarget = targetPos;
+
+        // --- Safe position caching + void fall detection ---
+        if (grounded && hasRealGround_ && !swimming && verticalVelocity >= 0.0f) {
+            // Player is safely on real geometry — save periodically
+            continuousFallTime_ = 0.0f;
+            autoUnstuckFired_ = false;
+            safePosSaveTimer_ += deltaTime;
+            if (safePosSaveTimer_ >= SAFE_POS_SAVE_INTERVAL) {
+                safePosSaveTimer_ = 0.0f;
+                lastSafePos_ = targetPos;
+                hasLastSafe_ = true;
+            }
+        } else if (!grounded && !swimming && !externalFollow_) {
+            // Falling (or standing on nothing past grace period) — accumulate fall time
+            continuousFallTime_ += deltaTime;
+            if (continuousFallTime_ >= AUTO_UNSTUCK_FALL_TIME && !autoUnstuckFired_) {
+                autoUnstuckFired_ = true;
+                if (autoUnstuckCallback_) {
+                    autoUnstuckCallback_();
+                }
+            }
+        }
 
         // ===== WoW-style orbit camera =====
         // Pivot point at upper chest/neck
@@ -1100,6 +1131,8 @@ void CameraController::reset() {
     swimming = false;
     sitting = false;
     autoRunning = false;
+    noGroundTimer_ = 0.0f;
+    autoUnstuckFired_ = false;
 
     // Clear edge-state so movement packets can re-start cleanly after respawn.
     wasMovingForward = false;
@@ -1293,7 +1326,11 @@ void CameraController::teleportTo(const glm::vec3& pos) {
     verticalVelocity = 0.0f;
     grounded = true;
     swimming = false;
+    sitting = false;
     lastGroundZ = pos.z;
+    noGroundTimer_ = 0.0f;  // Reset grace period so terrain has time to stream
+    autoUnstuckFired_ = false;
+    continuousFallTime_ = 0.0f;
 
     if (thirdPerson && followTarget) {
         *followTarget = pos;
