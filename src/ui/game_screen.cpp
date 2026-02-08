@@ -514,6 +514,21 @@ void GameScreen::renderChatWindow(game::GameHandler& gameHandler) {
         chatInputActive = false;
     }
 
+    // Click on empty chat window area (receive panel/background) → focus input
+    // Ignore title bar (move) and interactive items like Lock.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+            io.MouseClicked[0] &&
+            !ImGui::IsAnyItemHovered()) {
+            ImVec2 winPos = ImGui::GetWindowPos();
+            float titleBarH = ImGui::GetFrameHeight();
+            if (io.MousePos.y > winPos.y + titleBarH) {
+                refocusChatInput = true;
+            }
+        }
+    }
+
     ImGui::End();
 }
 
@@ -723,7 +738,20 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                         gameHandler.lootTarget(target->getGuid());
                     } else {
                         // Interact with friendly NPCs; hostile units just get targeted
-                        if (!unit->isHostile() && unit->isInteractable()) {
+                        auto isSpiritNpc = [&]() -> bool {
+                            constexpr uint32_t NPC_FLAG_SPIRIT_GUIDE = 0x00004000;
+                            constexpr uint32_t NPC_FLAG_SPIRIT_HEALER = 0x00008000;
+                            if (unit->getNpcFlags() & (NPC_FLAG_SPIRIT_GUIDE | NPC_FLAG_SPIRIT_HEALER)) {
+                                return true;
+                            }
+                            std::string name = unit->getName();
+                            std::transform(name.begin(), name.end(), name.begin(),
+                                           [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                            return (name.find("spirit healer") != std::string::npos) ||
+                                   (name.find("spirit guide") != std::string::npos);
+                        };
+                        bool allowSpiritInteract = gameHandler.isPlayerDead() && isSpiritNpc();
+                        if (!unit->isHostile() && (unit->isInteractable() || allowSpiritInteract)) {
                             gameHandler.interactWithNpc(target->getGuid());
                         }
                     }
@@ -888,8 +916,17 @@ void GameScreen::renderTargetFrame(game::GameHandler& gameHandler) {
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.1f, 0.85f));
+    bool isHostileTarget = gameHandler.isHostileAttacker(target->getGuid());
+    if (!isHostileTarget && target->getType() == game::ObjectType::UNIT) {
+        auto u = std::static_pointer_cast<game::Unit>(target);
+        isHostileTarget = u->isHostile();
+    }
     ImVec4 borderColor = ImVec4(hostileColor.x * 0.8f, hostileColor.y * 0.8f, hostileColor.z * 0.8f, 1.0f);
-    if (gameHandler.isAutoAttacking()) {
+    if (isHostileTarget) {
+        float t = ImGui::GetTime();
+        float pulse = (std::fmod(t, 0.6f) < 0.3f) ? 1.0f : 0.0f;
+        borderColor = ImVec4(1.0f, 0.1f, 0.1f, pulse);
+    } else if (gameHandler.isAutoAttacking()) {
         borderColor = ImVec4(1.0f, 0.2f, 0.2f, 1.0f);
     }
     ImGui::PushStyleColor(ImGuiCol_Border, borderColor);
@@ -2919,6 +2956,27 @@ void GameScreen::renderGossipWindow(game::GameHandler& gameHandler) {
                 }
             }
             ImGui::PopID();
+        }
+
+        // Fallback: some spirit healers don't send gossip options.
+        if (gossip.options.empty() && gameHandler.isPlayerDead()) {
+            bool isSpirit = false;
+            if (npcEntity && npcEntity->getType() == game::ObjectType::UNIT) {
+                auto unit = std::static_pointer_cast<game::Unit>(npcEntity);
+                std::string name = unit->getName();
+                std::transform(name.begin(), name.end(), name.begin(),
+                               [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                if (name.find("spirit healer") != std::string::npos ||
+                    name.find("spirit guide") != std::string::npos) {
+                    isSpirit = true;
+                }
+            }
+            if (isSpirit) {
+                if (ImGui::Selectable("[Spiritguide] Return to Graveyard")) {
+                    gameHandler.activateSpiritHealer(gossip.npcGuid);
+                    gameHandler.closeGossip();
+                }
+            }
         }
 
         // Quest items

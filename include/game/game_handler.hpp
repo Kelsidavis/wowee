@@ -469,6 +469,7 @@ public:
     using MountCallback = std::function<void(uint32_t mountDisplayId)>;  // 0 = dismount
     void setMountCallback(MountCallback cb) { mountCallback_ = std::move(cb); }
     bool isMounted() const { return currentMountDisplayId_ != 0; }
+    bool isHostileAttacker(uint64_t guid) const { return hostileAttackers_.count(guid) > 0; }
     float getServerRunSpeed() const { return serverRunSpeed_; }
     void dismount();
 
