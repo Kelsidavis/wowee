@@ -518,6 +518,7 @@ void Renderer::updateCharacterAnimation() {
         }
 
         // Sync mount instance position and rotation
+        float mountBob = 0.0f;
         if (mountInstanceId_ > 0) {
             characterRenderer->setInstancePosition(mountInstanceId_, characterPosition);
             float yawRad = glm::radians(characterYaw);
@@ -531,11 +532,18 @@ void Renderer::updateCharacterAnimation() {
             if (!haveMountState || curMountAnim != mountAnimId) {
                 characterRenderer->playAnimation(mountInstanceId_, mountAnimId, true);
             }
+
+            // Rider bob: sinusoidal motion synced to mount's run animation
+            if (moving && haveMountState && curMountDur > 1.0f) {
+                float norm = std::fmod(curMountTime, curMountDur) / curMountDur;
+                // Two bounces per stride cycle (horse gait), lowest at footfalls (0.22, 0.72)
+                mountBob = std::sin(norm * 4.0f * 3.14159f) * 0.12f;
+            }
         }
 
-        // Offset player Z above mount
+        // Offset player Z above mount + bob
         glm::vec3 playerPos = characterPosition;
-        playerPos.z += mountHeightOffset_;
+        playerPos.z += mountHeightOffset_ + mountBob;
         characterRenderer->setInstancePosition(characterInstanceId, playerPos);
         return;
     }
@@ -993,10 +1001,44 @@ void Renderer::update(float deltaTime) {
     // Footsteps: animation-event driven + surface query at event time.
     if (footstepManager) {
         footstepManager->update(deltaTime);
-        if (characterRenderer && characterInstanceId > 0 &&
+        bool canPlayFootsteps = characterRenderer && characterInstanceId > 0 &&
             cameraController && cameraController->isThirdPerson() &&
-            isFootstepAnimationState() && cameraController->isGrounded() &&
-            !cameraController->isSwimming()) {
+            cameraController->isGrounded() && !cameraController->isSwimming();
+
+        if (canPlayFootsteps && isMounted() && mountInstanceId_ > 0) {
+            // Mount footsteps: use mount's animation for timing
+            uint32_t animId = 0;
+            float animTimeMs = 0.0f, animDurationMs = 0.0f;
+            if (characterRenderer->getAnimationState(mountInstanceId_, animId, animTimeMs, animDurationMs) &&
+                animDurationMs > 1.0f && cameraController->isMoving()) {
+                float norm = std::fmod(animTimeMs, animDurationMs) / animDurationMs;
+                if (norm < 0.0f) norm += 1.0f;
+
+                if (animId != mountFootstepLastAnimId) {
+                    mountFootstepLastAnimId = animId;
+                    mountFootstepLastNormTime = norm;
+                    mountFootstepNormInitialized = true;
+                } else if (!mountFootstepNormInitialized) {
+                    mountFootstepNormInitialized = true;
+                    mountFootstepLastNormTime = norm;
+                } else {
+                    // Horse gait: 4 hoofbeats per cycle
+                    auto crossed = [&](float eventNorm) {
+                        if (mountFootstepLastNormTime <= norm) {
+                            return mountFootstepLastNormTime < eventNorm && eventNorm <= norm;
+                        }
+                        return mountFootstepLastNormTime < eventNorm || eventNorm <= norm;
+                    };
+                    if (crossed(0.1f) || crossed(0.35f) || crossed(0.6f) || crossed(0.85f)) {
+                        footstepManager->playFootstep(resolveFootstepSurface(), true);
+                    }
+                    mountFootstepLastNormTime = norm;
+                }
+            } else {
+                mountFootstepNormInitialized = false;
+            }
+            footstepNormInitialized = false;  // Reset player footstep tracking
+        } else if (canPlayFootsteps && isFootstepAnimationState()) {
             uint32_t animId = 0;
             float animTimeMs = 0.0f;
             float animDurationMs = 0.0f;
@@ -1004,8 +1046,10 @@ void Renderer::update(float deltaTime) {
                 shouldTriggerFootstepEvent(animId, animTimeMs, animDurationMs)) {
                 footstepManager->playFootstep(resolveFootstepSurface(), cameraController->isSprinting());
             }
+            mountFootstepNormInitialized = false;
         } else {
             footstepNormInitialized = false;
+            mountFootstepNormInitialized = false;
         }
     }
 

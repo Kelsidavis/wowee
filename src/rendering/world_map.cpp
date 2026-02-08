@@ -347,6 +347,38 @@ int WorldMap::findBestContinentForPlayer(const glm::vec3& playerRenderPos) const
     return bestIdx;
 }
 
+int WorldMap::findZoneForPlayer(const glm::vec3& playerRenderPos) const {
+    float wowX = playerRenderPos.y;  // north/south
+    float wowY = playerRenderPos.x;  // west/east
+
+    int bestIdx = -1;
+    float bestArea = std::numeric_limits<float>::max();
+
+    for (int i = 0; i < static_cast<int>(zones.size()); i++) {
+        const auto& z = zones[i];
+        if (z.areaID == 0) continue;  // skip continent-level entries
+
+        float minX = std::min(z.locLeft, z.locRight);
+        float maxX = std::max(z.locLeft, z.locRight);
+        float minY = std::min(z.locTop, z.locBottom);
+        float maxY = std::max(z.locTop, z.locBottom);
+        float spanX = maxX - minX;
+        float spanY = maxY - minY;
+        if (spanX < 0.001f || spanY < 0.001f) continue;
+
+        bool contains = (wowX >= minX && wowX <= maxX && wowY >= minY && wowY <= maxY);
+        if (contains) {
+            float area = spanX * spanY;
+            if (area < bestArea) {
+                bestArea = area;
+                bestIdx = i;
+            }
+        }
+    }
+
+    return bestIdx;
+}
+
 bool WorldMap::zoneBelongsToContinent(int zoneIdx, int contIdx) const {
     if (zoneIdx < 0 || zoneIdx >= static_cast<int>(zones.size())) return false;
     if (contIdx < 0 || contIdx >= static_cast<int>(zones.size())) return false;
@@ -692,6 +724,52 @@ glm::vec2 WorldMap::renderPosToMapUV(const glm::vec3& renderPos, int zoneIdx) co
 }
 
 // --------------------------------------------------------
+// Exploration tracking
+// --------------------------------------------------------
+
+void WorldMap::updateExploration(const glm::vec3& playerRenderPos) {
+    int zoneIdx = findZoneForPlayer(playerRenderPos);
+    if (zoneIdx >= 0) {
+        exploredZones.insert(zoneIdx);
+    }
+}
+
+void WorldMap::zoomIn(const glm::vec3& playerRenderPos) {
+    if (viewLevel == ViewLevel::WORLD) {
+        // World → Continent
+        if (continentIdx >= 0) {
+            loadZoneTextures(continentIdx);
+            compositeZone(continentIdx);
+            currentIdx = continentIdx;
+            viewLevel = ViewLevel::CONTINENT;
+        }
+    } else if (viewLevel == ViewLevel::CONTINENT) {
+        // Continent → Zone (use player's current zone)
+        int zoneIdx = findZoneForPlayer(playerRenderPos);
+        if (zoneIdx >= 0 && zoneBelongsToContinent(zoneIdx, continentIdx)) {
+            loadZoneTextures(zoneIdx);
+            compositeZone(zoneIdx);
+            currentIdx = zoneIdx;
+            viewLevel = ViewLevel::ZONE;
+        }
+    }
+}
+
+void WorldMap::zoomOut() {
+    if (viewLevel == ViewLevel::ZONE) {
+        // Zone → Continent
+        if (continentIdx >= 0) {
+            compositeZone(continentIdx);
+            currentIdx = continentIdx;
+            viewLevel = ViewLevel::CONTINENT;
+        }
+    } else if (viewLevel == ViewLevel::CONTINENT) {
+        // Continent → World
+        enterWorldView();
+    }
+}
+
+// --------------------------------------------------------
 // Main render
 // --------------------------------------------------------
 
@@ -700,12 +778,25 @@ void WorldMap::render(const glm::vec3& playerRenderPos, int screenWidth, int scr
 
     auto& input = core::Input::getInstance();
 
+    // Track exploration even when map is closed
+    if (!zones.empty()) {
+        updateExploration(playerRenderPos);
+    }
+
     // When map is open, always allow M/Escape to close (bypass ImGui keyboard capture)
     if (open) {
         if (input.isKeyJustPressed(SDL_SCANCODE_M) ||
             input.isKeyJustPressed(SDL_SCANCODE_ESCAPE)) {
             open = false;
             return;
+        }
+
+        // Mouse wheel: scroll up = zoom in, scroll down = zoom out
+        auto& io = ImGui::GetIO();
+        if (io.MouseWheel > 0.0f) {
+            zoomIn(playerRenderPos);
+        } else if (io.MouseWheel < 0.0f) {
+            zoomOut();
         }
     } else {
         auto& io = ImGui::GetIO();
@@ -721,8 +812,15 @@ void WorldMap::render(const glm::vec3& playerRenderPos, int screenWidth, int scr
                 compositedIdx = -1;
             }
 
-            // Ensure continent textures are loaded and composited
-            if (continentIdx >= 0) {
+            // Open directly to the player's current zone
+            int playerZone = findZoneForPlayer(playerRenderPos);
+            if (playerZone >= 0 && continentIdx >= 0 &&
+                zoneBelongsToContinent(playerZone, continentIdx)) {
+                loadZoneTextures(playerZone);
+                compositeZone(playerZone);
+                currentIdx = playerZone;
+                viewLevel = ViewLevel::ZONE;
+            } else if (continentIdx >= 0) {
                 loadZoneTextures(continentIdx);
                 compositeZone(continentIdx);
                 currentIdx = continentIdx;
@@ -942,9 +1040,17 @@ void WorldMap::renderImGuiOverlay(const glm::vec3& playerRenderPos, int screenWi
                     float sx1 = imgMin.x + zuMax * displayW;
                     float sy1 = imgMin.y + zvMax * displayH;
 
+                    bool explored = exploredZones.count(zi) > 0;
+
                     // Check hover
                     bool hovered = (mousePos.x >= sx0 && mousePos.x <= sx1 &&
                                     mousePos.y >= sy0 && mousePos.y <= sy1);
+
+                    // Fog of war: darken unexplored zones
+                    if (!explored) {
+                        drawList->AddRectFilled(ImVec2(sx0, sy0), ImVec2(sx1, sy1),
+                                                IM_COL32(0, 0, 0, 160));
+                    }
 
                     if (hovered) {
                         hoveredZone = zi;
@@ -952,7 +1058,7 @@ void WorldMap::renderImGuiOverlay(const glm::vec3& playerRenderPos, int screenWi
                                                 IM_COL32(255, 255, 200, 40));
                         drawList->AddRect(ImVec2(sx0, sy0), ImVec2(sx1, sy1),
                                           IM_COL32(255, 215, 0, 180), 0.0f, 0, 2.0f);
-                    } else {
+                    } else if (explored) {
                         drawList->AddRect(ImVec2(sx0, sy0), ImVec2(sx1, sy1),
                                           IM_COL32(255, 255, 255, 30), 0.0f, 0, 1.0f);
                     }
@@ -1022,11 +1128,11 @@ void WorldMap::renderImGuiOverlay(const glm::vec3& playerRenderPos, int screenWi
         // Help text
         const char* helpText;
         if (viewLevel == ViewLevel::ZONE) {
-            helpText = "Right-click to zoom out | M or Escape to close";
+            helpText = "Scroll out or right-click to zoom out | M or Escape to close";
         } else if (viewLevel == ViewLevel::WORLD) {
-            helpText = "Select a continent | M or Escape to close";
+            helpText = "Select a continent | Scroll in to zoom | M or Escape to close";
         } else {
-            helpText = "Click a zone to zoom in | Right-click for World | M or Escape to close";
+            helpText = "Click zone or scroll in to zoom | Scroll out / right-click for World | M or Escape to close";
         }
         ImVec2 textSize = ImGui::CalcTextSize(helpText);
         float textY = mapY + displayH + 8.0f;

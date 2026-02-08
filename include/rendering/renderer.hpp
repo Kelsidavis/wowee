@@ -252,6 +252,11 @@ private:
     uint32_t footstepLastAnimationId = 0;
     float footstepLastNormTime = 0.0f;
     bool footstepNormInitialized = false;
+
+    // Mount footstep tracking (separate from player's)
+    uint32_t mountFootstepLastAnimId = 0;
+    float mountFootstepLastNormTime = 0.0f;
+    bool mountFootstepNormInitialized = false;
     bool sfxStateInitialized = false;
     bool sfxPrevGrounded = true;
     bool sfxPrevJumping = false;

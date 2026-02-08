@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace wowee {
@@ -45,12 +46,16 @@ private:
     void enterWorldView();
     void loadZonesFromDBC();
     int findBestContinentForPlayer(const glm::vec3& playerRenderPos) const;
+    int findZoneForPlayer(const glm::vec3& playerRenderPos) const;
     bool zoneBelongsToContinent(int zoneIdx, int contIdx) const;
     bool getContinentProjectionBounds(int contIdx, float& left, float& right,
                                       float& top, float& bottom) const;
     void loadZoneTextures(int zoneIdx);
     void compositeZone(int zoneIdx);
     void renderImGuiOverlay(const glm::vec3& playerRenderPos, int screenWidth, int screenHeight);
+    void updateExploration(const glm::vec3& playerRenderPos);
+    void zoomIn(const glm::vec3& playerRenderPos);
+    void zoomOut();
 
     // World pos → map UV using a specific zone's bounds
     glm::vec2 renderPosToMapUV(const glm::vec3& renderPos, int zoneIdx) const;
@@ -80,6 +85,9 @@ private:
     std::unique_ptr<Shader> tileShader;
     GLuint tileQuadVAO = 0;
     GLuint tileQuadVBO = 0;
+
+    // Exploration / fog of war
+    std::unordered_set<int> exploredZones;  // zone indices the player has visited
 };
 
 } // namespace rendering
