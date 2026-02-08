@@ -137,7 +137,7 @@ bool WMORenderer::initialize(pipeline::AssetManager* assets) {
             if (uIsInterior) {
                 // Interior: MOCV vertex colors are baked lighting.
                 // Use them directly as the light multiplier on the texture.
-                vec3 vertLight = VertexColor.rgb * 2.2 + 0.3;
+                vec3 vertLight = VertexColor.rgb * 2.4 + 0.35;
                 // Subtle directional fill so geometry reads
                 float diff = max(dot(normal, lightDir), 0.0);
                 vertLight += diff * 0.10;

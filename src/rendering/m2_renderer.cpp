@@ -2398,7 +2398,7 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
         if (allowEscapeRelax) {
             continue;
         }
-        if (stepableLowObject && nearTop) {
+        if (stepableLowObject && localFrom.z >= rawMax.z - 0.35f) {
             // Already on/near top surface: don't apply lateral push that ejects
             // the player from the object (carpets, platforms, etc).
             continue;
