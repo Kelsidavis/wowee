@@ -352,7 +352,7 @@ void CameraController::update(float deltaTime) {
                 glm::vec3 stepPos = swimFrom;
 
                 if (swimMoveDist > 0.01f) {
-                    int swimSteps = std::max(1, std::min(2, static_cast<int>(std::ceil(swimMoveDist / 1.0f))));
+                    int swimSteps = std::max(1, std::min(3, static_cast<int>(std::ceil(swimMoveDist / 0.65f))));
                     glm::vec3 stepDelta = (swimTo - swimFrom) / static_cast<float>(swimSteps);
 
                     for (int i = 0; i < swimSteps; i++) {
@@ -420,8 +420,7 @@ void CameraController::update(float deltaTime) {
             float moveDist = glm::length(desiredPos - startPos);
 
             if (moveDist > 0.01f) {
-                // Adaptive CCD: 1.0f step size, max 2 steps.
-                int sweepSteps = std::max(1, std::min(2, static_cast<int>(std::ceil(moveDist / 1.0f))));
+                int sweepSteps = std::max(1, std::min(3, static_cast<int>(std::ceil(moveDist / 0.65f))));
                 glm::vec3 stepPos = startPos;
                 glm::vec3 stepDelta = (desiredPos - startPos) / static_cast<float>(sweepSteps);
 
@@ -812,7 +811,7 @@ void CameraController::update(float deltaTime) {
             float moveDist = glm::length(desiredFeet - startFeet);
 
             if (moveDist > 0.01f) {
-                int sweepSteps = std::max(1, std::min(2, static_cast<int>(std::ceil(moveDist / 1.0f))));
+                int sweepSteps = std::max(1, std::min(3, static_cast<int>(std::ceil(moveDist / 0.65f))));
                 glm::vec3 stepPos = startFeet;
                 glm::vec3 stepDelta = (desiredFeet - startFeet) / static_cast<float>(sweepSteps);
 

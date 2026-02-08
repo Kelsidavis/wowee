@@ -64,7 +64,7 @@ private:
     bool pendingFullscreen = false;
     bool pendingVsync = false;
     int pendingResIndex = 0;
-    bool pendingShadows = true;
+    bool pendingShadows = false;
     int pendingMusicVolume = 30;
     int pendingSfxVolume = 100;
     float pendingMouseSensitivity = 0.2f;

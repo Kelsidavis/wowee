@@ -3425,7 +3425,7 @@ void GameScreen::renderSettingsWindow() {
     constexpr int kDefaultResH = 1080;
     constexpr bool kDefaultFullscreen = false;
     constexpr bool kDefaultVsync = true;
-    constexpr bool kDefaultShadows = true;
+    constexpr bool kDefaultShadows = false;
     constexpr int kDefaultMusicVolume = 30;
     constexpr int kDefaultSfxVolume = 100;
     constexpr float kDefaultMouseSensitivity = 0.2f;
