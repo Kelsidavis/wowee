@@ -1754,7 +1754,6 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
     gatherCandidates(queryMin, queryMax, candidateScratch);
 
     for (size_t idx : candidateScratch) {
-        if (blocked) break;  // Early-out once a wall is found
         const auto& instance = instances[idx];
         if (collisionFocusEnabled &&
             pointAABBDistanceSq(collisionFocusPos, instance.worldBoundsMin, instance.worldBoundsMax) > collisionFocusRadiusSq) {
@@ -1792,7 +1791,7 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
         glm::vec3 localFrom = glm::vec3(instance.invModelMatrix * glm::vec4(from, 1.0f));
         glm::vec3 localTo = glm::vec3(instance.invModelMatrix * glm::vec4(to, 1.0f));
         float localFeetZ = localTo.z;
-        for (size_t gi = 0; gi < model.groups.size() && !blocked; ++gi) {
+        for (size_t gi = 0; gi < model.groups.size(); ++gi) {
             // World-space group cull
             if (gi < instance.worldGroupBounds.size()) {
                 const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
@@ -1823,7 +1822,6 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
             group.getTrianglesInRange(rangeMinX, rangeMinY, rangeMaxX, rangeMaxY, wallTriScratch);
 
             for (uint32_t triStart : wallTriScratch) {
-                if (blocked) break;
                 const glm::vec3& v0 = verts[indices[triStart]];
                 const glm::vec3& v1 = verts[indices[triStart + 1]];
                 const glm::vec3& v2 = verts[indices[triStart + 2]];
@@ -1843,8 +1841,6 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
                 // Get triangle Z range
                 float triMinZ = std::min({v0.z, v1.z, v2.z});
                 float triMaxZ = std::max({v0.z, v1.z, v2.z});
-                float fromDist = glm::dot(localFrom - v0, normal);
-                float toDist = glm::dot(localTo - v0, normal);
 
                 // Only collide with walls in player's vertical range
                 if (triMaxZ < localFeetZ + 0.3f) continue;
@@ -1858,6 +1854,10 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
 
                 // Skip very short vertical surfaces (stair risers)
                 if (triHeight < 0.6f && triMaxZ <= localFeetZ + 0.8f) continue;
+
+                // Recompute distances with current (possibly pushed) localTo
+                float fromDist = glm::dot(localFrom - v0, normal);
+                float toDist = glm::dot(localTo - v0, normal);
 
                 // Swept test: prevent tunneling when crossing a wall between frames.
                 if ((fromDist > PLAYER_RADIUS && toDist < -PLAYER_RADIUS) ||
@@ -1875,6 +1875,8 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
                                 glm::vec3 safeWorld = glm::vec3(instance.modelMatrix * glm::vec4(safeLocal, 1.0f));
                                 adjustedPos.x = safeWorld.x;
                                 adjustedPos.y = safeWorld.y;
+                                // Update localTo for subsequent triangle checks
+                                localTo = glm::vec3(instance.invModelMatrix * glm::vec4(adjustedPos, 1.0f));
                                 blocked = true;
                                 continue;
                             }
@@ -1898,8 +1900,10 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
                     }
                     glm::vec3 pushLocal(pushDir2.x * pushDist, pushDir2.y * pushDist, 0.0f);
 
+                    // Update localTo so subsequent triangles use corrected position
+                    localTo.x += pushLocal.x;
+                    localTo.y += pushLocal.y;
                     glm::vec3 pushWorld = glm::vec3(instance.modelMatrix * glm::vec4(pushLocal, 0.0f));
-
                     adjustedPos.x += pushWorld.x;
                     adjustedPos.y += pushWorld.y;
                     blocked = true;

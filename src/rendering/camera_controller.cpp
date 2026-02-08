@@ -430,7 +430,7 @@ void CameraController::update(float deltaTime) {
             float moveDist = glm::length(desiredPos - startPos);
 
             if (moveDist > 0.01f) {
-                int sweepSteps = std::max(1, std::min(3, static_cast<int>(std::ceil(moveDist / 0.65f))));
+                int sweepSteps = std::max(1, std::min(5, static_cast<int>(std::ceil(moveDist / 0.35f))));
                 glm::vec3 stepPos = startPos;
                 glm::vec3 stepDelta = (desiredPos - startPos) / static_cast<float>(sweepSteps);
 
