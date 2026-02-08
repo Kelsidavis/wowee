@@ -373,6 +373,8 @@ public:
     void unstuck();
     void setUnstuckGyCallback(UnstuckCallback cb) { unstuckGyCallback_ = std::move(cb); }
     void unstuckGy();
+    using BindPointCallback = std::function<void(uint32_t mapId, float x, float y, float z)>;
+    void setBindPointCallback(BindPointCallback cb) { bindPointCallback_ = std::move(cb); }
 
     // Creature spawn callback (online mode - triggered when creature enters view)
     // Parameters: guid, displayId, x, y, z (canonical), orientation
@@ -837,6 +839,7 @@ private:
     WorldEntryCallback worldEntryCallback_;
     UnstuckCallback unstuckCallback_;
     UnstuckCallback unstuckGyCallback_;
+    BindPointCallback bindPointCallback_;
     CreatureSpawnCallback creatureSpawnCallback_;
     CreatureDespawnCallback creatureDespawnCallback_;
     CreatureMoveCallback creatureMoveCallback_;

@@ -2450,6 +2450,26 @@ bool GossipMessageParser::parse(network::Packet& packet, GossipMessageData& data
     return true;
 }
 
+// ============================================================
+// Bind Point (Hearthstone)
+// ============================================================
+
+network::Packet BinderActivatePacket::build(uint64_t npcGuid) {
+    network::Packet pkt(static_cast<uint16_t>(Opcode::CMSG_BINDER_ACTIVATE));
+    pkt.writeUInt64(npcGuid);
+    return pkt;
+}
+
+bool BindPointUpdateParser::parse(network::Packet& packet, BindPointUpdateData& data) {
+    if (packet.getSize() < 20) return false;
+    data.x = packet.readFloat();
+    data.y = packet.readFloat();
+    data.z = packet.readFloat();
+    data.mapId = packet.readUInt32();
+    data.zoneId = packet.readUInt32();
+    return true;
+}
+
 bool QuestRequestItemsParser::parse(network::Packet& packet, QuestRequestItemsData& data) {
     if (packet.getSize() - packet.getReadPos() < 20) return false;
     data.npcGuid = packet.readUInt64();

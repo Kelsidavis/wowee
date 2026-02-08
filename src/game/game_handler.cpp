@@ -577,6 +577,22 @@ void GameHandler::handlePacket(network::Packet& packet) {
         case Opcode::SMSG_GOSSIP_MESSAGE:
             handleGossipMessage(packet);
             break;
+        case Opcode::SMSG_BINDPOINTUPDATE: {
+            BindPointUpdateData data;
+            if (BindPointUpdateParser::parse(packet, data)) {
+                LOG_INFO("Bindpoint updated: mapId=", data.mapId,
+                         " pos=(", data.x, ", ", data.y, ", ", data.z, ")");
+                if (bindPointCallback_) {
+                    glm::vec3 canonical = core::coords::serverToCanonical(
+                        glm::vec3(data.x, data.y, data.z));
+                    bindPointCallback_(data.mapId, canonical.x, canonical.y, canonical.z);
+                }
+                addSystemChatMessage("Your home has been set.");
+            } else {
+                LOG_WARNING("Failed to parse SMSG_BINDPOINTUPDATE");
+            }
+            break;
+        }
         case Opcode::SMSG_GOSSIP_COMPLETE:
             handleGossipComplete(packet);
             break;
@@ -4194,6 +4210,21 @@ void GameHandler::selectGossipOption(uint32_t optionId) {
     if (state != WorldState::IN_WORLD || !socket || !gossipWindowOpen) return;
     auto packet = GossipSelectOptionPacket::build(currentGossip.npcGuid, currentGossip.menuId, optionId);
     socket->send(packet);
+
+    // If this is an innkeeper "make this inn your home" option, send binder activate.
+    for (const auto& opt : currentGossip.options) {
+        if (opt.id != optionId) continue;
+        std::string text = opt.text;
+        std::transform(text.begin(), text.end(), text.begin(),
+                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        if (text.find("make this inn your home") != std::string::npos ||
+            text.find("set your home") != std::string::npos) {
+            auto bindPkt = BinderActivatePacket::build(currentGossip.npcGuid);
+            socket->send(bindPkt);
+            LOG_INFO("Sent CMSG_BINDER_ACTIVATE for npc=0x", std::hex, currentGossip.npcGuid, std::dec);
+        }
+        break;
+    }
 }
 
 void GameHandler::selectGossipQuest(uint32_t questId) {

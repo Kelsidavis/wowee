@@ -126,6 +126,7 @@ enum class Opcode : uint16_t {
     CMSG_GAMEOBJECT_QUERY            = 0x05E,
     SMSG_GAMEOBJECT_QUERY_RESPONSE   = 0x05F,
     CMSG_SET_ACTIVE_MOVER            = 0x26A,
+    CMSG_BINDER_ACTIVATE             = 0x1B2,
 
     // ---- XP ----
     SMSG_LOG_XPGAIN                  = 0x1D0,
@@ -272,6 +273,7 @@ enum class Opcode : uint16_t {
     // ---- Battleground ----
     SMSG_BATTLEFIELD_PORT_DENIED     = 0x014B,
     SMSG_REMOVED_FROM_PVP_QUEUE      = 0x0170,
+    SMSG_BINDPOINTUPDATE             = 0x01B3,
     CMSG_BATTLEFIELD_LIST            = 0x023C,
     SMSG_BATTLEFIELD_LIST            = 0x023D,
     CMSG_BATTLEFIELD_JOIN            = 0x023E,

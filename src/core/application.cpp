@@ -645,6 +645,15 @@ void Application::setupUICallbacks() {
         cc->reset();
     });
 
+    // Bind point update (innkeeper)
+    gameHandler->setBindPointCallback([this](uint32_t mapId, float x, float y, float z) {
+        if (!renderer || !renderer->getCameraController()) return;
+        glm::vec3 canonical(x, y, z);
+        glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
+        renderer->getCameraController()->setDefaultSpawn(renderPos, 0.0f, 15.0f);
+        LOG_INFO("Bindpoint set: mapId=", mapId, " pos=(", x, ", ", y, ", ", z, ")");
+    });
+
     // Faction hostility map is built in buildFactionHostilityMap() when character enters world
 
     // Creature spawn callback (online mode) - spawn creature models

@@ -26,6 +26,11 @@ std::optional<float> selectReachableFloor(const std::optional<float>& terrainH,
     if (terrainH && *terrainH <= refZ + maxStepUp) reachTerrain = terrainH;
     if (wmoH && *wmoH <= refZ + maxStepUp) reachWmo = wmoH;
 
+    // Avoid snapping up to higher WMO floors when entering buildings.
+    if (reachTerrain && reachWmo && *reachWmo > refZ + 2.0f) {
+        return reachTerrain;
+    }
+
     if (reachTerrain && reachWmo) {
         // Both available: prefer the one closest to the player's feet.
         // This prevents tunnels/caves from snapping the player up to the

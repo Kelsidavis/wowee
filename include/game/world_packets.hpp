@@ -1558,6 +1558,30 @@ public:
     static bool parse(network::Packet& packet, GossipMessageData& data);
 };
 
+// ============================================================
+// Bind Point (Hearthstone)
+// ============================================================
+
+struct BindPointUpdateData {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    uint32_t mapId = 0;
+    uint32_t zoneId = 0;
+};
+
+/** CMSG_BINDER_ACTIVATE packet builder */
+class BinderActivatePacket {
+public:
+    static network::Packet build(uint64_t npcGuid);
+};
+
+/** SMSG_BINDPOINTUPDATE parser */
+class BindPointUpdateParser {
+public:
+    static bool parse(network::Packet& packet, BindPointUpdateData& data);
+};
+
 /** CMSG_QUESTGIVER_QUERY_QUEST packet builder */
 class QuestgiverQueryQuestPacket {
 public:
