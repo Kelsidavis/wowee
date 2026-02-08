@@ -103,6 +103,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     renderQuestRequestItemsWindow(gameHandler);
     renderQuestOfferRewardWindow(gameHandler);
     renderVendorWindow(gameHandler);
+    renderTrainerWindow(gameHandler);
     renderTaxiWindow(gameHandler);
     renderQuestMarkers(gameHandler);
     renderMinimapMarkers(gameHandler);
@@ -3516,6 +3517,157 @@ void GameScreen::renderVendorWindow(game::GameHandler& gameHandler) {
 
     if (!open) {
         gameHandler.closeVendor();
+    }
+}
+
+// ============================================================
+// Trainer
+// ============================================================
+
+void GameScreen::renderTrainerWindow(game::GameHandler& gameHandler) {
+    if (!gameHandler.isTrainerWindowOpen()) return;
+
+    auto* window = core::Application::getInstance().getWindow();
+    float screenW = window ? static_cast<float>(window->getWidth()) : 1280.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(screenW / 2 - 225, 100), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(500, 450), ImGuiCond_Appearing);
+
+    bool open = true;
+    if (ImGui::Begin("Trainer", &open)) {
+        const auto& trainer = gameHandler.getTrainerSpells();
+
+        // NPC name
+        auto npcEntity = gameHandler.getEntityManager().getEntity(trainer.trainerGuid);
+        if (npcEntity && npcEntity->getType() == game::ObjectType::UNIT) {
+            auto unit = std::static_pointer_cast<game::Unit>(npcEntity);
+            if (!unit->getName().empty()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%s", unit->getName().c_str());
+            }
+        }
+
+        // Greeting
+        if (!trainer.greeting.empty()) {
+            ImGui::TextWrapped("%s", trainer.greeting.c_str());
+        }
+        ImGui::Separator();
+
+        // Player money
+        uint64_t money = gameHandler.getMoneyCopper();
+        uint32_t mg = static_cast<uint32_t>(money / 10000);
+        uint32_t ms = static_cast<uint32_t>((money / 100) % 100);
+        uint32_t mc = static_cast<uint32_t>(money % 100);
+        ImGui::Text("Your money: %ug %us %uc", mg, ms, mc);
+        ImGui::Separator();
+
+        if (trainer.spells.empty()) {
+            ImGui::TextDisabled("This trainer has nothing to teach you.");
+        } else {
+            // Known spells for checking
+            const auto& knownSpells = gameHandler.getKnownSpells();
+            auto isKnown = [&](uint32_t id) {
+                return std::find(knownSpells.begin(), knownSpells.end(), id) != knownSpells.end();
+            };
+
+            if (ImGui::BeginTable("TrainerTable", 4,
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+                ImGui::TableSetupColumn("Spell", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                ImGui::TableSetupColumn("Cost", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                ImGui::TableSetupColumn("##action", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+                ImGui::TableHeadersRow();
+
+                for (const auto& spell : trainer.spells) {
+                    ImGui::TableNextRow();
+                    ImGui::PushID(static_cast<int>(spell.spellId));
+
+                    // State color: 0=known(green), 1=available(white), 2=unavailable(gray)
+                    ImVec4 color;
+                    const char* statusLabel;
+                    if (spell.state == 0 || isKnown(spell.spellId)) {
+                        color = ImVec4(0.3f, 0.9f, 0.3f, 1.0f);
+                        statusLabel = "Known";
+                    } else if (spell.state == 1) {
+                        color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+                        statusLabel = "Available";
+                    } else {
+                        color = ImVec4(0.6f, 0.3f, 0.3f, 1.0f);
+                        statusLabel = "Unavailable";
+                    }
+
+                    // Spell name
+                    ImGui::TableSetColumnIndex(0);
+                    const std::string& name = gameHandler.getSpellName(spell.spellId);
+                    const std::string& rank = gameHandler.getSpellRank(spell.spellId);
+                    if (!name.empty()) {
+                        if (!rank.empty()) {
+                            ImGui::TextColored(color, "%s (%s)", name.c_str(), rank.c_str());
+                        } else {
+                            ImGui::TextColored(color, "%s", name.c_str());
+                        }
+                    } else {
+                        ImGui::TextColored(color, "Spell #%u", spell.spellId);
+                    }
+
+                    // Tooltip
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        if (!name.empty()) {
+                            ImGui::Text("%s", name.c_str());
+                            if (!rank.empty()) ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", rank.c_str());
+                        }
+                        ImGui::Text("Status: %s", statusLabel);
+                        if (spell.reqLevel > 0) ImGui::Text("Required Level: %u", spell.reqLevel);
+                        if (spell.reqSkill > 0) ImGui::Text("Required Skill: %u (value %u)", spell.reqSkill, spell.reqSkillValue);
+                        if (spell.chainNode1 > 0) {
+                            const std::string& prereq = gameHandler.getSpellName(spell.chainNode1);
+                            if (!prereq.empty()) ImGui::Text("Requires: %s", prereq.c_str());
+                            else ImGui::Text("Requires: Spell #%u", spell.chainNode1);
+                        }
+                        ImGui::EndTooltip();
+                    }
+
+                    // Level
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextColored(color, "%u", spell.reqLevel);
+
+                    // Cost
+                    ImGui::TableSetColumnIndex(2);
+                    if (spell.spellCost > 0) {
+                        uint32_t g = spell.spellCost / 10000;
+                        uint32_t s = (spell.spellCost / 100) % 100;
+                        uint32_t c = spell.spellCost % 100;
+                        bool canAfford = money >= spell.spellCost;
+                        ImVec4 costColor = canAfford ? color : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+                        ImGui::TextColored(costColor, "%ug %us %uc", g, s, c);
+                    } else {
+                        ImGui::TextColored(color, "Free");
+                    }
+
+                    // Train button
+                    ImGui::TableSetColumnIndex(3);
+                    bool canTrain = (spell.state == 1) && (money >= spell.spellCost);
+                    if (!canTrain) {
+                        ImGui::BeginDisabled();
+                    }
+                    if (ImGui::SmallButton("Train")) {
+                        gameHandler.trainSpell(spell.spellId);
+                    }
+                    if (!canTrain) {
+                        ImGui::EndDisabled();
+                    }
+
+                    ImGui::PopID();
+                }
+
+                ImGui::EndTable();
+            }
+        }
+    }
+    ImGui::End();
+
+    if (!open) {
+        gameHandler.closeTrainer();
     }
 }
 

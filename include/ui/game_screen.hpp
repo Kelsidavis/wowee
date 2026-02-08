@@ -145,6 +145,7 @@ private:
     void renderQuestRequestItemsWindow(game::GameHandler& gameHandler);
     void renderQuestOfferRewardWindow(game::GameHandler& gameHandler);
     void renderVendorWindow(game::GameHandler& gameHandler);
+    void renderTrainerWindow(game::GameHandler& gameHandler);
     void renderTaxiWindow(game::GameHandler& gameHandler);
     void renderDeathScreen(game::GameHandler& gameHandler);
     void renderResurrectDialog(game::GameHandler& gameHandler);

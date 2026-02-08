@@ -313,6 +313,18 @@ void GameHandler::update(float deltaTime) {
                 }
             }
         }
+        if (trainerWindowOpen_ && currentTrainerList_.trainerGuid != 0) {
+            auto npc = entityManager.getEntity(currentTrainerList_.trainerGuid);
+            if (npc) {
+                float dx = movementInfo.x - npc->getX();
+                float dy = movementInfo.y - npc->getY();
+                float dist = std::sqrt(dx * dx + dy * dy);
+                if (dist > 15.0f) {
+                    closeTrainer();
+                    LOG_INFO("Trainer closed: walked too far from NPC");
+                }
+            }
+        }
 
         // Update entity movement interpolation (keeps targeting in sync with visuals)
         for (auto& [guid, entity] : entityManager.getEntities()) {
@@ -638,6 +650,9 @@ void GameHandler::handlePacket(network::Packet& packet) {
         }
         case Opcode::SMSG_LIST_INVENTORY:
             handleListInventory(packet);
+            break;
+        case Opcode::SMSG_TRAINER_LIST:
+            handleTrainerList(packet);
             break;
 
         // Silently ignore common packets we don't handle yet
@@ -4536,6 +4551,74 @@ void GameHandler::handleListInventory(network::Packet& packet) {
     for (const auto& item : currentVendorItems.items) {
         queryItemInfo(item.itemId, 0);
     }
+}
+
+// ============================================================
+// Trainer
+// ============================================================
+
+void GameHandler::handleTrainerList(network::Packet& packet) {
+    if (!TrainerListParser::parse(packet, currentTrainerList_)) return;
+    trainerWindowOpen_ = true;
+    gossipWindowOpen = false;
+
+    // Ensure spell name cache is populated
+    loadSpellNameCache();
+}
+
+void GameHandler::trainSpell(uint32_t spellId) {
+    if (state != WorldState::IN_WORLD || !socket) return;
+    auto packet = TrainerBuySpellPacket::build(currentTrainerList_.trainerGuid, spellId);
+    socket->send(packet);
+}
+
+void GameHandler::closeTrainer() {
+    trainerWindowOpen_ = false;
+    currentTrainerList_ = TrainerListData{};
+}
+
+void GameHandler::loadSpellNameCache() {
+    if (spellNameCacheLoaded_) return;
+    spellNameCacheLoaded_ = true;
+
+    auto* am = core::Application::getInstance().getAssetManager();
+    if (!am || !am->isInitialized()) return;
+
+    auto dbc = am->loadDBC("Spell.dbc");
+    if (!dbc || !dbc->isLoaded()) {
+        LOG_WARNING("Trainer: Could not load Spell.dbc for spell names");
+        return;
+    }
+
+    if (dbc->getFieldCount() < 154) {
+        LOG_WARNING("Trainer: Spell.dbc has too few fields");
+        return;
+    }
+
+    // Fields: 0=SpellID, 136=SpellName_enUS, 153=RankText_enUS
+    uint32_t count = dbc->getRecordCount();
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t id = dbc->getUInt32(i, 0);
+        if (id == 0) continue;
+        std::string name = dbc->getString(i, 136);
+        std::string rank = dbc->getString(i, 153);
+        if (!name.empty()) {
+            spellNameCache_[id] = {std::move(name), std::move(rank)};
+        }
+    }
+    LOG_INFO("Trainer: Loaded ", spellNameCache_.size(), " spell names from Spell.dbc");
+}
+
+static const std::string EMPTY_STRING;
+
+const std::string& GameHandler::getSpellName(uint32_t spellId) const {
+    auto it = spellNameCache_.find(spellId);
+    return (it != spellNameCache_.end()) ? it->second.name : EMPTY_STRING;
+}
+
+const std::string& GameHandler::getSpellRank(uint32_t spellId) const {
+    auto it = spellNameCache_.find(spellId);
+    return (it != spellNameCache_.end()) ? it->second.rank : EMPTY_STRING;
 }
 
 // ============================================================

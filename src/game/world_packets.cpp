@@ -2644,6 +2644,52 @@ bool ListInventoryParser::parse(network::Packet& packet, ListInventoryData& data
 }
 
 // ============================================================
+// Trainer
+// ============================================================
+
+bool TrainerListParser::parse(network::Packet& packet, TrainerListData& data) {
+    data = TrainerListData{};
+    data.trainerGuid = packet.readUInt64();
+    data.trainerType = packet.readUInt32();
+    uint32_t spellCount = packet.readUInt32();
+
+    if (spellCount > 1000) {
+        LOG_ERROR("TrainerListParser: unreasonable spell count ", spellCount);
+        return false;
+    }
+
+    data.spells.reserve(spellCount);
+    for (uint32_t i = 0; i < spellCount; ++i) {
+        TrainerSpell spell;
+        spell.spellId    = packet.readUInt32();
+        spell.state      = packet.readUInt8();
+        spell.spellCost  = packet.readUInt32();
+        spell.profDialog = packet.readUInt32();
+        spell.profButton = packet.readUInt32();
+        spell.reqLevel   = packet.readUInt8();
+        spell.reqSkill   = packet.readUInt32();
+        spell.reqSkillValue = packet.readUInt32();
+        spell.chainNode1 = packet.readUInt32();
+        spell.chainNode2 = packet.readUInt32();
+        spell.chainNode3 = packet.readUInt32();
+        data.spells.push_back(spell);
+    }
+
+    data.greeting = packet.readString();
+
+    LOG_INFO("Trainer list: ", spellCount, " spells, type=", data.trainerType,
+             ", greeting=\"", data.greeting, "\"");
+    return true;
+}
+
+network::Packet TrainerBuySpellPacket::build(uint64_t trainerGuid, uint32_t spellId) {
+    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_TRAINER_BUY_SPELL));
+    packet.writeUInt64(trainerGuid);
+    packet.writeUInt32(spellId);
+    return packet;
+}
+
+// ============================================================
 // Death/Respawn
 // ============================================================
 

@@ -126,7 +126,7 @@ enum class Opcode : uint16_t {
     CMSG_GAMEOBJECT_QUERY            = 0x05E,
     SMSG_GAMEOBJECT_QUERY_RESPONSE   = 0x05F,
     CMSG_SET_ACTIVE_MOVER            = 0x26A,
-    CMSG_BINDER_ACTIVATE             = 0x1B2,
+    CMSG_BINDER_ACTIVATE             = 0x1B5,
 
     // ---- XP ----
     SMSG_LOG_XPGAIN                  = 0x1D0,
@@ -230,6 +230,10 @@ enum class Opcode : uint16_t {
     SMSG_SELL_ITEM                   = 0x1A1,
     CMSG_BUY_ITEM                    = 0x1A2,
     SMSG_BUY_FAILED                  = 0x1A5,
+
+    // ---- Trainer ----
+    SMSG_TRAINER_LIST                = 0x01B1,
+    CMSG_TRAINER_BUY_SPELL           = 0x01B2,
 
     // ---- Phase 5: Item/Equip ----
     CMSG_ITEM_QUERY_SINGLE           = 0x056,

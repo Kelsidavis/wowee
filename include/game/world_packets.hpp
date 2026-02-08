@@ -1717,6 +1717,42 @@ public:
 };
 
 // ============================================================
+// Trainer
+// ============================================================
+
+struct TrainerSpell {
+    uint32_t spellId = 0;
+    uint8_t state = 0;         // 0=known(green), 1=available, 2=unavailable(red)
+    uint32_t spellCost = 0;    // copper
+    uint32_t profDialog = 0;
+    uint32_t profButton = 0;
+    uint8_t reqLevel = 0;
+    uint32_t reqSkill = 0;
+    uint32_t reqSkillValue = 0;
+    uint32_t chainNode1 = 0;
+    uint32_t chainNode2 = 0;
+    uint32_t chainNode3 = 0;
+};
+
+struct TrainerListData {
+    uint64_t trainerGuid = 0;
+    uint32_t trainerType = 0;  // 0=class, 1=mounts, 2=tradeskills, 3=pets
+    std::vector<TrainerSpell> spells;
+    std::string greeting;
+    bool isValid() const { return true; }
+};
+
+class TrainerListParser {
+public:
+    static bool parse(network::Packet& packet, TrainerListData& data);
+};
+
+class TrainerBuySpellPacket {
+public:
+    static network::Packet build(uint64_t trainerGuid, uint32_t spellId);
+};
+
+// ============================================================
 // Taxi / Flight Paths
 // ============================================================
 

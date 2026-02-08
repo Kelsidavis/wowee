@@ -536,6 +536,14 @@ public:
     void useItemById(uint32_t itemId);
     bool isVendorWindowOpen() const { return vendorWindowOpen; }
     const ListInventoryData& getVendorItems() const { return currentVendorItems; }
+
+    // Trainer
+    bool isTrainerWindowOpen() const { return trainerWindowOpen_; }
+    const TrainerListData& getTrainerSpells() const { return currentTrainerList_; }
+    void trainSpell(uint32_t spellId);
+    void closeTrainer();
+    const std::string& getSpellName(uint32_t spellId) const;
+    const std::string& getSpellRank(uint32_t spellId) const;
     const ItemQueryResponseData* getItemInfo(uint32_t itemId) const {
         auto it = itemInfoCache_.find(itemId);
         return (it != itemInfoCache_.end()) ? &it->second : nullptr;
@@ -947,6 +955,15 @@ private:
     // Vendor
     bool vendorWindowOpen = false;
     ListInventoryData currentVendorItems;
+
+    // Trainer
+    bool trainerWindowOpen_ = false;
+    TrainerListData currentTrainerList_;
+    struct SpellNameEntry { std::string name; std::string rank; };
+    std::unordered_map<uint32_t, SpellNameEntry> spellNameCache_;
+    bool spellNameCacheLoaded_ = false;
+    void handleTrainerList(network::Packet& packet);
+    void loadSpellNameCache();
 
     // Callbacks
     WorldConnectSuccessCallback onSuccess;
