@@ -1009,6 +1009,9 @@ void CameraController::processMouseButton(const SDL_MouseButtonEvent& event) {
 
     if (event.button == SDL_BUTTON_LEFT) {
         leftMouseDown = (event.state == SDL_PRESSED);
+        if (event.state == SDL_PRESSED && event.clicks >= 2) {
+            autoRunning = false;
+        }
     }
     if (event.button == SDL_BUTTON_RIGHT) {
         rightMouseDown = (event.state == SDL_PRESSED);
