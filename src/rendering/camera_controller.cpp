@@ -20,17 +20,23 @@ std::optional<float> selectReachableFloor(const std::optional<float>& terrainH,
                                           const std::optional<float>& wmoH,
                                           float refZ,
                                           float maxStepUp) {
-    std::optional<float> best;
-    auto consider = [&](const std::optional<float>& h) {
-        if (!h) return;
-        if (*h > refZ + maxStepUp) return;  // Ignore roofs/floors too far above us.
-        if (!best || *h > *best) {
-            best = *h;  // Choose highest reachable floor.
-        }
-    };
-    consider(terrainH);
-    consider(wmoH);
-    return best;
+    // Filter to reachable floors (not too far above)
+    std::optional<float> reachTerrain;
+    std::optional<float> reachWmo;
+    if (terrainH && *terrainH <= refZ + maxStepUp) reachTerrain = terrainH;
+    if (wmoH && *wmoH <= refZ + maxStepUp) reachWmo = wmoH;
+
+    if (reachTerrain && reachWmo) {
+        // Both available: prefer the one closest to the player's feet.
+        // This prevents tunnels/caves from snapping the player up to the
+        // terrain surface above, while still working on top of buildings.
+        float distTerrain = std::abs(*reachTerrain - refZ);
+        float distWmo = std::abs(*reachWmo - refZ);
+        return (distWmo <= distTerrain) ? reachWmo : reachTerrain;
+    }
+    if (reachWmo) return reachWmo;
+    if (reachTerrain) return reachTerrain;
+    return std::nullopt;
 }
 
 std::optional<float> selectHighestFloor(const std::optional<float>& a,
