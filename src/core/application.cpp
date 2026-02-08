@@ -586,18 +586,62 @@ void Application::setupUICallbacks() {
         loadOnlineWorldTerrain(mapId, x, y, z);
     });
 
-    // Unstuck callback — move 5 units forward (based on facing) and re-snap to floor
+    // Unstuck callback — move 5 units forward
     gameHandler->setUnstuckCallback([this]() {
         if (!renderer || !renderer->getCameraController()) return;
         auto* cc = renderer->getCameraController();
         auto* ft = cc->getFollowTargetMutable();
         if (!ft) return;
-        // Move 5 units in the direction the player is facing
         float yaw = cc->getYaw();
         ft->x += 5.0f * std::sin(yaw);
         ft->y += 5.0f * std::cos(yaw);
-        // Re-snap to floor at the new position
         cc->setDefaultSpawn(*ft, yaw, cc->getPitch());
+        cc->reset();
+    });
+
+    // Unstuck to nearest graveyard (WorldSafeLocs.dbc)
+    gameHandler->setUnstuckGyCallback([this]() {
+        if (!renderer || !renderer->getCameraController() || !assetManager) return;
+        auto* cc = renderer->getCameraController();
+        auto* ft = cc->getFollowTargetMutable();
+        if (!ft) return;
+
+        auto wsl = assetManager->loadDBC("WorldSafeLocs.dbc");
+        if (!wsl || !wsl->isLoaded()) {
+            LOG_WARNING("WorldSafeLocs.dbc not available for /unstuckgy");
+            return;
+        }
+
+        // Use current map and position.
+        uint32_t mapId = gameHandler ? gameHandler->getCurrentMapId() : 0;
+        glm::vec3 cur = *ft;
+        float bestDist2 = std::numeric_limits<float>::max();
+        glm::vec3 bestPos = cur;
+
+        for (uint32_t i = 0; i < wsl->getRecordCount(); i++) {
+            uint32_t recMap = wsl->getUInt32(i, 1);
+            if (recMap != mapId) continue;
+            float x = wsl->getFloat(i, 2);
+            float y = wsl->getFloat(i, 3);
+            float z = wsl->getFloat(i, 4);
+            glm::vec3 glPos = core::coords::adtToWorld(x, y, z);
+            float dx = glPos.x - cur.x;
+            float dy = glPos.y - cur.y;
+            float dz = glPos.z - cur.z;
+            float d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 < bestDist2) {
+                bestDist2 = d2;
+                bestPos = glPos;
+            }
+        }
+
+        if (bestDist2 == std::numeric_limits<float>::max()) {
+            LOG_WARNING("No graveyard found on map ", mapId);
+            return;
+        }
+
+        *ft = bestPos;
+        cc->setDefaultSpawn(bestPos, cc->getYaw(), cc->getPitch());
         cc->reset();
     });
 
@@ -2596,7 +2640,26 @@ void Application::processPendingMount() {
     if (!modelCached) {
         auto itDisplayData = displayDataMap_.find(mountDisplayId);
         if (itDisplayData != displayDataMap_.end()) {
-            const auto& dispData = itDisplayData->second;
+            CreatureDisplayData dispData = itDisplayData->second;
+            // If this displayId has no skins, try to find another displayId for the same model with skins.
+            if (dispData.skin1.empty() && dispData.skin2.empty() && dispData.skin3.empty()) {
+                uint32_t modelId = dispData.modelId;
+                int bestScore = -1;
+                for (const auto& [dispId, data] : displayDataMap_) {
+                    if (data.modelId != modelId) continue;
+                    int score = 0;
+                    if (!data.skin1.empty()) score += 3;
+                    if (!data.skin2.empty()) score += 2;
+                    if (!data.skin3.empty()) score += 1;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        dispData = data;
+                    }
+                }
+                LOG_INFO("Mount skin fallback for displayId=", mountDisplayId,
+                         " modelId=", modelId, " skin1='", dispData.skin1,
+                         "' skin2='", dispData.skin2, "' skin3='", dispData.skin3, "'");
+            }
             const auto* md = charRenderer->getModelData(modelId);
             if (md) {
                 std::string modelDir;
@@ -2630,6 +2693,13 @@ void Application::processPendingMount() {
                     if (skinTex != 0) {
                         charRenderer->setModelTexture(modelId, 0, skinTex);
                         LOG_INFO("Forced mount skin1 texture on slot 0: ", texPath);
+                    }
+                } else if (replaced == 0 && !md->textures.empty() && !md->textures[0].filename.empty()) {
+                    // Last-resort: use the model's first texture filename if it exists.
+                    GLuint texId = charRenderer->loadTexture(md->textures[0].filename);
+                    if (texId != 0) {
+                        charRenderer->setModelTexture(modelId, 0, texId);
+                        LOG_INFO("Forced mount model texture on slot 0: ", md->textures[0].filename);
                     }
                 }
             }

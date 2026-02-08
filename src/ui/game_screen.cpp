@@ -1728,6 +1728,12 @@ void GameScreen::sendChatMessage(game::GameHandler& gameHandler) {
                 chatInputBuffer[0] = '\0';
                 return;
             }
+            // /unstuckgy command — move to nearest graveyard
+            if (cmdLower == "unstuckgy") {
+                gameHandler.unstuckGy();
+                chatInputBuffer[0] = '\0';
+                return;
+            }
 
             // Chat channel slash commands
             // If used without a message (e.g. just "/s"), switch the chat type dropdown

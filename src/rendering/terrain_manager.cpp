@@ -190,7 +190,7 @@ bool TerrainManager::loadTile(int x, int y) {
         return false;
     }
 
-    finalizeTile(std::move(pending));
+    finalizeTile(pending);
     return true;
 }
 
@@ -215,8 +215,12 @@ bool TerrainManager::enqueueTile(int x, int y) {
     return true;
 }
 
-std::unique_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
+std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
     TileCoord coord = {x, y};
+    if (auto cached = getCachedTile(coord)) {
+        LOG_DEBUG("Using cached tile [", x, ",", y, "]");
+        return cached;
+    }
 
     LOG_DEBUG("Preparing tile [", x, ",", y, "] (CPU work)");
 
@@ -247,7 +251,7 @@ std::unique_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
         return nullptr;
     }
 
-    auto pending = std::make_unique<PendingTile>();
+    auto pending = std::make_shared<PendingTile>();
     pending->coord = coord;
     pending->terrain = std::move(terrain);
     pending->mesh = std::move(mesh);
@@ -482,7 +486,7 @@ std::unique_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
     return pending;
 }
 
-void TerrainManager::finalizeTile(std::unique_ptr<PendingTile> pending) {
+void TerrainManager::finalizeTile(const std::shared_ptr<PendingTile>& pending) {
     int x = pending->coord.x;
     int y = pending->coord.y;
     TileCoord coord = pending->coord;
@@ -623,6 +627,7 @@ void TerrainManager::finalizeTile(std::unique_ptr<PendingTile> pending) {
     getTileBounds(coord, tile->minX, tile->minY, tile->maxX, tile->maxY);
 
     loadedTiles[coord] = std::move(tile);
+    putCachedTile(pending);
 
     LOG_DEBUG("  Finalized tile [", x, ",", y, "]");
 }
@@ -656,7 +661,7 @@ void TerrainManager::workerLoop() {
 
             std::lock_guard<std::mutex> lock(queueMutex);
             if (pending) {
-                readyQueue.push(std::move(pending));
+                readyQueue.push(pending);
             } else {
                 // Mark as failed so we don't re-enqueue
                 // We'll set failedTiles on the main thread in processReadyTiles
@@ -675,20 +680,20 @@ void TerrainManager::processReadyTiles() {
     const int maxPerFrame = 1;
 
     while (processed < maxPerFrame) {
-        std::unique_ptr<PendingTile> pending;
+        std::shared_ptr<PendingTile> pending;
 
         {
             std::lock_guard<std::mutex> lock(queueMutex);
             if (readyQueue.empty()) {
                 break;
             }
-            pending = std::move(readyQueue.front());
+            pending = readyQueue.front();
             readyQueue.pop();
         }
 
         if (pending) {
             TileCoord coord = pending->coord;
-            finalizeTile(std::move(pending));
+            finalizeTile(pending);
             {
                 std::lock_guard<std::mutex> lock(queueMutex);
                 pendingTiles.erase(coord);
@@ -700,22 +705,109 @@ void TerrainManager::processReadyTiles() {
 
 void TerrainManager::processAllReadyTiles() {
     while (true) {
-        std::unique_ptr<PendingTile> pending;
+        std::shared_ptr<PendingTile> pending;
         {
             std::lock_guard<std::mutex> lock(queueMutex);
             if (readyQueue.empty()) break;
-            pending = std::move(readyQueue.front());
+            pending = readyQueue.front();
             readyQueue.pop();
         }
         if (pending) {
             TileCoord coord = pending->coord;
-            finalizeTile(std::move(pending));
+            finalizeTile(pending);
             {
                 std::lock_guard<std::mutex> lock(queueMutex);
                 pendingTiles.erase(coord);
             }
         }
     }
+}
+
+std::shared_ptr<PendingTile> TerrainManager::getCachedTile(const TileCoord& coord) {
+    std::lock_guard<std::mutex> lock(tileCacheMutex_);
+    auto it = tileCache_.find(coord);
+    if (it == tileCache_.end()) return nullptr;
+    tileCacheLru_.erase(it->second.lruIt);
+    tileCacheLru_.push_front(coord);
+    it->second.lruIt = tileCacheLru_.begin();
+    return it->second.tile;
+}
+
+void TerrainManager::putCachedTile(const std::shared_ptr<PendingTile>& tile) {
+    if (!tile) return;
+    std::lock_guard<std::mutex> lock(tileCacheMutex_);
+    TileCoord coord = tile->coord;
+
+    auto it = tileCache_.find(coord);
+    if (it != tileCache_.end()) {
+        tileCacheLru_.erase(it->second.lruIt);
+        tileCacheBytes_ -= it->second.bytes;
+        tileCache_.erase(it);
+    }
+
+    size_t bytes = estimatePendingTileBytes(*tile);
+    tileCacheLru_.push_front(coord);
+    tileCache_[coord] = CachedTile{tile, bytes, tileCacheLru_.begin()};
+    tileCacheBytes_ += bytes;
+
+    // Evict least-recently used tiles until under budget
+    while (tileCacheBytes_ > tileCacheBudgetBytes_ && !tileCacheLru_.empty()) {
+        TileCoord evictCoord = tileCacheLru_.back();
+        auto eit = tileCache_.find(evictCoord);
+        if (eit != tileCache_.end()) {
+            tileCacheBytes_ -= eit->second.bytes;
+            tileCache_.erase(eit);
+        }
+        tileCacheLru_.pop_back();
+    }
+}
+
+size_t TerrainManager::estimatePendingTileBytes(const PendingTile& tile) const {
+    size_t bytes = 0;
+    bytes += sizeof(PendingTile);
+    bytes += tile.terrain.textures.size() * 64;
+    bytes += tile.terrain.doodadNames.size() * 64;
+    bytes += tile.terrain.wmoNames.size() * 64;
+    bytes += tile.terrain.doodadPlacements.size() * sizeof(pipeline::ADTTerrain::DoodadPlacement);
+    bytes += tile.terrain.wmoPlacements.size() * sizeof(pipeline::ADTTerrain::WMOPlacement);
+
+    for (const auto& chunk : tile.terrain.chunks) {
+        bytes += sizeof(chunk);
+        bytes += chunk.layers.size() * sizeof(pipeline::TextureLayer);
+        bytes += chunk.alphaMap.size();
+    }
+
+    for (const auto& cm : tile.mesh.chunks) {
+        bytes += cm.vertices.size() * sizeof(pipeline::TerrainVertex);
+        bytes += cm.indices.size() * sizeof(pipeline::TerrainIndex);
+        for (const auto& layer : cm.layers) {
+            bytes += layer.alphaData.size();
+        }
+    }
+
+    for (const auto& ready : tile.m2Models) {
+        bytes += ready.model.vertices.size() * sizeof(pipeline::M2Vertex);
+        bytes += ready.model.indices.size() * sizeof(uint16_t);
+        bytes += ready.model.textures.size() * sizeof(pipeline::M2Texture);
+    }
+    bytes += tile.m2Placements.size() * sizeof(PendingTile::M2Placement);
+
+    for (const auto& ready : tile.wmoModels) {
+        for (const auto& group : ready.model.groups) {
+            bytes += group.vertices.size() * sizeof(pipeline::WMOVertex);
+            bytes += group.indices.size() * sizeof(uint16_t);
+            bytes += group.batches.size() * sizeof(pipeline::WMOBatch);
+            bytes += group.portalVertices.size() * sizeof(glm::vec3);
+            bytes += group.portals.size() * sizeof(pipeline::WMOPortal);
+            bytes += group.bspNodes.size();
+        }
+    }
+    bytes += tile.wmoDoodads.size() * sizeof(PendingTile::WMODoodadReady);
+
+    for (const auto& [_, img] : tile.preloadedTextures) {
+        bytes += img.data.size();
+    }
+    return bytes;
 }
 
 void TerrainManager::unloadTile(int x, int y) {

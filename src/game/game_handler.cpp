@@ -4438,6 +4438,13 @@ void GameHandler::unstuck() {
     }
 }
 
+void GameHandler::unstuckGy() {
+    if (unstuckGyCallback_) {
+        unstuckGyCallback_();
+        addSystemChatMessage("Unstuck: moved to nearest graveyard.");
+    }
+}
+
 void GameHandler::handleLootResponse(network::Packet& packet) {
     if (!LootResponseParser::parse(packet, currentLoot)) return;
     lootWindowOpen = true;

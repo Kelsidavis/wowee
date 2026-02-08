@@ -14,6 +14,7 @@
 #include <mutex>
 #include <atomic>
 #include <queue>
+#include <list>
 #include <vector>
 #include <condition_variable>
 #include <glm/glm.hpp>
@@ -228,12 +229,12 @@ private:
     /**
      * Background thread: prepare tile data (CPU work only, no OpenGL)
      */
-    std::unique_ptr<PendingTile> prepareTile(int x, int y);
+    std::shared_ptr<PendingTile> prepareTile(int x, int y);
 
     /**
      * Main thread: upload prepared tile data to GPU
      */
-    void finalizeTile(std::unique_ptr<PendingTile> pending);
+    void finalizeTile(const std::shared_ptr<PendingTile>& pending);
 
     /**
      * Background worker thread loop
@@ -282,7 +283,23 @@ private:
     std::mutex queueMutex;
     std::condition_variable queueCV;
     std::queue<TileCoord> loadQueue;
-    std::queue<std::unique_ptr<PendingTile>> readyQueue;
+    std::queue<std::shared_ptr<PendingTile>> readyQueue;
+
+    // In-RAM tile cache (LRU) to avoid re-reading from disk
+    struct CachedTile {
+        std::shared_ptr<PendingTile> tile;
+        size_t bytes = 0;
+        std::list<TileCoord>::iterator lruIt;
+    };
+    std::unordered_map<TileCoord, CachedTile, TileCoord::Hash> tileCache_;
+    std::list<TileCoord> tileCacheLru_;
+    size_t tileCacheBytes_ = 0;
+    size_t tileCacheBudgetBytes_ = 2ull * 1024 * 1024 * 1024; // 2GB default
+    std::mutex tileCacheMutex_;
+
+    std::shared_ptr<PendingTile> getCachedTile(const TileCoord& coord);
+    void putCachedTile(const std::shared_ptr<PendingTile>& tile);
+    size_t estimatePendingTileBytes(const PendingTile& tile) const;
     std::atomic<bool> workerRunning{false};
 
     // Track tiles currently queued or being processed to avoid duplicates

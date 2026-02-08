@@ -147,6 +147,7 @@ public:
      * Get current player movement info
      */
     const MovementInfo& getMovementInfo() const { return movementInfo; }
+    uint32_t getCurrentMapId() const { return currentMapId_; }
 
     /**
      * Send a movement packet
@@ -370,6 +371,8 @@ public:
     using UnstuckCallback = std::function<void()>;
     void setUnstuckCallback(UnstuckCallback cb) { unstuckCallback_ = std::move(cb); }
     void unstuck();
+    void setUnstuckGyCallback(UnstuckCallback cb) { unstuckGyCallback_ = std::move(cb); }
+    void unstuckGy();
 
     // Creature spawn callback (online mode - triggered when creature enters view)
     // Parameters: guid, displayId, x, y, z (canonical), orientation
@@ -833,6 +836,7 @@ private:
     // ---- Phase 3: Spells ----
     WorldEntryCallback worldEntryCallback_;
     UnstuckCallback unstuckCallback_;
+    UnstuckCallback unstuckGyCallback_;
     CreatureSpawnCallback creatureSpawnCallback_;
     CreatureDespawnCallback creatureDespawnCallback_;
     CreatureMoveCallback creatureMoveCallback_;
