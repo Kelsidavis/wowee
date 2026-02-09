@@ -269,6 +269,10 @@ void GameHandler::update(float deltaTime) {
             if (taxiMountingTimer_ >= 3.0f) {
                 taxiMountingDelay_ = false;
                 taxiMountingTimer_ = 0.0f;
+                // Upload all precached tiles to GPU before flight starts
+                if (taxiFlightStartCallback_) {
+                    taxiFlightStartCallback_();
+                }
                 if (!taxiPendingPath_.empty()) {
                     startClientTaxiPath(taxiPendingPath_);
                     taxiPendingPath_.clear();
@@ -5182,6 +5186,24 @@ void GameHandler::startClientTaxiPath(const std::vector<uint32_t>& pathNodes) {
         return;
     }
 
+    // Set initial orientation to face the first flight segment
+    if (!entityManager.hasEntity(playerGuid)) return;
+    auto playerEntity = entityManager.getEntity(playerGuid);
+    if (playerEntity) {
+        glm::vec3 start = taxiClientPath_[0];
+        glm::vec3 end = taxiClientPath_[1];
+        glm::vec3 dir = end - start;
+        float initialOrientation = std::atan2(dir.y, dir.x) - 1.57079632679f;
+
+        playerEntity->setPosition(start.x, start.y, start.z, initialOrientation);
+        movementInfo.orientation = initialOrientation;
+
+        // Update mount rotation immediately
+        if (taxiOrientationCallback_) {
+            taxiOrientationCallback_(initialOrientation);
+        }
+    }
+
     LOG_INFO("Taxi flight started with ", taxiClientPath_.size(), " spline waypoints");
     taxiClientActive_ = true;
 }
@@ -5234,20 +5256,52 @@ void GameHandler::updateClientTaxi(float deltaTime) {
         return;
     }
 
-    glm::vec3 dirNorm = dir / segmentLen;
-    glm::vec3 nextPos = start + dirNorm * (t * segmentLen);
+    // Use Catmull-Rom spline for smooth interpolation between waypoints
+    // Get surrounding points for spline curve
+    glm::vec3 p0 = (taxiClientIndex_ > 0) ? taxiClientPath_[taxiClientIndex_ - 1] : start;
+    glm::vec3 p1 = start;
+    glm::vec3 p2 = end;
+    glm::vec3 p3 = (taxiClientIndex_ + 2 < taxiClientPath_.size()) ?
+                   taxiClientPath_[taxiClientIndex_ + 2] : end;
 
-    // Add a flight arc to avoid terrain collisions.
-    float arcHeight = std::clamp(segmentLen * 0.15f, 20.0f, 120.0f);
-    float arc = 4.0f * t * (1.0f - t);
-    nextPos.z = glm::mix(start.z, end.z, t) + arcHeight * arc;
+    // Catmull-Rom spline formula for smooth curves
+    float t2 = t * t;
+    float t3 = t2 * t;
+    glm::vec3 nextPos = 0.5f * (
+        (2.0f * p1) +
+        (-p0 + p2) * t +
+        (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
+        (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3
+    );
 
-    float orientation = std::atan2(dir.y, dir.x) - 1.57079632679f;
-    playerEntity->setPosition(nextPos.x, nextPos.y, nextPos.z, orientation);
+    // Calculate smooth direction for orientation (tangent to spline)
+    glm::vec3 tangent = 0.5f * (
+        (-p0 + p2) +
+        2.0f * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t +
+        3.0f * (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t2
+    );
+
+    // Smooth orientation based on spline tangent
+    float targetOrientation = std::atan2(tangent.y, tangent.x) - 1.57079632679f;
+
+    // Smooth rotation transition (lerp towards target)
+    float currentOrientation = movementInfo.orientation;
+    float orientDiff = targetOrientation - currentOrientation;
+    // Normalize angle difference to [-PI, PI]
+    while (orientDiff > 3.14159265f) orientDiff -= 6.28318530f;
+    while (orientDiff < -3.14159265f) orientDiff += 6.28318530f;
+    float smoothOrientation = currentOrientation + orientDiff * std::min(1.0f, deltaTime * 3.0f);
+
+    playerEntity->setPosition(nextPos.x, nextPos.y, nextPos.z, smoothOrientation);
     movementInfo.x = nextPos.x;
     movementInfo.y = nextPos.y;
     movementInfo.z = nextPos.z;
-    movementInfo.orientation = orientation;
+    movementInfo.orientation = smoothOrientation;
+
+    // Update mount rotation to face flight direction
+    if (taxiOrientationCallback_) {
+        taxiOrientationCallback_(smoothOrientation);
+    }
 }
 
 void GameHandler::handleActivateTaxiReply(network::Packet& packet) {

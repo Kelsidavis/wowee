@@ -501,6 +501,14 @@ public:
     using TaxiPrecacheCallback = std::function<void(const std::vector<glm::vec3>&)>;
     void setTaxiPrecacheCallback(TaxiPrecacheCallback cb) { taxiPrecacheCallback_ = std::move(cb); }
 
+    // Taxi orientation callback (for mount rotation)
+    using TaxiOrientationCallback = std::function<void(float orientationRadians)>;
+    void setTaxiOrientationCallback(TaxiOrientationCallback cb) { taxiOrientationCallback_ = std::move(cb); }
+
+    // Callback for when taxi flight is about to start (after mounting delay, before movement begins)
+    using TaxiFlightStartCallback = std::function<void()>;
+    void setTaxiFlightStartCallback(TaxiFlightStartCallback cb) { taxiFlightStartCallback_ = std::move(cb); }
+
     bool isMounted() const { return currentMountDisplayId_ != 0; }
     bool isHostileAttacker(uint64_t guid) const { return hostileAttackers_.count(guid) > 0; }
     float getServerRunSpeed() const { return serverRunSpeed_; }
@@ -959,7 +967,7 @@ private:
     bool taxiClientActive_ = false;
     size_t taxiClientIndex_ = 0;
     std::vector<glm::vec3> taxiClientPath_;
-    float taxiClientSpeed_ = 32.0f;
+    float taxiClientSpeed_ = 18.0f;  // Reduced from 32 to prevent loading hitches
     float taxiClientSegmentProgress_ = 0.0f;
     bool taxiMountingDelay_ = false;  // Delay before flight starts (terrain precache time)
     float taxiMountingTimer_ = 0.0f;
@@ -1023,6 +1031,8 @@ private:
     NpcSwingCallback npcSwingCallback_;
     MountCallback mountCallback_;
     TaxiPrecacheCallback taxiPrecacheCallback_;
+    TaxiOrientationCallback taxiOrientationCallback_;
+    TaxiFlightStartCallback taxiFlightStartCallback_;
     uint32_t currentMountDisplayId_ = 0;
     float serverRunSpeed_ = 7.0f;
     bool playerDead_ = false;

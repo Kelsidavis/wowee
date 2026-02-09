@@ -89,6 +89,7 @@ public:
     void setMountHeightOffset(float offset) { mountHeightOffset_ = offset; }
     void setExternalFollow(bool enabled) { externalFollow_ = enabled; }
     void setExternalMoving(bool moving) { externalMoving_ = moving; }
+    void setFacingYaw(float yaw) { facingYaw = yaw; }  // For taxi/scripted movement
     void clearMovementInputs();
 
     // For first-person player hiding

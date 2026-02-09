@@ -224,7 +224,8 @@ void CameraController::update(float deltaTime) {
     // Get camera axes — project forward onto XY plane for walking
     glm::vec3 forward3D = camera->getForward();
     bool cameraDrivesFacing = rightMouseDown || mouseAutorun;
-    if (cameraDrivesFacing) {
+    // During taxi flights, orientation is controlled by the flight path, not player input
+    if (cameraDrivesFacing && !externalFollow_) {
         facingYaw = yaw;
     }
     float moveYaw = cameraDrivesFacing ? yaw : facingYaw;

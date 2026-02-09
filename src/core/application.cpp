@@ -420,10 +420,9 @@ void Application::update(float deltaTime) {
             }
             if (renderer && renderer->getTerrainManager()) {
                 renderer->getTerrainManager()->setStreamingEnabled(true);
-                // With 8GB tile cache, keep streaming active during taxi at moderate rate.
-                // Increase load radius to pre-cache tiles ahead of flight path.
+                // With 8GB tile cache and precaching, minimize streaming during taxi
                 if (onTaxi) {
-                    renderer->getTerrainManager()->setUpdateInterval(0.3f);
+                    renderer->getTerrainManager()->setUpdateInterval(2.0f);  // Very infrequent updates - already precached
                     renderer->getTerrainManager()->setLoadRadius(2);  // 5x5 grid for taxi (each tile ~533 yards)
                 } else {
                     // Ramp streaming back in after taxi to avoid end-of-flight hitches.
@@ -466,7 +465,8 @@ void Application::update(float deltaTime) {
             }
 
             // Send movement heartbeat every 500ms (keeps server position in sync)
-            if (gameHandler && renderer) {
+            // Skip during taxi flights - server controls position
+            if (gameHandler && renderer && !onTaxi) {
                 movementHeartbeatTimer += deltaTime;
                 if (movementHeartbeatTimer >= 0.5f) {
                     movementHeartbeatTimer = 0.0f;
@@ -716,6 +716,23 @@ void Application::setupUICallbacks() {
         std::vector<std::pair<int, int>> tilesToLoad(uniqueTiles.begin(), uniqueTiles.end());
         LOG_INFO("Precaching ", tilesToLoad.size(), " tiles for taxi route");
         renderer->getTerrainManager()->precacheTiles(tilesToLoad);
+    });
+
+    // Taxi orientation callback - update mount rotation during flight
+    gameHandler->setTaxiOrientationCallback([this](float orientationRadians) {
+        if (renderer && renderer->getCameraController()) {
+            // Convert radians to degrees for camera controller
+            float yawDegrees = glm::degrees(orientationRadians);
+            renderer->getCameraController()->setFacingYaw(yawDegrees);
+        }
+    });
+
+    // Taxi flight start callback - upload all precached tiles to GPU before flight begins
+    gameHandler->setTaxiFlightStartCallback([this]() {
+        if (renderer && renderer->getTerrainManager()) {
+            LOG_INFO("Uploading all precached tiles to GPU before taxi flight...");
+            renderer->getTerrainManager()->processAllReadyTiles();
+        }
     });
 
     // Creature move callback (online mode) - update creature positions

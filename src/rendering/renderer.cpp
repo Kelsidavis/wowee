@@ -1119,7 +1119,11 @@ void Renderer::update(float deltaTime) {
         }
 
         // Movement-facing comes from camera controller and is decoupled from LMB orbit.
-        if (cameraController->isMoving() || cameraController->isRightMouseHeld()) {
+        // During taxi flights, orientation is controlled by the flight path (not player input)
+        if (taxiFlight_) {
+            // Taxi flight: use orientation from flight path
+            characterYaw = cameraController->getFacingYaw();
+        } else if (cameraController->isMoving() || cameraController->isRightMouseHeld()) {
             characterYaw = cameraController->getFacingYaw();
         } else if (inCombat_ && targetPosition && !emoteActive && !isMounted()) {
             // Face target when in combat and idle

@@ -1644,7 +1644,8 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
     lastDrawCallCount = 0;
 
     // Adaptive render distance: keep longer tree/foliage visibility to reduce pop-in.
-    const float maxRenderDistance = (instances.size() > 600) ? 320.0f : 2800.0f;
+    // During taxi, use very short render distance to prevent loading hitches
+    const float maxRenderDistance = onTaxi_ ? 150.0f : (instances.size() > 600) ? 320.0f : 2800.0f;
     const float maxRenderDistanceSq = maxRenderDistance * maxRenderDistance;
     const float fadeStartFraction = 0.75f;
     const glm::vec3 camPos = camera.getPosition();
@@ -1713,10 +1714,20 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
         const M2ModelGPU& model = *currentModel;
 
-        // Skip small models when on taxi (performance optimization)
-        // Small props/foliage aren't visible from flight altitude anyway
-        if (onTaxi_ && model.boundRadius < 3.0f) {
-            continue;
+        // Aggressive culling during taxi for smooth flight
+        if (onTaxi_) {
+            // Skip all small/medium models (props, foliage, decorations)
+            if (model.boundRadius < 15.0f) {
+                continue;
+            }
+            // Skip all foliage and trees (even large ones cause hitching during load)
+            if (model.collisionNoBlock || model.collisionTreeTrunk) {
+                continue;
+            }
+            // Skip underwater objects (water is opaque from altitude)
+            if (instance.position.z < -5.0f) {
+                continue;
+            }
         }
 
         // Distance-based fade alpha for smooth pop-in (squared-distance, no sqrt)
