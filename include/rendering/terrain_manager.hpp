@@ -167,6 +167,12 @@ public:
     void unloadAll();
 
     /**
+     * Precache a set of tiles (for taxi routes, etc.)
+     * @param tiles Vector of (x, y) tile coordinates to preload
+     */
+    void precacheTiles(const std::vector<std::pair<int, int>>& tiles);
+
+    /**
      * Set streaming parameters
      */
     void setLoadRadius(int radius) { loadRadius = radius; }
@@ -294,7 +300,7 @@ private:
     std::unordered_map<TileCoord, CachedTile, TileCoord::Hash> tileCache_;
     std::list<TileCoord> tileCacheLru_;
     size_t tileCacheBytes_ = 0;
-    size_t tileCacheBudgetBytes_ = 2ull * 1024 * 1024 * 1024; // 2GB default
+    size_t tileCacheBudgetBytes_ = 8ull * 1024 * 1024 * 1024; // 8GB for modern systems
     std::mutex tileCacheMutex_;
 
     std::shared_ptr<PendingTile> getCachedTile(const TileCoord& coord);

@@ -420,11 +420,11 @@ void Application::update(float deltaTime) {
             }
             if (renderer && renderer->getTerrainManager()) {
                 renderer->getTerrainManager()->setStreamingEnabled(true);
-                // With 2GB tile cache, keep streaming active during taxi at moderate rate.
+                // With 8GB tile cache, keep streaming active during taxi at moderate rate.
                 // Increase load radius to pre-cache tiles ahead of flight path.
                 if (onTaxi) {
                     renderer->getTerrainManager()->setUpdateInterval(0.3f);
-                    renderer->getTerrainManager()->setLoadRadius(4);  // 9x9 grid for taxi
+                    renderer->getTerrainManager()->setLoadRadius(2);  // 5x5 grid for taxi (each tile ~533 yards)
                 } else {
                     // Ramp streaming back in after taxi to avoid end-of-flight hitches.
                     if (lastTaxiFlight_) {
@@ -687,6 +687,35 @@ void Application::setupUICallbacks() {
         }
         // Queue the mount for processing in the next update() frame
         pendingMountDisplayId_ = mountDisplayId;
+    });
+
+    // Taxi precache callback - preload terrain tiles along flight path
+    gameHandler->setTaxiPrecacheCallback([this](const std::vector<glm::vec3>& path) {
+        if (!renderer || !renderer->getTerrainManager()) return;
+
+        std::set<std::pair<int, int>> uniqueTiles;
+
+        // Sample waypoints along path and gather tiles
+        for (const auto& waypoint : path) {
+            glm::vec3 renderPos = core::coords::canonicalToRender(waypoint);
+            int tileX = static_cast<int>(32 - (renderPos.x / 533.33333f));
+            int tileY = static_cast<int>(32 - (renderPos.y / 533.33333f));
+
+            // Load tile at waypoint + 1 radius around it (3x3 per waypoint)
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    int tx = tileX + dx;
+                    int ty = tileY + dy;
+                    if (tx >= 0 && tx <= 63 && ty >= 0 && ty <= 63) {
+                        uniqueTiles.insert({tx, ty});
+                    }
+                }
+            }
+        }
+
+        std::vector<std::pair<int, int>> tilesToLoad(uniqueTiles.begin(), uniqueTiles.end());
+        LOG_INFO("Precaching ", tilesToLoad.size(), " tiles for taxi route");
+        renderer->getTerrainManager()->precacheTiles(tilesToLoad);
     });
 
     // Creature move callback (online mode) - update creature positions

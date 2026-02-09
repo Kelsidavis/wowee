@@ -496,6 +496,11 @@ public:
     // Mount state
     using MountCallback = std::function<void(uint32_t mountDisplayId)>;  // 0 = dismount
     void setMountCallback(MountCallback cb) { mountCallback_ = std::move(cb); }
+
+    // Taxi terrain precaching callback
+    using TaxiPrecacheCallback = std::function<void(const std::vector<glm::vec3>&)>;
+    void setTaxiPrecacheCallback(TaxiPrecacheCallback cb) { taxiPrecacheCallback_ = std::move(cb); }
+
     bool isMounted() const { return currentMountDisplayId_ != 0; }
     bool isHostileAttacker(uint64_t guid) const { return hostileAttackers_.count(guid) > 0; }
     float getServerRunSpeed() const { return serverRunSpeed_; }
@@ -521,6 +526,13 @@ public:
         uint32_t pathId = 0;
         uint32_t fromNode = 0, toNode = 0;
         uint32_t cost = 0;
+    };
+    struct TaxiPathNode {
+        uint32_t id = 0;
+        uint32_t pathId = 0;
+        uint32_t nodeIndex = 0;
+        uint32_t mapId = 0;
+        float x = 0, y = 0, z = 0;
     };
     const std::unordered_map<uint32_t, TaxiNode>& getTaxiNodes() const { return taxiNodes_; }
     uint32_t getTaxiCostTo(uint32_t destNodeId) const;
@@ -934,6 +946,7 @@ private:
     // Taxi / Flight Paths
     std::unordered_map<uint32_t, TaxiNode> taxiNodes_;
     std::vector<TaxiPathEdge> taxiPathEdges_;
+    std::unordered_map<uint32_t, std::vector<TaxiPathNode>> taxiPathNodes_;  // pathId -> ordered waypoints
     bool taxiDbcLoaded_ = false;
     bool taxiWindowOpen_ = false;
     ShowTaxiNodesData currentTaxiData_;
@@ -948,6 +961,9 @@ private:
     std::vector<glm::vec3> taxiClientPath_;
     float taxiClientSpeed_ = 32.0f;
     float taxiClientSegmentProgress_ = 0.0f;
+    bool taxiMountingDelay_ = false;  // Delay before flight starts (terrain precache time)
+    float taxiMountingTimer_ = 0.0f;
+    std::vector<uint32_t> taxiPendingPath_;  // Path nodes waiting for mounting delay
     bool taxiRecoverPending_ = false;
     uint32_t taxiRecoverMapId_ = 0;
     glm::vec3 taxiRecoverPos_{0.0f};
@@ -1006,6 +1022,7 @@ private:
     MeleeSwingCallback meleeSwingCallback_;
     NpcSwingCallback npcSwingCallback_;
     MountCallback mountCallback_;
+    TaxiPrecacheCallback taxiPrecacheCallback_;
     uint32_t currentMountDisplayId_ = 0;
     float serverRunSpeed_ = 7.0f;
     bool playerDead_ = false;

@@ -262,6 +262,20 @@ void GameHandler::update(float deltaTime) {
             }
         }
 
+        // Mounting delay for taxi (terrain precache time)
+        if (taxiMountingDelay_) {
+            taxiMountingTimer_ += deltaTime;
+            // 3 second delay for "mounting" animation and terrain precache
+            if (taxiMountingTimer_ >= 3.0f) {
+                taxiMountingDelay_ = false;
+                taxiMountingTimer_ = 0.0f;
+                if (!taxiPendingPath_.empty()) {
+                    startClientTaxiPath(taxiPendingPath_);
+                    taxiPendingPath_.clear();
+                }
+            }
+        }
+
         // Leave combat if auto-attack target is too far away (leash range)
         if (autoAttacking && autoAttackTarget != 0) {
             auto targetEntity = entityManager.getEntity(autoAttackTarget);
@@ -5003,6 +5017,33 @@ void GameHandler::loadTaxiDbc() {
     } else {
         LOG_WARNING("Could not load TaxiPath.dbc");
     }
+
+    // Load TaxiPathNode.dbc: actual spline waypoints for each path
+    // 0=ID, 1=PathID, 2=NodeIndex, 3=MapID, 4=X, 5=Y, 6=Z
+    auto pathNodeDbc = am->loadDBC("TaxiPathNode.dbc");
+    if (pathNodeDbc && pathNodeDbc->isLoaded()) {
+        for (uint32_t i = 0; i < pathNodeDbc->getRecordCount(); i++) {
+            TaxiPathNode node;
+            node.id = pathNodeDbc->getUInt32(i, 0);
+            node.pathId = pathNodeDbc->getUInt32(i, 1);
+            node.nodeIndex = pathNodeDbc->getUInt32(i, 2);
+            node.mapId = pathNodeDbc->getUInt32(i, 3);
+            node.x = pathNodeDbc->getFloat(i, 4);
+            node.y = pathNodeDbc->getFloat(i, 5);
+            node.z = pathNodeDbc->getFloat(i, 6);
+            taxiPathNodes_[node.pathId].push_back(node);
+        }
+        // Sort waypoints by nodeIndex for each path
+        for (auto& [pathId, nodes] : taxiPathNodes_) {
+            std::sort(nodes.begin(), nodes.end(),
+                [](const TaxiPathNode& a, const TaxiPathNode& b) {
+                    return a.nodeIndex < b.nodeIndex;
+                });
+        }
+        LOG_INFO("Loaded ", pathNodeDbc->getRecordCount(), " taxi path waypoints from TaxiPathNode.dbc");
+    } else {
+        LOG_WARNING("Could not load TaxiPathNode.dbc");
+    }
 }
 
 void GameHandler::handleShowTaxiNodes(network::Packet& packet) {
@@ -5107,15 +5148,41 @@ void GameHandler::startClientTaxiPath(const std::vector<uint32_t>& pathNodes) {
     taxiClientActive_ = false;
     taxiClientSegmentProgress_ = 0.0f;
 
-    for (uint32_t nodeId : pathNodes) {
-        auto it = taxiNodes_.find(nodeId);
-        if (it == taxiNodes_.end()) continue;
-        glm::vec3 serverPos(it->second.x, it->second.y, it->second.z);
-        glm::vec3 canonical = core::coords::serverToCanonical(serverPos);
-        taxiClientPath_.push_back(canonical);
+    // Build full spline path using TaxiPathNode waypoints (not just node positions)
+    for (size_t i = 0; i + 1 < pathNodes.size(); i++) {
+        uint32_t fromNode = pathNodes[i];
+        uint32_t toNode = pathNodes[i + 1];
+        // Find the pathId connecting these nodes
+        uint32_t pathId = 0;
+        for (const auto& edge : taxiPathEdges_) {
+            if (edge.fromNode == fromNode && edge.toNode == toNode) {
+                pathId = edge.pathId;
+                break;
+            }
+        }
+        if (pathId == 0) {
+            LOG_WARNING("No taxi path found from node ", fromNode, " to ", toNode);
+            continue;
+        }
+        // Get spline waypoints for this path segment
+        auto pathIt = taxiPathNodes_.find(pathId);
+        if (pathIt != taxiPathNodes_.end()) {
+            for (const auto& wpNode : pathIt->second) {
+                glm::vec3 serverPos(wpNode.x, wpNode.y, wpNode.z);
+                glm::vec3 canonical = core::coords::serverToCanonical(serverPos);
+                taxiClientPath_.push_back(canonical);
+            }
+        } else {
+            LOG_WARNING("No spline waypoints found for taxi pathId ", pathId);
+        }
     }
-    if (taxiClientPath_.size() < 2) return;
 
+    if (taxiClientPath_.size() < 2) {
+        LOG_WARNING("Taxi path too short: ", taxiClientPath_.size(), " waypoints");
+        return;
+    }
+
+    LOG_INFO("Taxi flight started with ", taxiClientPath_.size(), " spline waypoints");
     taxiClientActive_ = true;
 }
 
@@ -5335,7 +5402,44 @@ void GameHandler::activateTaxi(uint32_t destNodeId) {
         onTaxiFlight_ = true;
         applyTaxiMountForCurrentNode();
     }
-    startClientTaxiPath(path);
+
+    // Start mounting delay (gives terrain precache time to load)
+    taxiMountingDelay_ = true;
+    taxiMountingTimer_ = 0.0f;
+    taxiPendingPath_ = path;
+
+    // Trigger terrain precache immediately (uses mounting delay time to load)
+    if (taxiPrecacheCallback_) {
+        std::vector<glm::vec3> previewPath;
+        // Build full spline path using TaxiPathNode waypoints
+        for (size_t i = 0; i + 1 < path.size(); i++) {
+            uint32_t fromNode = path[i];
+            uint32_t toNode = path[i + 1];
+            // Find the pathId connecting these nodes
+            uint32_t pathId = 0;
+            for (const auto& edge : taxiPathEdges_) {
+                if (edge.fromNode == fromNode && edge.toNode == toNode) {
+                    pathId = edge.pathId;
+                    break;
+                }
+            }
+            if (pathId == 0) continue;
+            // Get spline waypoints for this path segment
+            auto pathIt = taxiPathNodes_.find(pathId);
+            if (pathIt != taxiPathNodes_.end()) {
+                for (const auto& wpNode : pathIt->second) {
+                    glm::vec3 serverPos(wpNode.x, wpNode.y, wpNode.z);
+                    glm::vec3 canonical = core::coords::serverToCanonical(serverPos);
+                    previewPath.push_back(canonical);
+                }
+            }
+        }
+        if (previewPath.size() >= 2) {
+            taxiPrecacheCallback_(previewPath);
+        }
+    }
+
+    addSystemChatMessage("Mounting for flight...");
 
     // Save recovery target in case of disconnect during taxi.
     auto destIt = taxiNodes_.find(destNodeId);

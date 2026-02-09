@@ -1084,6 +1084,9 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
                 bgpu.materialFlags = model.materials[batch.materialIndex].flags;
             }
 
+            // Copy LOD level from batch
+            bgpu.submeshLevel = batch.submeshLevel;
+
             // Resolve texture: batch.textureIndex → textureLookup → allTextures
             GLuint tex = whiteTexture;
             if (batch.textureIndex < model.textureLookup.size()) {
@@ -1621,15 +1624,17 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
     shader->setUniform("uProjection", projection);
     shader->setUniform("uLightDir", lightDir);
     shader->setUniform("uLightColor", glm::vec3(1.5f, 1.4f, 1.3f));
-    shader->setUniform("uSpecularIntensity", 0.5f);
+    shader->setUniform("uSpecularIntensity", onTaxi_ ? 0.0f : 0.5f);  // Disable specular during taxi for performance
     shader->setUniform("uAmbientColor", ambientColor);
     shader->setUniform("uViewPos", camera.getPosition());
     shader->setUniform("uFogColor", fogColor);
     shader->setUniform("uFogStart", fogStart);
     shader->setUniform("uFogEnd", fogEnd);
-    shader->setUniform("uShadowEnabled", shadowEnabled ? 1 : 0);
+    // Disable shadows during taxi for better performance
+    bool useShadows = shadowEnabled && !onTaxi_;
+    shader->setUniform("uShadowEnabled", useShadows ? 1 : 0);
     shader->setUniform("uShadowStrength", 0.65f);
-    if (shadowEnabled) {
+    if (useShadows) {
         shader->setUniform("uLightSpaceMatrix", lightSpaceMatrix);
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, shadowDepthTex);
@@ -1708,6 +1713,12 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
         const M2ModelGPU& model = *currentModel;
 
+        // Skip small models when on taxi (performance optimization)
+        // Small props/foliage aren't visible from flight altitude anyway
+        if (onTaxi_ && model.boundRadius < 3.0f) {
+            continue;
+        }
+
         // Distance-based fade alpha for smooth pop-in (squared-distance, no sqrt)
         float fadeAlpha = 1.0f;
         float fadeFrac = model.disableAnimation ? 0.55f : fadeStartFraction;
@@ -1734,20 +1745,35 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
             glDepthMask(GL_FALSE);
         }
 
+        // LOD selection based on distance (WoW retail behavior)
+        // submeshLevel: 0=base detail, 1=LOD1, 2=LOD2, 3=LOD3
+        float dist = std::sqrt(entry.distSq);
+        uint16_t desiredLOD = 0;
+        if (dist > 150.0f) desiredLOD = 3;       // Far: LOD3 (lowest detail)
+        else if (dist > 80.0f) desiredLOD = 2;   // Medium-far: LOD2
+        else if (dist > 40.0f) desiredLOD = 1;   // Medium: LOD1
+        // else desiredLOD = 0 (close: base detail)
+
+        // Check if model has the desired LOD level; if not, fall back to LOD 0
+        uint16_t targetLOD = desiredLOD;
+        if (desiredLOD > 0) {
+            bool hasDesiredLOD = false;
+            for (const auto& b : model.batches) {
+                if (b.submeshLevel == desiredLOD) {
+                    hasDesiredLOD = true;
+                    break;
+                }
+            }
+            if (!hasDesiredLOD) {
+                targetLOD = 0;  // Fall back to base LOD
+            }
+        }
+
         for (const auto& batch : model.batches) {
             if (batch.indexCount == 0) continue;
 
-            // LOD selection based on distance (WoW retail behavior)
-            // submeshLevel: 0=base detail, 1=LOD1, 2=LOD2, 3=LOD3
-            float dist = std::sqrt(entry.distSq);
-            uint16_t desiredLOD = 0;
-            if (dist > 150.0f) desiredLOD = 3;       // Far: LOD3 (lowest detail)
-            else if (dist > 80.0f) desiredLOD = 2;   // Medium-far: LOD2
-            else if (dist > 40.0f) desiredLOD = 1;   // Medium: LOD1
-            // else desiredLOD = 0 (close: base detail)
-
-            // Skip batches that don't match desired LOD level
-            if (batch.submeshLevel != desiredLOD) continue;
+            // Skip batches that don't match target LOD level
+            if (batch.submeshLevel != targetLOD) continue;
 
             // Additive/mod batches (glow halos, light effects): collect as glow sprites
             // instead of rendering the mesh geometry which appears as flat orange disks.

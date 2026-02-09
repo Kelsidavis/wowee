@@ -1552,7 +1552,9 @@ void Renderer::renderWorld(game::World* world) {
     }
 
     // Render weather particles (after terrain/water, before characters)
-    if (weather && camera) {
+    // Skip during taxi flights for performance and visual clarity
+    bool onTaxi = cameraController && cameraController->isOnTaxi();
+    if (weather && camera && !onTaxi) {
         weather->render(*camera);
     }
 
@@ -1586,11 +1588,15 @@ void Renderer::renderWorld(game::World* world) {
         // Dim M2 lighting when player is inside a WMO
         if (cameraController) {
             m2Renderer->setInsideInterior(cameraController->isInsideWMO());
+            m2Renderer->setOnTaxi(cameraController->isOnTaxi());
         }
         auto m2Start = std::chrono::steady_clock::now();
         m2Renderer->render(*camera, view, projection);
-        m2Renderer->renderSmokeParticles(*camera, view, projection);
-        m2Renderer->renderM2Particles(view, projection);
+        // Skip particle fog during taxi (expensive and visually distracting)
+        if (!onTaxi) {
+            m2Renderer->renderSmokeParticles(*camera, view, projection);
+            m2Renderer->renderM2Particles(view, projection);
+        }
         auto m2End = std::chrono::steady_clock::now();
         lastM2RenderMs = std::chrono::duration<double, std::milli>(m2End - m2Start).count();
     }

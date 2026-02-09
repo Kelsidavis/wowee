@@ -1161,6 +1161,11 @@ void TerrainManager::streamTiles() {
                     continue;
                 }
 
+                // Circular pattern: skip corner tiles beyond radius (Euclidean distance)
+                if (dx*dx + dy*dy > loadRadius*loadRadius) {
+                    continue;
+                }
+
                 TileCoord coord = {tileX, tileY};
 
                 // Skip if already loaded, pending, or failed
@@ -1183,11 +1188,11 @@ void TerrainManager::streamTiles() {
     for (const auto& pair : loadedTiles) {
         const TileCoord& coord = pair.first;
 
-        int dx = std::abs(coord.x - currentTile.x);
-        int dy = std::abs(coord.y - currentTile.y);
+        int dx = coord.x - currentTile.x;
+        int dy = coord.y - currentTile.y;
 
-        // Chebyshev distance
-        if (dx > unloadRadius || dy > unloadRadius) {
+        // Circular pattern: unload beyond radius (Euclidean distance)
+        if (dx*dx + dy*dy > unloadRadius*unloadRadius) {
             tilesToUnload.push_back(coord);
         }
     }
@@ -1208,6 +1213,25 @@ void TerrainManager::streamTiles() {
         LOG_INFO("Unloaded ", tilesToUnload.size(), " distant tiles, ",
                  loadedTiles.size(), " remain");
     }
+}
+
+void TerrainManager::precacheTiles(const std::vector<std::pair<int, int>>& tiles) {
+    std::lock_guard<std::mutex> lock(queueMutex);
+
+    for (const auto& [x, y] : tiles) {
+        TileCoord coord = {x, y};
+
+        // Skip if already loaded, pending, or failed
+        if (loadedTiles.find(coord) != loadedTiles.end()) continue;
+        if (pendingTiles.find(coord) != pendingTiles.end()) continue;
+        if (failedTiles.find(coord) != failedTiles.end()) continue;
+
+        loadQueue.push(coord);
+        pendingTiles[coord] = true;
+    }
+
+    // Notify workers to start loading
+    queueCV.notify_all();
 }
 
 } // namespace rendering

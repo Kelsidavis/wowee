@@ -76,6 +76,7 @@ public:
     bool isSitting() const { return sitting; }
     bool isSwimming() const { return swimming; }
     bool isInsideWMO() const { return cachedInsideWMO; }
+    bool isOnTaxi() const { return externalFollow_; }
     const glm::vec3* getFollowTarget() const { return followTarget; }
     glm::vec3* getFollowTargetMutable() { return followTarget; }
 

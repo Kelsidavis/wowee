@@ -35,6 +35,7 @@ struct M2ModelGPU {
         uint16_t textureAnimIndex = 0xFFFF; // 0xFFFF = no texture animation
         uint16_t blendMode = 0;   // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=Add, etc.
         uint16_t materialFlags = 0; // M2 material flags (0x01=Unlit, 0x04=TwoSided, 0x10=NoDepthWrite)
+        uint16_t submeshLevel = 0; // LOD level: 0=base, 1=LOD1, 2=LOD2, 3=LOD3
         glm::vec3 center = glm::vec3(0.0f); // Center of batch geometry (model space)
         float glowSize = 1.0f;              // Approx radius of batch geometry
     };
@@ -58,6 +59,7 @@ struct M2ModelGPU {
     bool collisionTreeTrunk = false;
     bool collisionNoBlock = false;
     bool collisionStatue = false;
+    bool isSmallFoliage = false;  // Small foliage (bushes, grass, plants) - skip during taxi
 
     // Collision mesh with spatial grid (from M2 bounding geometry)
     struct CollisionMesh {
@@ -310,9 +312,11 @@ public:
     void clearShadowMap() { shadowEnabled = false; }
 
     void setInsideInterior(bool inside) { insideInterior = inside; }
+    void setOnTaxi(bool onTaxi) { onTaxi_ = onTaxi; }
 
 private:
     bool insideInterior = false;
+    bool onTaxi_ = false;
     pipeline::AssetManager* assetManager = nullptr;
     std::unique_ptr<Shader> shader;
 
