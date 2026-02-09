@@ -5357,6 +5357,17 @@ void GameHandler::handleActivateTaxiReply(network::Packet& packet) {
 
 void GameHandler::closeTaxi() {
     taxiWindowOpen_ = false;
+
+    // If we optimistically mounted during node selection, dismount now
+    if (taxiMountActive_ && mountCallback_) {
+        mountCallback_(0);  // Dismount
+    }
+    taxiMountActive_ = false;
+    taxiMountDisplayId_ = 0;
+
+    // Clear any pending activation
+    taxiActivatePending_ = false;
+    onTaxiFlight_ = false;
 }
 
 void GameHandler::buildTaxiCostMap() {
