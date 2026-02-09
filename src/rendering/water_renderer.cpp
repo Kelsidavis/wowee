@@ -115,9 +115,21 @@ bool WaterRenderer::initialize() {
             result += skyTint;
             result = max(result, waterColor.rgb * 0.24);
 
+            // Ocean foam on wave crests (procedural)
+            float wavePeak = smoothstep(0.25, 0.5, WaveOffset);  // Peaks have positive offset
+            float foamNoise = fract(sin(dot(TexCoord * 40.0 + time * 0.5, vec2(12.9898, 78.233))) * 43758.5453);
+            float foam = wavePeak * foamNoise * 0.65;
+            result += vec3(foam);  // Add white foam to wave crests
+
             // Slight fresnel: more reflective/opaque at grazing angles.
             float fresnel = pow(1.0 - max(dot(norm, viewDir), 0.0), 3.0);
-            float alpha = clamp(waterAlpha * alphaScale * (0.68 + fresnel * 0.45), 0.12, 0.82);
+
+            // Distance-based opacity: distant water is more opaque to hide underwater objects
+            float dist = length(viewPos - FragPos);
+            float distFade = smoothstep(80.0, 400.0, dist);  // Start at 80 units, full opaque at 400
+            float distAlpha = mix(0.0, 0.5, distFade);  // Add up to 50% opacity at distance
+
+            float alpha = clamp(waterAlpha * alphaScale * (0.68 + fresnel * 0.45) + distAlpha, 0.12, 0.95);
             FragColor = vec4(result, alpha);
         }
     )";
