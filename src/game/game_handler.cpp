@@ -5153,6 +5153,7 @@ void GameHandler::updateClientTaxi(float deltaTime) {
             }
             taxiMountActive_ = false;
             taxiMountDisplayId_ = 0;
+            currentMountDisplayId_ = 0;
             taxiClientPath_.clear();
             taxiRecoverPending_ = false;
             movementInfo.flags = 0;
