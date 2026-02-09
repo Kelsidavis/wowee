@@ -482,6 +482,7 @@ void WaterRenderer::createWaterMesh(WaterSurface& surface) {
     for (int y = 0; y < gridHeight - 1; y++) {
         for (int x = 0; x < gridWidth - 1; x++) {
             // Check render mask - each bit represents a tile
+            // Also render edge tiles to blend coastlines (avoid square gaps)
             bool renderTile = true;
             if (!surface.mask.empty()) {
                 int tileIndex;
@@ -501,6 +502,27 @@ void WaterRenderer::createWaterMesh(WaterSurface& surface) {
                     bool lsbOrder = (maskByte & (1 << bitIndex)) != 0;
                     bool msbOrder = (maskByte & (1 << (7 - bitIndex))) != 0;
                     renderTile = lsbOrder || msbOrder;
+
+                    // If this tile is masked out, check neighbors to fill gaps
+                    if (!renderTile && x > 0 && y > 0 && x < gridWidth-2 && y < gridHeight-2) {
+                        // Check adjacent tiles - render if any neighbor is water (blend coastline)
+                        for (int dy = -1; dy <= 1; dy++) {
+                            for (int dx = -1; dx <= 1; dx++) {
+                                if (dx == 0 && dy == 0) continue;
+                                int neighborIdx = (y + dy) * surface.width + (x + dx);
+                                int nByteIdx = neighborIdx / 8;
+                                int nBitIdx = neighborIdx % 8;
+                                if (nByteIdx < static_cast<int>(surface.mask.size())) {
+                                    uint8_t nMask = surface.mask[nByteIdx];
+                                    if ((nMask & (1 << nBitIdx)) || (nMask & (1 << (7 - nBitIdx)))) {
+                                        renderTile = true;
+                                        goto found_neighbor;
+                                    }
+                                }
+                            }
+                        }
+                        found_neighbor:;
+                    }
                 }
             }
 
