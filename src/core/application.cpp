@@ -420,10 +420,9 @@ void Application::update(float deltaTime) {
             }
             if (renderer && renderer->getTerrainManager()) {
                 renderer->getTerrainManager()->setStreamingEnabled(true);
-                // Freeze new tile streaming during taxi to avoid hangs; still process ready tiles.
+                // With 2GB tile cache, keep streaming active during taxi at moderate rate.
                 if (onTaxi) {
-                    renderer->getTerrainManager()->setUpdateInterval(9999.0f);
-                    taxiStreamCooldown_ = 2.5f;
+                    renderer->getTerrainManager()->setUpdateInterval(0.3f);
                 } else {
                     // Ramp streaming back in after taxi to avoid end-of-flight hitches.
                     if (lastTaxiFlight_) {
