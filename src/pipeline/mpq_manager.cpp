@@ -332,9 +332,12 @@ bool MPQManager::loadLocaleArchives(const std::string& locale) {
         return false;
     }
 
-    // Locale-specific archives
+    // Locale-specific archives (including speech MPQs for NPC voices)
     std::vector<std::pair<std::string, int>> localeArchives = {
         {"locale-" + locale + ".MPQ", 250},
+        {"speech-" + locale + ".MPQ", 240},  // Base speech/NPC voices
+        {"expansion-speech-" + locale + ".MPQ", 245},  // TBC speech
+        {"lichking-speech-" + locale + ".MPQ", 248},  // WotLK speech
         {"patch-" + locale + ".MPQ", 450},
         {"patch-" + locale + "-2.MPQ", 460},
         {"patch-" + locale + "-3.MPQ", 470},
