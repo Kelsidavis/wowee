@@ -4,6 +4,7 @@
 #include <cmath>
 #include "core/spawn_presets.hpp"
 #include "core/logger.hpp"
+#include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
@@ -78,6 +79,9 @@ Application::~Application() {
 
 bool Application::initialize() {
     LOG_INFO("Initializing Wowee Native Client");
+
+    // Initialize memory monitoring for dynamic cache sizing
+    core::MemoryMonitor::getInstance().initialize();
 
     // Create window
     WindowConfig windowConfig;

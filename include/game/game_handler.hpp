@@ -965,6 +965,7 @@ private:
     bool taxiActivatePending_ = false;
     float taxiActivateTimer_ = 0.0f;
     bool taxiClientActive_ = false;
+    float taxiLandingCooldown_ = 0.0f;  // Prevent re-entering taxi right after landing
     size_t taxiClientIndex_ = 0;
     std::vector<glm::vec3> taxiClientPath_;
     float taxiClientSpeed_ = 18.0f;  // Reduced from 32 to prevent loading hitches

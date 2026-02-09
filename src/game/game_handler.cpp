@@ -182,6 +182,11 @@ void GameHandler::update(float deltaTime) {
         // Update combat text (Phase 2)
         updateCombatText(deltaTime);
 
+        // Update taxi landing cooldown
+        if (taxiLandingCooldown_ > 0.0f) {
+            taxiLandingCooldown_ -= deltaTime;
+        }
+
         // Detect taxi flight landing: UNIT_FLAG_TAXI_FLIGHT (0x00000100) cleared
         if (onTaxiFlight_) {
             updateClientTaxi(deltaTime);
@@ -194,6 +199,7 @@ void GameHandler::update(float deltaTime) {
                 auto unit = std::static_pointer_cast<Unit>(playerEntity);
                 if ((unit->getUnitFlags() & 0x00000100) == 0) {
                     onTaxiFlight_ = false;
+                    taxiLandingCooldown_ = 2.0f;  // 2 second cooldown to prevent re-entering
                     if (taxiMountActive_ && mountCallback_) {
                         mountCallback_(0);
                     }
@@ -1670,7 +1676,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     }
                     if (block.guid == playerGuid) {
                         constexpr uint32_t UNIT_FLAG_TAXI_FLIGHT = 0x00000100;
-                        if ((unit->getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0 && !onTaxiFlight_) {
+                        if ((unit->getUnitFlags() & UNIT_FLAG_TAXI_FLIGHT) != 0 && !onTaxiFlight_ && taxiLandingCooldown_ <= 0.0f) {
                             onTaxiFlight_ = true;
                             applyTaxiMountForCurrentNode();
                         }
@@ -5242,6 +5248,7 @@ void GameHandler::updateClientTaxi(float deltaTime) {
         if (taxiClientIndex_ + 1 >= taxiClientPath_.size()) {
             taxiClientActive_ = false;
             onTaxiFlight_ = false;
+            taxiLandingCooldown_ = 2.0f;  // 2 second cooldown to prevent re-entering
             if (taxiMountActive_ && mountCallback_) {
                 mountCallback_(0);
             }

@@ -69,6 +69,7 @@ set(WOWEE_SOURCES
     src/core/window.cpp
     src/core/input.cpp
     src/core/logger.cpp
+    src/core/memory_monitor.cpp
 
     # Network
     src/network/socket.cpp

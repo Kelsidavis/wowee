@@ -5,6 +5,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/camera.hpp"
 #include "core/coordinates.hpp"
+#include "core/memory_monitor.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -113,10 +114,21 @@ bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer*
         return false;
     }
 
-    // Start background worker pool
+    // Set dynamic tile cache budget (use other half of recommended budget)
+    auto& memMonitor = core::MemoryMonitor::getInstance();
+    tileCacheBudgetBytes_ = memMonitor.getRecommendedCacheBudget() / 2;
+    LOG_INFO("Terrain tile cache budget: ", tileCacheBudgetBytes_ / (1024 * 1024), " MB (dynamic)");
+
+    // Start background worker pool (dynamic: scales with available cores)
+    // Use 75% of logical cores for decompression, leaving headroom for render/OS
     workerRunning.store(true);
     unsigned hc = std::thread::hardware_concurrency();
-    workerCount = static_cast<int>(hc > 0 ? std::min(4u, std::max(2u, hc - 1)) : 2u);
+    if (hc > 0) {
+        unsigned targetWorkers = std::max(6u, (hc * 3) / 4);  // 75% of cores, minimum 6
+        workerCount = static_cast<int>(targetWorkers);
+    } else {
+        workerCount = 6;  // Fallback
+    }
     workerThreads.reserve(workerCount);
     for (int i = 0; i < workerCount; i++) {
         workerThreads.emplace_back(&TerrainManager::workerLoop, this);
@@ -917,10 +929,16 @@ void TerrainManager::unloadAll() {
         m2Renderer->clear();
     }
 
-    // Restart worker threads so streaming can resume
+    // Restart worker threads so streaming can resume (dynamic: scales with available cores)
+    // Use 75% of logical cores for decompression, leaving headroom for render/OS
     workerRunning.store(true);
     unsigned hc = std::thread::hardware_concurrency();
-    workerCount = static_cast<int>(hc > 0 ? std::min(4u, std::max(2u, hc - 1)) : 2u);
+    if (hc > 0) {
+        unsigned targetWorkers = std::max(6u, (hc * 3) / 4);  // 75% of cores, minimum 6
+        workerCount = static_cast<int>(targetWorkers);
+    } else {
+        workerCount = 6;  // Fallback
+    }
     workerThreads.reserve(workerCount);
     for (int i = 0; i < workerCount; i++) {
         workerThreads.emplace_back(&TerrainManager::workerLoop, this);

@@ -80,8 +80,51 @@ void CameraController::update(float deltaTime) {
         return;
     }
 
-    // Skip all collision/movement logic during taxi flights (position controlled externally)
+    // During taxi flights, skip input/movement logic but still position camera
     if (externalFollow_) {
+        // Mouse look (right mouse button)
+        if (rightMouseDown) {
+            int mouseDX, mouseDY;
+            SDL_GetRelativeMouseState(&mouseDX, &mouseDY);
+            yaw -= mouseDX * mouseSensitivity;
+            pitch -= mouseDY * mouseSensitivity;
+            pitch = glm::clamp(pitch, -89.0f, 89.0f);
+            camera->setRotation(yaw, pitch);
+        }
+
+        // Position camera behind character during taxi
+        if (thirdPerson && followTarget) {
+            glm::vec3 targetPos = *followTarget;
+            glm::vec3 forward3D = camera->getForward();
+
+            // Pivot point at upper chest/neck
+            float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
+            glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, PIVOT_HEIGHT + mountedOffset);
+
+            // Camera direction from yaw/pitch
+            glm::vec3 camDir = -forward3D;
+
+            // Use current distance
+            float actualDist = std::min(currentDistance, collisionDistance);
+
+            // Compute camera position
+            glm::vec3 actualCam;
+            if (actualDist < MIN_DISTANCE + 0.1f) {
+                actualCam = pivot + forward3D * 0.1f;
+            } else {
+                actualCam = pivot + camDir * actualDist;
+            }
+
+            // Smooth camera position
+            if (glm::length(smoothedCamPos) < 0.01f) {
+                smoothedCamPos = actualCam;
+            }
+            float camLerp = 1.0f - std::exp(-CAM_SMOOTH_SPEED * deltaTime);
+            smoothedCamPos += (actualCam - smoothedCamPos) * camLerp;
+
+            camera->setPosition(smoothedCamPos);
+        }
+
         return;
     }
 

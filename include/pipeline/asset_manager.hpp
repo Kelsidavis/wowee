@@ -104,7 +104,7 @@ private:
     mutable std::mutex readMutex;
     std::map<std::string, std::shared_ptr<DBCFile>> dbcCache;
 
-    // Decompressed file cache (LRU, 1GB budget for modern RAM)
+    // Decompressed file cache (LRU, dynamic budget based on system RAM)
     struct CachedFile {
         std::vector<uint8_t> data;
         uint64_t lastAccessTime;
@@ -114,7 +114,7 @@ private:
     mutable uint64_t fileCacheAccessCounter = 0;
     mutable size_t fileCacheHits = 0;
     mutable size_t fileCacheMisses = 0;
-    static constexpr size_t FILE_CACHE_BUDGET = 1024 * 1024 * 1024;  // 1GB
+    mutable size_t fileCacheBudget = 1024 * 1024 * 1024;  // Dynamic, starts at 1GB
 
     /**
      * Normalize path for case-insensitive lookup

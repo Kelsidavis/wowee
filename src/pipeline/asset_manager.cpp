@@ -1,5 +1,6 @@
 #include "pipeline/asset_manager.hpp"
 #include "core/logger.hpp"
+#include "core/memory_monitor.hpp"
 #include <algorithm>
 
 namespace wowee {
@@ -25,8 +26,14 @@ bool AssetManager::initialize(const std::string& dataPath_) {
         return false;
     }
 
+    // Set dynamic file cache budget based on available RAM
+    auto& memMonitor = core::MemoryMonitor::getInstance();
+    size_t recommendedBudget = memMonitor.getRecommendedCacheBudget();
+    fileCacheBudget = recommendedBudget / 2;  // Split budget: half for file cache, half for other caches
+
     initialized = true;
-    LOG_INFO("Asset manager initialized successfully (1GB file cache enabled)");
+    LOG_INFO("Asset manager initialized (dynamic file cache: ",
+             fileCacheBudget / (1024 * 1024), " MB, adjusts based on RAM)");
     return true;
 }
 
@@ -169,9 +176,9 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
 
     // Add to cache if within budget
     size_t fileSize = data.size();
-    if (fileSize > 0 && fileSize < FILE_CACHE_BUDGET / 10) {  // Don't cache files > 100MB
+    if (fileSize > 0 && fileSize < fileCacheBudget / 2) {  // Don't cache files > 50% of budget (very aggressive)
         // Evict old entries if needed (LRU)
-        while (fileCacheTotalBytes + fileSize > FILE_CACHE_BUDGET && !fileCache.empty()) {
+        while (fileCacheTotalBytes + fileSize > fileCacheBudget && !fileCache.empty()) {
             // Find least recently used entry
             auto lru = fileCache.begin();
             for (auto it = fileCache.begin(); it != fileCache.end(); ++it) {

@@ -1379,7 +1379,7 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
 
     // Cache camera state for frustum-culling bone computation
     cachedCamPos_ = cameraPos;
-    const float maxRenderDistance = (instances.size() > 600) ? 320.0f : 2800.0f;
+    const float maxRenderDistance = (instances.size() > 2000) ? 800.0f : 2800.0f;
     cachedMaxRenderDistSq_ = maxRenderDistance * maxRenderDistance;
 
     // Build frustum for culling bones
@@ -1643,9 +1643,9 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
     lastDrawCallCount = 0;
 
-    // Adaptive render distance: keep longer tree/foliage visibility to reduce pop-in.
-    // During taxi, use very short render distance to prevent loading hitches
-    const float maxRenderDistance = onTaxi_ ? 150.0f : (instances.size() > 600) ? 320.0f : 2800.0f;
+    // Adaptive render distance: aggressive settings to utilize VRAM fully
+    // During taxi, render far to upload models/textures to VRAM cache
+    const float maxRenderDistance = onTaxi_ ? 1200.0f : (instances.size() > 2000) ? 800.0f : 2800.0f;
     const float maxRenderDistanceSq = maxRenderDistance * maxRenderDistance;
     const float fadeStartFraction = 0.75f;
     const glm::vec3 camPos = camera.getPosition();

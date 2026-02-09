@@ -272,9 +272,9 @@ private:
 
     // Streaming parameters
     bool streamingEnabled = true;
-    int loadRadius = 2;      // Load tiles within this radius (5x5 grid)
-    int unloadRadius = 3;    // Unload tiles beyond this radius
-    float updateInterval = 0.1f;  // Check streaming every 0.1 seconds
+    int loadRadius = 8;      // Load tiles within this radius (17x17 grid)
+    int unloadRadius = 12;   // Unload tiles beyond this radius
+    float updateInterval = 0.033f;  // Check streaming every 33ms (~30 fps)
     float timeSinceLastUpdate = 0.0f;
 
     // Tile size constants (WoW ADT specifications)
@@ -300,7 +300,7 @@ private:
     std::unordered_map<TileCoord, CachedTile, TileCoord::Hash> tileCache_;
     std::list<TileCoord> tileCacheLru_;
     size_t tileCacheBytes_ = 0;
-    size_t tileCacheBudgetBytes_ = 8ull * 1024 * 1024 * 1024; // 8GB for modern systems
+    size_t tileCacheBudgetBytes_ = 8ull * 1024 * 1024 * 1024; // Dynamic, set at init based on RAM
     std::mutex tileCacheMutex_;
 
     std::shared_ptr<PendingTile> getCachedTile(const TileCoord& coord);
