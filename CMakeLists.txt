@@ -99,6 +99,7 @@ set(WOWEE_SOURCES
     src/game/inventory.cpp
 
     # Audio
+    src/audio/audio_engine.cpp
     src/audio/music_manager.cpp
     src/audio/footstep_manager.cpp
     src/audio/activity_sound_manager.cpp
@@ -194,6 +195,7 @@ set(WOWEE_HEADERS
     include/game/world_packets.hpp
     include/game/character.hpp
 
+    include/audio/audio_engine.hpp
     include/audio/music_manager.hpp
     include/audio/footstep_manager.hpp
     include/audio/activity_sound_manager.hpp
@@ -265,6 +267,7 @@ target_link_libraries(wowee PRIVATE
     OpenSSL::Crypto
     Threads::Threads
     ZLIB::ZLIB
+    ${CMAKE_DL_LIBS}
 )
 
 target_link_libraries(wowee PRIVATE ${FFMPEG_LIBRARIES})

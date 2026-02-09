@@ -1,10 +1,8 @@
 #include "audio/footstep_manager.hpp"
+#include "audio/audio_engine.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/logger.hpp"
-#include "platform/process.hpp"
 #include <algorithm>
-#include <cstdio>
-#include <fstream>
 #include <string>
 
 namespace wowee {
@@ -67,8 +65,6 @@ bool FootstepManager::initialize(pipeline::AssetManager* assets) {
 }
 
 void FootstepManager::shutdown() {
-    stopCurrentProcess();
-    std::remove(tempFilePath.c_str());
     for (auto& surface : surfaces) {
         surface.clips.clear();
     }
@@ -77,14 +73,19 @@ void FootstepManager::shutdown() {
 }
 
 void FootstepManager::update(float) {
-    reapFinishedProcess();
+    // No longer needed - AudioEngine handles cleanup internally
 }
 
 void FootstepManager::playFootstep(FootstepSurface surface, bool sprinting) {
     if (!assetManager || sampleCount == 0) {
         return;
     }
-    reapFinishedProcess();
+
+    // Check if AudioEngine is initialized
+    if (!AudioEngine::instance().isInitialized()) {
+        return;
+    }
+
     playRandomStep(surface, sprinting);
 }
 
@@ -111,17 +112,6 @@ void FootstepManager::preloadSurface(FootstepSurface surface, const std::vector<
     }
 }
 
-void FootstepManager::stopCurrentProcess() {
-    platform::killProcess(playerPid);
-}
-
-void FootstepManager::reapFinishedProcess() {
-    if (playerPid == INVALID_PROCESS) {
-        return;
-    }
-    platform::isProcessRunning(playerPid);
-}
-
 bool FootstepManager::playRandomStep(FootstepSurface surface, bool sprinting) {
     auto now = std::chrono::steady_clock::now();
     if (lastPlayTime.time_since_epoch().count() != 0) {
@@ -140,22 +130,11 @@ bool FootstepManager::playRandomStep(FootstepSurface surface, bool sprinting) {
         }
     }
 
-    // Keep one active step at a time to avoid ffplay process buildup.
-    if (playerPid != INVALID_PROCESS) {
-        return false;
-    }
-
+    // Pick a random clip
     std::uniform_int_distribution<size_t> clipDist(0, list.size() - 1);
     const Sample& sample = list[clipDist(rng)];
 
-    std::ofstream out(tempFilePath, std::ios::binary);
-    if (!out) {
-        return false;
-    }
-    out.write(reinterpret_cast<const char*>(sample.data.data()), static_cast<std::streamsize>(sample.data.size()));
-    out.close();
-
-    // Subtle variation for less repetitive cadence.
+    // Subtle variation for less repetitive cadence
     std::uniform_real_distribution<float> pitchDist(0.97f, 1.05f);
     std::uniform_real_distribution<float> volumeDist(0.92f, 1.00f);
     float pitch = pitchDist(rng);
@@ -163,15 +142,10 @@ bool FootstepManager::playRandomStep(FootstepSurface surface, bool sprinting) {
     if (volume > 1.0f) volume = 1.0f;
     if (volume < 0.1f) volume = 0.1f;
 
-    std::string filter = "asetrate=44100*" + std::to_string(pitch) +
-                         ",aresample=44100,volume=" + std::to_string(volume);
+    // Play using AudioEngine (non-blocking, no process spawn!)
+    bool success = AudioEngine::instance().playSound2D(sample.data, volume, pitch);
 
-    playerPid = platform::spawnProcess({
-        "-nodisp", "-autoexit", "-loglevel", "quiet",
-        "-af", filter, tempFilePath
-    });
-
-    if (playerPid != INVALID_PROCESS) {
+    if (success) {
         lastPlayTime = now;
         return true;
     }

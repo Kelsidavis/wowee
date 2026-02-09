@@ -31,6 +31,7 @@
 #include "core/logger.hpp"
 #include "game/world.hpp"
 #include "game/zone_manager.hpp"
+#include "audio/audio_engine.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
@@ -322,6 +323,11 @@ bool Renderer::initialize(core::Window* win) {
     zoneManager = std::make_unique<game::ZoneManager>();
     zoneManager->initialize();
 
+    // Initialize AudioEngine (singleton)
+    if (!audio::AudioEngine::instance().initialize()) {
+        LOG_WARNING("Failed to initialize AudioEngine - audio will be disabled");
+    }
+
     // Create music manager (initialized later with asset manager)
     musicManager = std::make_unique<audio::MusicManager>();
     footstepManager = std::make_unique<audio::FootstepManager>();
@@ -443,6 +449,10 @@ void Renderer::shutdown() {
         activitySoundManager->shutdown();
         activitySoundManager.reset();
     }
+
+    // Shutdown AudioEngine singleton
+    audio::AudioEngine::instance().shutdown();
+
     if (underwaterOverlayVAO) {
         glDeleteVertexArrays(1, &underwaterOverlayVAO);
         underwaterOverlayVAO = 0;
@@ -1072,13 +1082,26 @@ audio::FootstepSurface Renderer::resolveFootstepSurface() const {
 
     const glm::vec3& p = characterPosition;
 
+    // Cache footstep surface to avoid expensive queries every step
+    // Only update if moved >1.5 units or timer expired (0.5s)
+    float distSq = glm::dot(p - cachedFootstepPosition, p - cachedFootstepPosition);
+    if (distSq < 2.25f && cachedFootstepUpdateTimer < 0.5f) {
+        return cachedFootstepSurface;
+    }
+
+    // Update cache
+    cachedFootstepPosition = p;
+    cachedFootstepUpdateTimer = 0.0f;
+
     if (cameraController->isSwimming()) {
+        cachedFootstepSurface = audio::FootstepSurface::WATER;
         return audio::FootstepSurface::WATER;
     }
 
     if (waterRenderer) {
         auto waterH = waterRenderer->getWaterHeightAt(p.x, p.y);
         if (waterH && p.z < (*waterH + 0.25f)) {
+            cachedFootstepSurface = audio::FootstepSurface::WATER;
             return audio::FootstepSurface::WATER;
         }
     }
@@ -1087,25 +1110,30 @@ audio::FootstepSurface Renderer::resolveFootstepSurface() const {
         auto wmoFloor = wmoRenderer->getFloorHeight(p.x, p.y, p.z + 1.5f);
         auto terrainFloor = terrainManager ? terrainManager->getHeightAt(p.x, p.y) : std::nullopt;
         if (wmoFloor && (!terrainFloor || *wmoFloor >= *terrainFloor - 0.1f)) {
+            cachedFootstepSurface = audio::FootstepSurface::STONE;
             return audio::FootstepSurface::STONE;
         }
     }
+
+    // Determine surface type (expensive - only done when cache needs update)
+    audio::FootstepSurface surface = audio::FootstepSurface::STONE;
 
     if (terrainManager) {
         auto texture = terrainManager->getDominantTextureAt(p.x, p.y);
         if (texture) {
             std::string t = *texture;
             for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (t.find("snow") != std::string::npos || t.find("ice") != std::string::npos) return audio::FootstepSurface::SNOW;
-            if (t.find("grass") != std::string::npos || t.find("moss") != std::string::npos || t.find("leaf") != std::string::npos) return audio::FootstepSurface::GRASS;
-            if (t.find("sand") != std::string::npos || t.find("dirt") != std::string::npos || t.find("mud") != std::string::npos) return audio::FootstepSurface::DIRT;
-            if (t.find("wood") != std::string::npos || t.find("timber") != std::string::npos) return audio::FootstepSurface::WOOD;
-            if (t.find("metal") != std::string::npos || t.find("iron") != std::string::npos) return audio::FootstepSurface::METAL;
-            if (t.find("stone") != std::string::npos || t.find("rock") != std::string::npos || t.find("cobble") != std::string::npos || t.find("brick") != std::string::npos) return audio::FootstepSurface::STONE;
+            if (t.find("snow") != std::string::npos || t.find("ice") != std::string::npos) surface = audio::FootstepSurface::SNOW;
+            else if (t.find("grass") != std::string::npos || t.find("moss") != std::string::npos || t.find("leaf") != std::string::npos) surface = audio::FootstepSurface::GRASS;
+            else if (t.find("sand") != std::string::npos || t.find("dirt") != std::string::npos || t.find("mud") != std::string::npos) surface = audio::FootstepSurface::DIRT;
+            else if (t.find("wood") != std::string::npos || t.find("timber") != std::string::npos) surface = audio::FootstepSurface::WOOD;
+            else if (t.find("metal") != std::string::npos || t.find("iron") != std::string::npos) surface = audio::FootstepSurface::METAL;
+            else if (t.find("stone") != std::string::npos || t.find("rock") != std::string::npos || t.find("cobble") != std::string::npos || t.find("brick") != std::string::npos) surface = audio::FootstepSurface::STONE;
         }
     }
 
-    return audio::FootstepSurface::STONE;
+    cachedFootstepSurface = surface;
+    return surface;
 }
 
 void Renderer::update(float deltaTime) {
@@ -1118,6 +1146,12 @@ void Renderer::update(float deltaTime) {
         cameraController->update(deltaTime);
         auto cameraEnd = std::chrono::steady_clock::now();
         lastCameraUpdateMs = std::chrono::duration<double, std::milli>(cameraEnd - cameraStart).count();
+
+        // Update 3D audio listener position/orientation to match camera
+        if (camera) {
+            audio::AudioEngine::instance().setListenerPosition(camera->getPosition());
+            audio::AudioEngine::instance().setListenerOrientation(camera->getForward(), camera->getUp());
+        }
     } else {
         lastCameraUpdateMs = 0.0;
     }
@@ -1209,9 +1243,13 @@ void Renderer::update(float deltaTime) {
         characterRenderer->update(deltaTime);
     }
 
+    // Update AudioEngine (cleanup finished sounds, etc.)
+    audio::AudioEngine::instance().update(deltaTime);
+
     // Footsteps: animation-event driven + surface query at event time.
     if (footstepManager) {
         footstepManager->update(deltaTime);
+        cachedFootstepUpdateTimer += deltaTime;  // Update surface cache timer
         bool canPlayFootsteps = characterRenderer && characterInstanceId > 0 &&
             cameraController && cameraController->isThirdPerson() &&
             cameraController->isGrounded() && !cameraController->isSwimming();

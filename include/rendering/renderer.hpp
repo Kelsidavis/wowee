@@ -256,6 +256,11 @@ private:
     float footstepLastNormTime = 0.0f;
     bool footstepNormInitialized = false;
 
+    // Footstep surface cache (avoid expensive queries every step)
+    mutable audio::FootstepSurface cachedFootstepSurface{};
+    mutable glm::vec3 cachedFootstepPosition{0.0f, 0.0f, 0.0f};
+    mutable float cachedFootstepUpdateTimer{999.0f};  // Force initial query
+
     // Mount footstep tracking (separate from player's)
     uint32_t mountFootstepLastAnimId = 0;
     float mountFootstepLastNormTime = 0.0f;

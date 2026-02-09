@@ -1,8 +1,6 @@
 #pragma once
 
-#include "platform/process.hpp"
 #include <string>
-#include <vector>
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -30,13 +28,9 @@ public:
     const std::string& getCurrentTrack() const { return currentTrack; }
 
 private:
-    void stopCurrentProcess();
-
     pipeline::AssetManager* assetManager = nullptr;
     std::string currentTrack;
     bool currentTrackIsFile = false;
-    std::string tempFilePath;
-    ProcessHandle playerPid = INVALID_PROCESS;
     bool playing = false;
     int volumePercent = 30;
 

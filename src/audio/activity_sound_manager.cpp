@@ -269,6 +269,9 @@ void ActivitySoundManager::reapProcesses() {
 }
 
 void ActivitySoundManager::playJump() {
+    // DISABLED: Activity sounds spawn processes which causes stuttering
+    return;
+
     auto now = std::chrono::steady_clock::now();
     if (lastJumpAt.time_since_epoch().count() != 0) {
         if (std::chrono::duration<float>(now - lastJumpAt).count() < 0.35f) return;
@@ -279,6 +282,9 @@ void ActivitySoundManager::playJump() {
 }
 
 void ActivitySoundManager::playLanding(FootstepSurface surface, bool hardLanding) {
+    // DISABLED: Activity sounds spawn processes which causes stuttering
+    return;
+
     auto now = std::chrono::steady_clock::now();
     if (lastLandAt.time_since_epoch().count() != 0) {
         if (std::chrono::duration<float>(now - lastLandAt).count() < 0.10f) return;

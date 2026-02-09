@@ -1,6 +1,5 @@
 #pragma once
 
-#include "platform/process.hpp"
 #include <cstdint>
 #include <random>
 #include <string>
@@ -49,8 +48,6 @@ private:
     };
 
     void preloadSurface(FootstepSurface surface, const std::vector<std::string>& candidates);
-    void stopCurrentProcess();
-    void reapFinishedProcess();
     bool playRandomStep(FootstepSurface surface, bool sprinting);
     static const char* surfaceName(FootstepSurface surface);
 
@@ -58,8 +55,6 @@ private:
     SurfaceSamples surfaces[7];
     size_t sampleCount = 0;
 
-    std::string tempFilePath = platform::getTempFilePath("wowee_footstep.wav");
-    ProcessHandle playerPid = INVALID_PROCESS;
     std::chrono::steady_clock::time_point lastPlayTime = std::chrono::steady_clock::time_point{};
 
     std::mt19937 rng;
