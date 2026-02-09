@@ -20,6 +20,34 @@ bool NpcVoiceManager::initialize(pipeline::AssetManager* assets) {
         return false;
     }
 
+    // Probe for actual sound file paths
+    LOG_INFO("=== Probing for NPC voice files ===");
+    std::vector<std::string> testPaths = {
+        "Sound\\Character\\Human\\HumanMaleHello01.wav",
+        "Sound\\Character\\Human\\HumanMaleGreeting01.wav",
+        "Sound\\Character\\Human\\HumanVocMaleHello01.wav",
+        "Sound\\Character\\PCVoice\\Human\\Male\\HumanMaleHello01.wav",
+        "Sound\\Character\\PCGuildGreetings\\HumanMaleGuildGreeting01.wav",
+        "Sound\\Character\\Human\\HumanVocMaleYes01.wav",
+        "Sound\\Character\\Human\\HumanVocMaleYes02.wav",
+        "Sound\\Character\\Human\\HumanVocMaleYes03.wav",
+    };
+    for (const auto& path : testPaths) {
+        bool exists = assetManager_->fileExists(path);
+        LOG_INFO("  ", path, ": ", (exists ? "EXISTS" : "NOT FOUND"));
+    }
+    LOG_INFO("=== Probing for tavern music files ===");
+    std::vector<std::string> musicPaths = {
+        "Sound\\Music\\GlueScreenMusic\\tavern_01.mp3",
+        "Sound\\Music\\GlueScreenMusic\\BC_Alehouse.mp3",
+        "Sound\\Music\\ZoneMusic\\Tavern\\tavernAlliance01.mp3",
+    };
+    for (const auto& path : musicPaths) {
+        bool exists = assetManager_->fileExists(path);
+        LOG_INFO("  ", path, ": ", (exists ? "EXISTS" : "NOT FOUND"));
+    }
+    LOG_INFO("===================================");
+
     loadVoiceSounds();
 
     int totalSamples = 0;
