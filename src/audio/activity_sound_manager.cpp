@@ -1,10 +1,8 @@
 #include "audio/activity_sound_manager.hpp"
+#include "audio/audio_engine.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/logger.hpp"
-#include "platform/process.hpp"
 #include <algorithm>
-#include <cstdio>
-#include <fstream>
 #include <cctype>
 
 namespace wowee {
@@ -269,48 +267,83 @@ void ActivitySoundManager::reapProcesses() {
 }
 
 void ActivitySoundManager::playJump() {
-    // DISABLED: Activity sounds spawn processes which causes stuttering
-    return;
+    if (!AudioEngine::instance().isInitialized() || jumpClips.empty()) {
+        return;
+    }
 
     auto now = std::chrono::steady_clock::now();
     if (lastJumpAt.time_since_epoch().count() != 0) {
         if (std::chrono::duration<float>(now - lastJumpAt).count() < 0.35f) return;
     }
-    if (playOneShot(jumpClips, 0.72f, 0.98f, 1.04f)) {
+
+    // Pick random clip
+    std::uniform_int_distribution<size_t> dist(0, jumpClips.size() - 1);
+    const Sample& sample = jumpClips[dist(rng)];
+
+    // Play with slight volume/pitch variation
+    std::uniform_real_distribution<float> volumeDist(0.65f, 0.75f);
+    std::uniform_real_distribution<float> pitchDist(0.98f, 1.04f);
+    float volume = volumeDist(rng) * volumeScale;
+    float pitch = pitchDist(rng);
+
+    if (AudioEngine::instance().playSound2D(sample.data, volume, pitch)) {
         lastJumpAt = now;
     }
 }
 
 void ActivitySoundManager::playLanding(FootstepSurface surface, bool hardLanding) {
-    // DISABLED: Activity sounds spawn processes which causes stuttering
-    return;
+    if (!AudioEngine::instance().isInitialized()) {
+        return;
+    }
 
     auto now = std::chrono::steady_clock::now();
     if (lastLandAt.time_since_epoch().count() != 0) {
         if (std::chrono::duration<float>(now - lastLandAt).count() < 0.10f) return;
     }
+
     const auto& clips = landingSets[static_cast<size_t>(surface)].clips;
-    if (playOneShot(clips, hardLanding ? 1.00f : 0.82f, 0.95f, 1.03f)) {
+    if (!clips.empty()) {
+        std::uniform_int_distribution<size_t> dist(0, clips.size() - 1);
+        const Sample& sample = clips[dist(rng)];
+
+        float baseVolume = hardLanding ? 1.00f : 0.82f;
+        std::uniform_real_distribution<float> volumeDist(baseVolume * 0.95f, baseVolume * 1.05f);
+        std::uniform_real_distribution<float> pitchDist(0.95f, 1.03f);
+
+        AudioEngine::instance().playSound2D(sample.data, volumeDist(rng) * volumeScale, pitchDist(rng));
         lastLandAt = now;
     }
-    if (hardLanding) {
-        playOneShot(hardLandClips, 0.84f, 0.97f, 1.03f);
+
+    if (hardLanding && !hardLandClips.empty()) {
+        std::uniform_int_distribution<size_t> dist(0, hardLandClips.size() - 1);
+        const Sample& sample = hardLandClips[dist(rng)];
+        std::uniform_real_distribution<float> volumeDist(0.80f, 0.88f);
+        std::uniform_real_distribution<float> pitchDist(0.97f, 1.03f);
+        AudioEngine::instance().playSound2D(sample.data, volumeDist(rng) * volumeScale, pitchDist(rng));
     }
 }
 
 void ActivitySoundManager::playMeleeSwing() {
-    if (meleeSwingClips.empty()) {
-        if (!meleeSwingWarned) {
+    if (!AudioEngine::instance().isInitialized() || meleeSwingClips.empty()) {
+        if (meleeSwingClips.empty() && !meleeSwingWarned) {
             core::Logger::getInstance().warning("No melee swing SFX found in assets");
             meleeSwingWarned = true;
         }
         return;
     }
+
     auto now = std::chrono::steady_clock::now();
     if (lastMeleeSwingAt.time_since_epoch().count() != 0) {
         if (std::chrono::duration<float>(now - lastMeleeSwingAt).count() < 0.12f) return;
     }
-    if (playOneShot(meleeSwingClips, 0.80f, 0.96f, 1.04f)) {
+
+    std::uniform_int_distribution<size_t> dist(0, meleeSwingClips.size() - 1);
+    const Sample& sample = meleeSwingClips[dist(rng)];
+
+    std::uniform_real_distribution<float> volumeDist(0.76f, 0.84f);
+    std::uniform_real_distribution<float> pitchDist(0.96f, 1.04f);
+
+    if (AudioEngine::instance().playSound2D(sample.data, volumeDist(rng) * volumeScale, pitchDist(rng))) {
         lastMeleeSwingAt = now;
     }
 }
