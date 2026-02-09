@@ -527,7 +527,8 @@ void CameraController::update(float deltaTime) {
                 hasRealGround_ = true;
                 noGroundTimer_ = 0.0f;
                 float feetZ = targetPos.z;
-                float stepUp = 1.0f;
+                float stepUp = stepUpBudget;
+                stepUp += 0.05f;
                 float fallCatch = 3.0f;
                 float dz = *groundH - feetZ;
 
