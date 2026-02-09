@@ -665,7 +665,7 @@ void CameraController::update(float deltaTime) {
                     camWmoH = cachedCamWmoFloor;
                 } else {
                     camWmoH = wmoRenderer->getFloorHeight(
-                        smoothedCamPos.x, smoothedCamPos.y, smoothedCamPos.z + 3.0f);
+                        smoothedCamPos.x, smoothedCamPos.y, smoothedCamPos.z);
                     cachedCamWmoFloor = camWmoH;
                     hasCachedCamFloor = true;
                     lastCamFloorQueryPos = smoothedCamPos;
