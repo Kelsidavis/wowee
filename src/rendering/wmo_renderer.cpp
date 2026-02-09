@@ -2037,8 +2037,16 @@ bool WMORenderer::checkWallCollision(const glm::vec3& from, const glm::vec3& to,
                                 float side = fromDist > 0.0f ? 1.0f : -1.0f;
                                 glm::vec3 safeLocal = hitPoint + normal * side * (PLAYER_RADIUS + 0.05f);
                                 glm::vec3 pushLocal(safeLocal.x - localTo.x, safeLocal.y - localTo.y, 0.0f);
-                                localTo.x = safeLocal.x;
-                                localTo.y = safeLocal.y;
+                                // Cap swept pushback so walls don't shove the player violently
+                                float pushLen = glm::length(glm::vec2(pushLocal.x, pushLocal.y));
+                                const float MAX_SWEPT_PUSH = 0.15f;
+                                if (pushLen > MAX_SWEPT_PUSH) {
+                                    float scale = MAX_SWEPT_PUSH / pushLen;
+                                    pushLocal.x *= scale;
+                                    pushLocal.y *= scale;
+                                }
+                                localTo.x += pushLocal.x;
+                                localTo.y += pushLocal.y;
                                 glm::vec3 pushWorld = glm::vec3(instance.modelMatrix * glm::vec4(pushLocal, 0.0f));
                                 adjustedPos.x += pushWorld.x;
                                 adjustedPos.y += pushWorld.y;
