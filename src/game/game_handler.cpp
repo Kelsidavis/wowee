@@ -4569,6 +4569,15 @@ void GameHandler::handleGossipMessage(network::Packet& packet) {
     if (questDetailsOpen) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen = true;
     vendorWindowOpen = false; // Close vendor if gossip opens
+
+    // Play NPC greeting voice
+    if (npcGreetingCallback_ && currentGossip.npcGuid != 0) {
+        auto entity = entityManager.getEntity(currentGossip.npcGuid);
+        if (entity) {
+            glm::vec3 npcPos(entity->getX(), entity->getY(), entity->getZ());
+            npcGreetingCallback_(currentGossip.npcGuid, npcPos);
+        }
+    }
 }
 
 void GameHandler::handleGossipComplete(network::Packet& packet) {

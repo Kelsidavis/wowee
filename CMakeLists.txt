@@ -104,6 +104,7 @@ set(WOWEE_SOURCES
     src/audio/footstep_manager.cpp
     src/audio/activity_sound_manager.cpp
     src/audio/mount_sound_manager.cpp
+    src/audio/npc_voice_manager.cpp
 
     # Pipeline (asset loaders)
     src/pipeline/mpq_manager.cpp

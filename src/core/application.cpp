@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
+#include "audio/npc_voice_manager.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/terrain_renderer.hpp"
@@ -811,6 +812,15 @@ void Application::setupUICallbacks() {
         auto it = creatureInstances_.find(guid);
         if (it != creatureInstances_.end() && renderer && renderer->getCharacterRenderer()) {
             renderer->getCharacterRenderer()->playAnimation(it->second, 16, false); // Attack
+        }
+    });
+
+    // NPC greeting callback - play voice line
+    gameHandler->setNpcGreetingCallback([this](uint64_t guid, const glm::vec3& position) {
+        if (renderer && renderer->getNpcVoiceManager()) {
+            // Convert canonical to render coords for 3D audio
+            glm::vec3 renderPos = core::coords::canonicalToRender(position);
+            renderer->getNpcVoiceManager()->playGreeting(guid, audio::VoiceType::GENERIC, renderPos);
         }
     });
 

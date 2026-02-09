@@ -357,6 +357,10 @@ public:
     using NpcSwingCallback = std::function<void(uint64_t guid)>;
     void setNpcSwingCallback(NpcSwingCallback cb) { npcSwingCallback_ = std::move(cb); }
 
+    // NPC greeting callback (plays voice line when NPC is clicked)
+    using NpcGreetingCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
+    void setNpcGreetingCallback(NpcGreetingCallback cb) { npcGreetingCallback_ = std::move(cb); }
+
     // XP tracking
     uint32_t getPlayerXp() const { return playerXp_; }
     uint32_t getPlayerNextLevelXp() const { return playerNextLevelXp_; }
@@ -1030,6 +1034,7 @@ private:
     NpcRespawnCallback npcRespawnCallback_;
     MeleeSwingCallback meleeSwingCallback_;
     NpcSwingCallback npcSwingCallback_;
+    NpcGreetingCallback npcGreetingCallback_;
     MountCallback mountCallback_;
     TaxiPrecacheCallback taxiPrecacheCallback_;
     TaxiOrientationCallback taxiOrientationCallback_;

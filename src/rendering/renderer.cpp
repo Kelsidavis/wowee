@@ -37,6 +37,7 @@
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/mount_sound_manager.hpp"
+#include "audio/npc_voice_manager.hpp"
 #include <GL/glew.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -342,6 +343,7 @@ bool Renderer::initialize(core::Window* win) {
     footstepManager = std::make_unique<audio::FootstepManager>();
     activitySoundManager = std::make_unique<audio::ActivitySoundManager>();
     mountSoundManager = std::make_unique<audio::MountSoundManager>();
+    npcVoiceManager = std::make_unique<audio::NpcVoiceManager>();
 
     // Underwater full-screen tint overlay (applies to all world geometry).
     underwaterOverlayShader = std::make_unique<Shader>();
@@ -2131,6 +2133,12 @@ bool Renderer::loadTerrainArea(const std::string& mapName, int centerX, int cent
         if (!activitySoundManager->isInitialized()) {
             activitySoundManager->initialize(cachedAssetManager);
         }
+    }
+    if (mountSoundManager && cachedAssetManager) {
+        mountSoundManager->initialize(cachedAssetManager);
+    }
+    if (npcVoiceManager && cachedAssetManager) {
+        npcVoiceManager->initialize(cachedAssetManager);
     }
 
     // Wire WMO, M2, and water renderer to camera controller

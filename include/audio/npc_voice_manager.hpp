@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <random>
 #include <chrono>
+#include <glm/glm.hpp>
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
