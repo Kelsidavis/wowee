@@ -1273,14 +1273,14 @@ void Renderer::update(float deltaTime) {
                     mountFootstepNormInitialized = true;
                     mountFootstepLastNormTime = norm;
                 } else {
-                    // Horse gait: 4 hoofbeats per cycle
+                    // Mount gait: 2 hoofbeats per cycle (synced with animation)
                     auto crossed = [&](float eventNorm) {
                         if (mountFootstepLastNormTime <= norm) {
                             return mountFootstepLastNormTime < eventNorm && eventNorm <= norm;
                         }
                         return mountFootstepLastNormTime < eventNorm || eventNorm <= norm;
                     };
-                    if (crossed(0.1f) || crossed(0.35f) || crossed(0.6f) || crossed(0.85f)) {
+                    if (crossed(0.25f) || crossed(0.75f)) {
                         footstepManager->playFootstep(resolveFootstepSurface(), true);
                     }
                     mountFootstepLastNormTime = norm;
