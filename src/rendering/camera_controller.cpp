@@ -506,7 +506,7 @@ void CameraController::update(float deltaTime) {
                 groundH = selectReachableFloor(terrainH, wmoH, targetPos.z, stepUpBudget);
             }
 
-            // 2. Multi-sample for M2 objects (rugs, planks, bridges) —
+            // 2. Multi-sample for M2 objects (rugs, planks, bridges, ships) —
             //    these are narrow and need offset probes to detect reliably.
             if (m2Renderer) {
                 constexpr float FOOTPRINT = 0.4f;
@@ -519,9 +519,13 @@ void CameraController::update(float deltaTime) {
                 for (const auto& o : offsets) {
                     auto m2H = m2Renderer->getFloorHeight(
                         targetPos.x + o.x, targetPos.y + o.y, m2ProbeZ);
-                    if (m2H && *m2H <= targetPos.z + stepUpBudget &&
-                        (!groundH || *m2H > *groundH)) {
-                        groundH = m2H;
+                    // Prefer M2 floors (ships, platforms) even if slightly lower than terrain
+                    // to prevent falling through ship decks to water below
+                    if (m2H && *m2H <= targetPos.z + stepUpBudget) {
+                        if (!groundH || *m2H > *groundH ||
+                            (*m2H >= targetPos.z - 0.5f && *groundH < targetPos.z - 1.0f)) {
+                            groundH = m2H;
+                        }
                     }
                 }
             }
