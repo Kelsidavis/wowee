@@ -1422,7 +1422,10 @@ void Renderer::update(float deltaTime) {
         bool isIndoor = wmoRenderer->isInsideWMO(camPos.x, camPos.y, camPos.z, &wmoId);
         bool isSwimming = cameraController->isSwimming();
 
-        ambientSoundManager->update(deltaTime, camPos, isIndoor, isSwimming);
+        // Check if inside blacksmith (96048 = Goldshire blacksmith)
+        bool isBlacksmith = (wmoId == 96048);
+
+        ambientSoundManager->update(deltaTime, camPos, isIndoor, isSwimming, isBlacksmith);
     }
 
     // Update M2 doodad animations (pass camera for frustum-culling bone computation)
@@ -1438,9 +1441,10 @@ void Renderer::update(float deltaTime) {
         uint32_t zoneId = zoneManager->getZoneId(tile.x, tile.y);
 
         bool insideTavern = false;
+        bool insideBlacksmith = false;
         std::string tavernMusic;
 
-        // Override with WMO-based detection (e.g., inside Stormwind, taverns)
+        // Override with WMO-based detection (e.g., inside Stormwind, taverns, blacksmiths)
         if (wmoRenderer) {
             glm::vec3 camPos = camera->getPosition();
             uint32_t wmoModelId = 0;
@@ -1450,7 +1454,7 @@ void Renderer::update(float deltaTime) {
                     zoneId = 1519;  // Stormwind City
                 }
 
-                // Detect taverns/inns by WMO model ID (common inn WMOs)
+                // Detect taverns/inns/blacksmiths by WMO model ID
                 // Log WMO ID for debugging
                 static uint32_t lastLoggedWmoId = 0;
                 if (wmoModelId != lastLoggedWmoId) {
@@ -1458,24 +1462,31 @@ void Renderer::update(float deltaTime) {
                     lastLoggedWmoId = wmoModelId;
                 }
 
+                // Blacksmith detection
+                if (wmoModelId == 96048) {  // Goldshire blacksmith
+                    insideBlacksmith = true;
+                    LOG_INFO("Detected blacksmith WMO ", wmoModelId);
+                }
+
                 // These IDs represent typical Alliance and Horde inn buildings
-                if (wmoModelId == 191 ||    // Goldshire inn
+                if (wmoModelId == 191 ||    // Goldshire inn (old ID)
+                    wmoModelId == 71414 ||  // Goldshire inn (actual)
                     wmoModelId == 190 ||    // Small inn (common)
                     wmoModelId == 220 ||    // Tavern building
                     wmoModelId == 221 ||    // Large tavern
                     wmoModelId == 5392 ||   // Horde inn
                     wmoModelId == 5393) {   // Another inn variant
                     insideTavern = true;
-                    // WoW tavern music (cozy ambient tracks)
+                    // WoW tavern music (cozy ambient tracks) - FIXED PATHS
                     static const std::vector<std::string> tavernTracks = {
-                        "Sound\\Music\\GlueScreenMusic\\tavern_01.mp3",
-                        "Sound\\Music\\GlueScreenMusic\\tavern_02.mp3",
-                        "Sound\\Music\\ZoneMusic\\Tavern\\tavernAlliance01.mp3",
-                        "Sound\\Music\\ZoneMusic\\Tavern\\tavernAlliance02.mp3",
+                        "Sound\\Music\\ZoneMusic\\TavernAlliance\\TavernAlliance01.mp3",
+                        "Sound\\Music\\ZoneMusic\\TavernAlliance\\TavernAlliance02.mp3",
+                        "Sound\\Music\\ZoneMusic\\TavernHuman\\RA_HumanTavern1A.mp3",
+                        "Sound\\Music\\ZoneMusic\\TavernHuman\\RA_HumanTavern2A.mp3",
                     };
                     static int tavernTrackIndex = 0;
                     tavernMusic = tavernTracks[tavernTrackIndex % tavernTracks.size()];
-                    LOG_INFO("Detected tavern WMO, playing: ", tavernMusic);
+                    LOG_INFO("Detected tavern WMO ", wmoModelId, ", playing: ", tavernMusic);
                 }
             }
         }
@@ -1485,10 +1496,10 @@ void Renderer::update(float deltaTime) {
             if (!inTavern_ && !tavernMusic.empty()) {
                 inTavern_ = true;
                 LOG_INFO("Entered tavern");
-                musicManager->crossfadeTo(tavernMusic);
+                musicManager->playMusic(tavernMusic, true);  // Immediate playback, looping
             }
         } else if (inTavern_) {
-            // Exited tavern - restore zone music
+            // Exited tavern - restore zone music with crossfade
             inTavern_ = false;
             LOG_INFO("Exited tavern");
             auto* info = zoneManager->getZoneInfo(currentZoneId);
@@ -1500,8 +1511,28 @@ void Renderer::update(float deltaTime) {
             }
         }
 
-        // Handle normal zone transitions (only if not in tavern)
-        if (!insideTavern && zoneId != currentZoneId && zoneId != 0) {
+        // Handle blacksmith music (stop music when entering blacksmith, let ambience play)
+        if (insideBlacksmith) {
+            if (!inBlacksmith_) {
+                inBlacksmith_ = true;
+                LOG_INFO("Entered blacksmith - stopping music");
+                musicManager->stopMusic();
+            }
+        } else if (inBlacksmith_) {
+            // Exited blacksmith - restore zone music with crossfade
+            inBlacksmith_ = false;
+            LOG_INFO("Exited blacksmith - restoring music");
+            auto* info = zoneManager->getZoneInfo(currentZoneId);
+            if (info) {
+                std::string music = zoneManager->getRandomMusic(currentZoneId);
+                if (!music.empty()) {
+                    musicManager->crossfadeTo(music);
+                }
+            }
+        }
+
+        // Handle normal zone transitions (only if not in tavern or blacksmith)
+        if (!insideTavern && !insideBlacksmith && zoneId != currentZoneId && zoneId != 0) {
             currentZoneId = zoneId;
             auto* info = zoneManager->getZoneInfo(zoneId);
             if (info) {

@@ -23,7 +23,7 @@ public:
     void shutdown();
 
     // Main update loop - called from renderer
-    void update(float deltaTime, const glm::vec3& cameraPos, bool isIndoor, bool isSwimming = false);
+    void update(float deltaTime, const glm::vec3& cameraPos, bool isIndoor, bool isSwimming = false, bool isBlacksmith = false);
 
     // Emitter management
     enum class AmbientType {
@@ -75,6 +75,7 @@ private:
     std::vector<AmbientSample> waterfallSounds_;
     std::vector<AmbientSample> windSounds_;
     std::vector<AmbientSample> tavernSounds_;
+    std::vector<AmbientSample> blacksmithSounds_;
 
     // Active emitters
     std::vector<AmbientEmitter> emitters_;
@@ -86,7 +87,9 @@ private:
     float birdTimer_ = 0.0f;
     float cricketTimer_ = 0.0f;
     float windLoopTime_ = 0.0f;
+    float blacksmithLoopTime_ = 0.0f;
     bool wasIndoor_ = false;
+    bool wasBlacksmith_ = false;
     bool initialized_ = false;
 
     // Active audio tracking
@@ -100,6 +103,7 @@ private:
     void updatePositionalEmitters(float deltaTime, const glm::vec3& cameraPos);
     void updatePeriodicSounds(float deltaTime, bool isIndoor, bool isSwimming);
     void updateWindAmbience(float deltaTime, bool isIndoor);
+    void updateBlacksmithAmbience(float deltaTime);
     bool loadSound(const std::string& path, AmbientSample& sample, pipeline::AssetManager* assets);
 
     // Time of day helpers

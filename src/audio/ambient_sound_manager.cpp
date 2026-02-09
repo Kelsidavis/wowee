@@ -73,8 +73,16 @@ bool AmbientSoundManager::initialize(pipeline::AssetManager* assets) {
     tavernSounds_.resize(1);
     bool tavernLoaded = loadSound("Sound\\Ambience\\WMOAmbience\\Tavern.wav", tavernSounds_[0], assets);
 
+    // Load multiple hammer sounds for variety (short metal hit sounds)
+    blacksmithSounds_.resize(3);
+    bool bs1 = loadSound("Sound\\Item\\Weapons\\Mace1HMetal\\1hMaceMetalHitWoodCrit.wav", blacksmithSounds_[0], assets);
+    bool bs2 = loadSound("Sound\\Item\\Weapons\\Sword2H\\m2hSwordHitMetalShield1c.wav", blacksmithSounds_[1], assets);
+    bool bs3 = loadSound("Sound\\Item\\Weapons\\Axe2H\\m2hAxeHitChain1c.wav", blacksmithSounds_[2], assets);
+    bool blacksmithLoaded = (bs1 || bs2 || bs3);
+
     LOG_INFO("AmbientSoundManager: Wind loaded: ", windLoaded ? "YES" : "NO",
-             ", Tavern loaded: ", tavernLoaded ? "YES" : "NO");
+             ", Tavern loaded: ", tavernLoaded ? "YES" : "NO",
+             ", Blacksmith loaded: ", blacksmithLoaded ? "YES" : "NO");
 
     // Initialize timers with random offsets
     birdTimer_ = randomFloat(0.0f, 5.0f);
@@ -108,16 +116,33 @@ bool AmbientSoundManager::loadSound(const std::string& path, AmbientSample& samp
     return false;
 }
 
-void AmbientSoundManager::update(float deltaTime, const glm::vec3& cameraPos, bool isIndoor, bool isSwimming) {
+void AmbientSoundManager::update(float deltaTime, const glm::vec3& cameraPos, bool isIndoor, bool isSwimming, bool isBlacksmith) {
     if (!initialized_) return;
 
     // Update all emitter systems
     updatePositionalEmitters(deltaTime, cameraPos);
-    updatePeriodicSounds(deltaTime, isIndoor, isSwimming);
-    updateWindAmbience(deltaTime, isIndoor);
+
+    // Don't play outdoor periodic sounds (birds) when indoors OR in blacksmith
+    if (!isIndoor && !isBlacksmith) {
+        updatePeriodicSounds(deltaTime, isIndoor, isSwimming);
+    }
+
+    // Handle state changes
+    if (wasBlacksmith_ && !isBlacksmith) {
+        LOG_INFO("Ambient: EXITED BLACKSMITH");
+        blacksmithLoopTime_ = 0.0f;  // Reset timer when leaving
+    }
+
+    // Blacksmith takes priority over tavern
+    if (isBlacksmith) {
+        updateBlacksmithAmbience(deltaTime);
+    } else {
+        updateWindAmbience(deltaTime, isIndoor);
+    }
 
     // Track indoor state changes
     wasIndoor_ = isIndoor;
+    wasBlacksmith_ = isBlacksmith;
 }
 
 void AmbientSoundManager::updatePositionalEmitters(float deltaTime, const glm::vec3& cameraPos) {
@@ -248,30 +273,72 @@ void AmbientSoundManager::updatePeriodicSounds(float deltaTime, bool isIndoor, b
     }
 }
 
+void AmbientSoundManager::updateBlacksmithAmbience(float deltaTime) {
+    bool stateChanged = !wasBlacksmith_;
+
+    if (stateChanged) {
+        LOG_INFO("Ambient: ENTERED BLACKSMITH");
+        blacksmithLoopTime_ = 1.5f;  // Play first hammer soon
+    }
+
+    // Only play if we have loaded sounds
+    bool hasSound = false;
+    for (const auto& sound : blacksmithSounds_) {
+        if (sound.loaded) {
+            hasSound = true;
+            break;
+        }
+    }
+
+    if (hasSound) {
+        blacksmithLoopTime_ += deltaTime;
+        // Play every 2.5 seconds - rapid hammer strikes like real blacksmith
+        if (blacksmithLoopTime_ >= 2.5f) {
+            // Pick random hammer sound
+            int index = 0;
+            for (int i = 0; i < static_cast<int>(blacksmithSounds_.size()); i++) {
+                if (blacksmithSounds_[i].loaded) {
+                    index = i;
+                    break;
+                }
+            }
+
+            float volume = 0.35f * volumeScale_;  // Reduced from 0.7
+            float pitch = 1.6f;  // Higher pitch for metallic clink
+            AudioEngine::instance().playSound2D(blacksmithSounds_[index].data, volume, pitch);
+            LOG_INFO("Playing blacksmith ambience (hammer strike)");
+            blacksmithLoopTime_ = 0.0f;
+        }
+    }
+}
+
 void AmbientSoundManager::updateWindAmbience(float deltaTime, bool isIndoor) {
     // Always track indoor state for next frame
     bool stateChanged = (wasIndoor_ != isIndoor);
 
     if (stateChanged) {
         LOG_INFO("Ambient: ", isIndoor ? "ENTERED BUILDING" : "EXITED TO OUTDOORS");
-        windLoopTime_ = 99.0f;  // Force immediate playback on next update
+        // Start timer at 10 seconds so ambience plays after ~5 seconds
+        if (isIndoor) {
+            windLoopTime_ = 10.0f;  // Play tavern ambience soon
+        } else {
+            windLoopTime_ = 25.0f;  // Play outdoor ambience soon
+        }
     }
 
     wasIndoor_ = isIndoor;
 
-    // Indoor ambience (tavern sounds)
+    // Indoor ambience (tavern sounds) - glass clinking, chatter
     if (isIndoor) {
         if (!tavernSounds_.empty() && tavernSounds_[0].loaded) {
             windLoopTime_ += deltaTime;
-            if (windLoopTime_ >= 8.0f) {
-                float volume = 0.8f * volumeScale_;
-                bool success = AudioEngine::instance().playSound2D(tavernSounds_[0].data, volume, 1.0f);
-                LOG_INFO("Playing tavern ambience: ", success ? "OK" : "FAILED", " (vol=", volume, ")");
+            // Play every 15 seconds for ambient atmosphere
+            if (windLoopTime_ >= 15.0f) {
+                float volume = 0.5f * volumeScale_;
+                AudioEngine::instance().playSound2D(tavernSounds_[0].data, volume, 1.0f);
+                LOG_INFO("Playing tavern ambience (glasses clinking)");
                 windLoopTime_ = 0.0f;
             }
-        } else {
-            LOG_WARNING("Cannot play tavern: empty=", tavernSounds_.empty(),
-                       " loaded=", (!tavernSounds_.empty() && tavernSounds_[0].loaded));
         }
     }
     // Outdoor wind ambience
@@ -279,14 +346,11 @@ void AmbientSoundManager::updateWindAmbience(float deltaTime, bool isIndoor) {
         if (!windSounds_.empty() && windSounds_[0].loaded) {
             windLoopTime_ += deltaTime;
             if (windLoopTime_ >= 30.0f) {
-                float volume = 0.2f * volumeScale_;
-                bool success = AudioEngine::instance().playSound2D(windSounds_[0].data, volume, 1.0f);
-                LOG_INFO("Playing outdoor ambience: ", success ? "OK" : "FAILED", " (vol=", volume, ")");
+                float volume = 0.3f * volumeScale_;
+                AudioEngine::instance().playSound2D(windSounds_[0].data, volume, 1.0f);
+                LOG_INFO("Playing outdoor ambience");
                 windLoopTime_ = 0.0f;
             }
-        } else {
-            LOG_WARNING("Cannot play outdoor: empty=", windSounds_.empty(),
-                       " loaded=", (!windSounds_.empty() && windSounds_[0].loaded));
         }
     }
 }
