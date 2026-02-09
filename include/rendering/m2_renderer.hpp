@@ -382,6 +382,25 @@ private:
     mutable double queryTimeMs = 0.0;
     mutable uint32_t queryCallCount = 0;
 
+    // Persistent render buffers (avoid per-frame allocation/deallocation)
+    struct VisibleEntry {
+        uint32_t index;
+        uint32_t modelId;
+        float distSq;
+        float effectiveMaxDistSq;
+    };
+    std::vector<VisibleEntry> sortedVisible_;  // Reused each frame
+    struct GlowSprite {
+        glm::vec3 worldPos;
+        glm::vec4 color;
+        float size;
+    };
+    std::vector<GlowSprite> glowSprites_;  // Reused each frame
+
+    // Animation update buffers (avoid per-frame allocation)
+    std::vector<size_t> boneWorkIndices_;        // Reused each frame
+    std::vector<std::future<void>> animFutures_; // Reused each frame
+
     // Smoke particle system
     std::vector<SmokeParticle> smokeParticles;
     GLuint smokeVAO = 0;

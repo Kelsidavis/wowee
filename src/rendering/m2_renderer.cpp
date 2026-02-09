@@ -1452,8 +1452,11 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
     // --- Normal M2 animation update ---
     // Phase 1: Update animation state (cheap, sequential)
     // Collect indices of instances that need bone matrix computation.
-    std::vector<size_t> boneWorkIndices;
-    boneWorkIndices.reserve(instances.size());
+    // Reuse persistent vector to avoid allocation stutter
+    boneWorkIndices_.clear();
+    if (boneWorkIndices_.capacity() < instances.size()) {
+        boneWorkIndices_.reserve(instances.size());
+    }
 
     for (size_t idx = 0; idx < instances.size(); ++idx) {
         auto& instance = instances[idx];
@@ -1527,15 +1530,15 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         if (distSq > effectiveMaxDistSq) continue;
         if (cullRadius > 0.0f && !updateFrustum.intersectsSphere(instance.position, cullRadius)) continue;
 
-        boneWorkIndices.push_back(idx);
+        boneWorkIndices_.push_back(idx);
     }
 
     // Phase 2: Compute bone matrices (expensive, parallel if enough work)
-    const size_t animCount = boneWorkIndices.size();
+    const size_t animCount = boneWorkIndices_.size();
     if (animCount > 0) {
         if (animCount < 32 || numAnimThreads_ <= 1) {
             // Sequential — not enough work to justify thread overhead
-            for (size_t i : boneWorkIndices) {
+            for (size_t i : boneWorkIndices_) {
                 if (i >= instances.size()) continue;
                 auto& inst = instances[i];
                 auto mdlIt = models.find(inst.modelId);
@@ -1548,16 +1551,19 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
             const size_t chunkSize = animCount / numThreads;
             const size_t remainder = animCount % numThreads;
 
-            std::vector<std::future<void>> futures;
-            futures.reserve(numThreads);
+            // Reuse persistent futures vector to avoid allocation
+            animFutures_.clear();
+            if (animFutures_.capacity() < numThreads) {
+                animFutures_.reserve(numThreads);
+            }
 
             size_t start = 0;
             for (size_t t = 0; t < numThreads; ++t) {
                 size_t end = start + chunkSize + (t < remainder ? 1 : 0);
-                futures.push_back(std::async(std::launch::async,
-                    [this, &boneWorkIndices, start, end]() {
+                animFutures_.push_back(std::async(std::launch::async,
+                    [this, start, end]() {
                         for (size_t j = start; j < end; ++j) {
-                            size_t idx = boneWorkIndices[j];
+                            size_t idx = boneWorkIndices_[j];
                             if (idx >= instances.size()) continue;
                             auto& inst = instances[idx];
                             auto mdlIt = models.find(inst.modelId);
@@ -1568,14 +1574,14 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
                 start = end;
             }
 
-            for (auto& f : futures) {
+            for (auto& f : animFutures_) {
                 f.get();
             }
         }
     }
 
     // Phase 3: Particle update (sequential — uses RNG, not thread-safe)
-    for (size_t idx : boneWorkIndices) {
+    for (size_t idx : boneWorkIndices_) {
         if (idx >= instances.size()) continue;
         auto& instance = instances[idx];
         auto mdlIt = models.find(instance.modelId);
@@ -1592,6 +1598,8 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
     if (instances.empty() || !shader) {
         return;
     }
+
+    auto renderStartTime = std::chrono::high_resolution_clock::now();
 
     // Debug: log once when we start rendering
     static bool loggedOnce = false;
@@ -1611,13 +1619,8 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
     Frustum frustum;
     frustum.extractFromMatrix(projection * view);
 
-    // Collect glow sprites from additive/mod batches for deferred rendering
-    struct GlowSprite {
-        glm::vec3 worldPos;
-        glm::vec4 color; // RGBA
-        float size;
-    };
-    std::vector<GlowSprite> glowSprites;
+    // Reuse persistent buffers (clear instead of reallocating)
+    glowSprites_.clear();
 
     shader->use();
     shader->setUniform("uView", view);
@@ -1643,22 +1646,19 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
     lastDrawCallCount = 0;
 
-    // Adaptive render distance: aggressive settings to utilize VRAM fully
-    // During taxi, render far to upload models/textures to VRAM cache
-    const float maxRenderDistance = onTaxi_ ? 1200.0f : (instances.size() > 2000) ? 800.0f : 2800.0f;
+    // Adaptive render distance: balanced for smooth pop-in/out
+    // Increased distances to prevent premature culling in cities
+    const float maxRenderDistance = onTaxi_ ? 1200.0f : (instances.size() > 2000) ? 1200.0f : 3500.0f;
     const float maxRenderDistanceSq = maxRenderDistance * maxRenderDistance;
     const float fadeStartFraction = 0.75f;
     const glm::vec3 camPos = camera.getPosition();
 
     // Build sorted visible instance list: cull then sort by modelId to batch VAO binds
-    struct VisibleEntry {
-        uint32_t index;
-        uint32_t modelId;
-        float distSq;
-        float effectiveMaxDistSq;
-    };
-    std::vector<VisibleEntry> sortedVisible;
-    sortedVisible.reserve(instances.size() / 2);
+    // Reuse persistent vector to avoid allocation
+    sortedVisible_.clear();
+    if (sortedVisible_.capacity() < instances.size() / 2) {
+        sortedVisible_.reserve(instances.size() / 2);
+    }
 
     for (uint32_t i = 0; i < static_cast<uint32_t>(instances.size()); ++i) {
         const auto& instance = instances[i];
@@ -1678,27 +1678,58 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
         if (model.disableAnimation) {
             effectiveMaxDistSq *= 2.6f;
         }
-        if (!model.disableAnimation) {
-            if (worldRadius < 0.8f) {
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 95.0f * 95.0f);
-            } else if (worldRadius < 1.5f) {
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 140.0f * 140.0f);
-            }
-        }
+        // Removed aggressive small-object distance caps to prevent city pop-out
+        // Small props (barrels, lanterns, etc.) now use same distance as larger objects
         if (distSq > effectiveMaxDistSq) continue;
-        if (cullRadius > 0.0f && !frustum.intersectsSphere(instance.position, cullRadius)) continue;
 
-        sortedVisible.push_back({i, instance.modelId, distSq, effectiveMaxDistSq});
+        // Frustum cull with padding to prevent edge pop-out
+        // Add 20% radius padding so objects smoothly exit viewport
+        if (cullRadius > 0.0f && !frustum.intersectsSphere(instance.position, cullRadius * 1.2f)) continue;
+
+        sortedVisible_.push_back({i, instance.modelId, distSq, effectiveMaxDistSq});
     }
 
     // Sort by modelId to minimize VAO rebinds
-    std::sort(sortedVisible.begin(), sortedVisible.end(),
+    std::sort(sortedVisible_.begin(), sortedVisible_.end(),
               [](const VisibleEntry& a, const VisibleEntry& b) { return a.modelId < b.modelId; });
+
+    auto cullingSortTime = std::chrono::high_resolution_clock::now();
+    double cullingSortMs = std::chrono::duration<double, std::milli>(cullingSortTime - renderStartTime).count();
 
     uint32_t currentModelId = UINT32_MAX;
     const M2ModelGPU* currentModel = nullptr;
 
-    for (const auto& entry : sortedVisible) {
+    // State tracking to avoid redundant GL calls (similar to WMO renderer optimization)
+    static GLuint lastBoundTexture = 0;
+    static bool lastHasTexture = false;
+    static bool lastAlphaTest = false;
+    static bool lastUnlit = false;
+    static bool lastUseBones = false;
+    static bool lastInteriorDarken = false;
+    static uint8_t lastBlendMode = 255;  // Invalid initial value
+    static bool depthMaskState = true;   // Track current depth mask state
+    static glm::vec2 lastUVOffset = glm::vec2(-999.0f);  // Track UV offset state
+
+    // Reset state tracking at start of frame to handle shader rebinds
+    lastBoundTexture = 0;
+    lastHasTexture = false;
+    lastAlphaTest = false;
+    lastUnlit = false;
+    lastUseBones = false;
+    lastInteriorDarken = false;
+    lastBlendMode = 255;
+    depthMaskState = true;
+    lastUVOffset = glm::vec2(-999.0f);
+
+    // Set texture unit once per frame instead of per-batch
+    glActiveTexture(GL_TEXTURE0);
+    shader->setUniform("uTexture", 0);  // Texture unit 0, set once per frame
+
+    // Performance counters
+    uint32_t boneMatrixUploads = 0;
+    uint32_t totalBatchesDrawn = 0;
+
+    for (const auto& entry : sortedVisible_) {
         if (entry.index >= instances.size()) continue;
         const auto& instance = instances[entry.index];
 
@@ -1739,21 +1770,34 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
                                   (entry.effectiveMaxDistSq - fadeStartDistSq), 0.0f, 1.0f);
         }
 
+        // Always update per-instance uniforms (these change every instance)
         shader->setUniform("uModel", instance.modelMatrix);
         shader->setUniform("uFadeAlpha", fadeAlpha);
-        shader->setUniform("uInteriorDarken", insideInterior);
+
+        // Track interior darken state to avoid redundant updates
+        if (insideInterior != lastInteriorDarken) {
+            shader->setUniform("uInteriorDarken", insideInterior);
+            lastInteriorDarken = insideInterior;
+        }
 
         // Upload bone matrices if model has skeletal animation
         bool useBones = model.hasAnimation && !model.disableAnimation && !instance.boneMatrices.empty();
-        shader->setUniform("uUseBones", useBones);
+        if (useBones != lastUseBones) {
+            shader->setUniform("uUseBones", useBones);
+            lastUseBones = useBones;
+        }
         if (useBones) {
             int numBones = std::min(static_cast<int>(instance.boneMatrices.size()), 128);
             shader->setUniformMatrixArray("uBones[0]", instance.boneMatrices.data(), numBones);
+            boneMatrixUploads++;
         }
 
         // Disable depth writes for fading objects to avoid z-fighting
         if (fadeAlpha < 1.0f) {
-            glDepthMask(GL_FALSE);
+            if (depthMaskState) {
+                glDepthMask(GL_FALSE);
+                depthMaskState = false;
+            }
         }
 
         // LOD selection based on distance (WoW retail behavior)
@@ -1795,12 +1839,12 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
                     gs.worldPos = worldPos;
                     gs.color = glm::vec4(1.0f, 0.75f, 0.35f, 0.85f);
                     gs.size = batch.glowSize * instance.scale;
-                    glowSprites.push_back(gs);
+                    glowSprites_.push_back(gs);
                 }
                 continue;
             }
 
-            // Compute UV offset for texture animation
+            // Compute UV offset for texture animation (only set uniform if changed)
             glm::vec2 uvOffset(0.0f, 0.0f);
             if (batch.textureAnimIndex != 0xFFFF && model.hasTextureAnimation) {
                 uint16_t lookupIdx = batch.textureAnimIndex;
@@ -1815,86 +1859,117 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
                     }
                 }
             }
-            shader->setUniform("uUVOffset", uvOffset);
+            // Only update uniform if UV offset changed (most batches have 0,0)
+            if (uvOffset != lastUVOffset) {
+                shader->setUniform("uUVOffset", uvOffset);
+                lastUVOffset = uvOffset;
+            }
 
-            // Apply per-batch blend mode from M2 material
+            // Apply per-batch blend mode from M2 material (only if changed)
             // 0=Opaque, 1=AlphaKey, 2=Alpha, 3=Add, 4=Mod, 5=Mod2x, 6=BlendAdd, 7=Screen
             bool batchTransparent = false;
-            switch (batch.blendMode) {
-                case 0: // Opaque
-                    glBlendFunc(GL_ONE, GL_ZERO);
-                    break;
-                case 1: // Alpha Key (alpha test, handled by uAlphaTest)
-                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                    break;
-                case 2: // Alpha
-                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                    batchTransparent = true;
-                    break;
-                case 3: // Additive
-                    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-                    batchTransparent = true;
-                    break;
-                case 4: // Mod
-                    glBlendFunc(GL_DST_COLOR, GL_ZERO);
-                    batchTransparent = true;
-                    break;
-                case 5: // Mod2x
-                    glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
-                    batchTransparent = true;
-                    break;
-                case 6: // BlendAdd
-                    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-                    batchTransparent = true;
-                    break;
-                default: // Fallback
-                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                    break;
+            if (batch.blendMode != lastBlendMode) {
+                switch (batch.blendMode) {
+                    case 0: // Opaque
+                        glBlendFunc(GL_ONE, GL_ZERO);
+                        break;
+                    case 1: // Alpha Key (alpha test, handled by uAlphaTest)
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        break;
+                    case 2: // Alpha
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        batchTransparent = true;
+                        break;
+                    case 3: // Additive
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+                        batchTransparent = true;
+                        break;
+                    case 4: // Mod
+                        glBlendFunc(GL_DST_COLOR, GL_ZERO);
+                        batchTransparent = true;
+                        break;
+                    case 5: // Mod2x
+                        glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR);
+                        batchTransparent = true;
+                        break;
+                    case 6: // BlendAdd
+                        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                        batchTransparent = true;
+                        break;
+                    default: // Fallback
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        break;
+                }
+                lastBlendMode = batch.blendMode;
+            } else {
+                // Still need to know if batch is transparent for depth mask logic
+                batchTransparent = (batch.blendMode >= 2);
             }
 
             // Disable depth writes for transparent/additive batches
             if (batchTransparent && fadeAlpha >= 1.0f) {
-                glDepthMask(GL_FALSE);
+                if (depthMaskState) {
+                    glDepthMask(GL_FALSE);
+                    depthMaskState = false;
+                }
             }
 
-
-            // Unlit: material flag 0x01
+            // Unlit: material flag 0x01 (only update if changed)
             bool unlit = (batch.materialFlags & 0x01) != 0;
-            shader->setUniform("uUnlit", unlit);
+            if (unlit != lastUnlit) {
+                shader->setUniform("uUnlit", unlit);
+                lastUnlit = unlit;
+            }
 
+            // Texture state (only update if changed)
             bool hasTexture = (batch.texture != 0);
-            shader->setUniform("uHasTexture", hasTexture);
-            shader->setUniform("uAlphaTest", batch.blendMode == 1);
+            if (hasTexture != lastHasTexture) {
+                shader->setUniform("uHasTexture", hasTexture);
+                lastHasTexture = hasTexture;
+            }
 
-            if (hasTexture) {
-                glActiveTexture(GL_TEXTURE0);
+            bool alphaTest = (batch.blendMode == 1);
+            if (alphaTest != lastAlphaTest) {
+                shader->setUniform("uAlphaTest", alphaTest);
+                lastAlphaTest = alphaTest;
+            }
+
+            // Only bind texture if it changed (texture unit already set to GL_TEXTURE0)
+            if (hasTexture && batch.texture != lastBoundTexture) {
                 glBindTexture(GL_TEXTURE_2D, batch.texture);
-                shader->setUniform("uTexture", 0);
+                lastBoundTexture = batch.texture;
             }
 
             glDrawElements(GL_TRIANGLES, batch.indexCount, GL_UNSIGNED_SHORT,
                            (void*)(batch.indexStart * sizeof(uint16_t)));
 
-            // Restore depth writes and blend func after transparent batch
+            totalBatchesDrawn++;
+
+            // Restore depth writes after transparent batch
             if (batchTransparent && fadeAlpha >= 1.0f) {
-                glDepthMask(GL_TRUE);
+                if (!depthMaskState) {
+                    glDepthMask(GL_TRUE);
+                    depthMaskState = true;
+                }
             }
-            if (batch.blendMode != 0 && batch.blendMode != 2) {
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            }
+            // Note: blend func restoration removed - state tracking handles it
 
             lastDrawCallCount++;
         }
 
+        // Restore depth mask after faded instance
         if (fadeAlpha < 1.0f) {
-            glDepthMask(GL_TRUE);
+            if (!depthMaskState) {
+                glDepthMask(GL_TRUE);
+                depthMaskState = true;
+            }
         }
     }
 
     if (currentModel) glBindVertexArray(0);
 
     // Render glow sprites as billboarded additive point lights
-    if (!glowSprites.empty() && m2ParticleShader_ != 0 && m2ParticleVAO_ != 0) {
+    if (!glowSprites_.empty() && m2ParticleShader_ != 0 && m2ParticleVAO_ != 0) {
         glUseProgram(m2ParticleShader_);
 
         GLint viewLoc = glGetUniformLocation(m2ParticleShader_, "uView");
@@ -1916,8 +1991,8 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
         // Build vertex data: pos(3) + color(4) + size(1) + tile(1) = 9 floats per sprite
         std::vector<float> glowData;
-        glowData.reserve(glowSprites.size() * 9);
-        for (const auto& gs : glowSprites) {
+        glowData.reserve(glowSprites_.size() * 9);
+        for (const auto& gs : glowSprites_) {
             glowData.push_back(gs.worldPos.x);
             glowData.push_back(gs.worldPos.y);
             glowData.push_back(gs.worldPos.z);
@@ -1931,7 +2006,7 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
         glBindVertexArray(m2ParticleVAO_);
         glBindBuffer(GL_ARRAY_BUFFER, m2ParticleVBO_);
-        size_t uploadCount = std::min(glowSprites.size(), MAX_M2_PARTICLES);
+        size_t uploadCount = std::min(glowSprites_.size(), MAX_M2_PARTICLES);
         glBufferSubData(GL_ARRAY_BUFFER, 0, uploadCount * 9 * sizeof(float), glowData.data());
         glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(uploadCount));
         glBindVertexArray(0);
@@ -1944,6 +2019,19 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
     // Restore state
     glDisable(GL_BLEND);
     glEnable(GL_CULL_FACE);
+
+    auto renderEndTime = std::chrono::high_resolution_clock::now();
+    double totalMs = std::chrono::duration<double, std::milli>(renderEndTime - renderStartTime).count();
+    double drawLoopMs = std::chrono::duration<double, std::milli>(renderEndTime - cullingSortTime).count();
+
+    // Log detailed timing every 120 frames (~2 seconds at 60fps)
+    static int frameCounter = 0;
+    if (++frameCounter >= 120) {
+        frameCounter = 0;
+        LOG_INFO("M2 Render: ", totalMs, " ms (culling/sort: ", cullingSortMs,
+                 " ms, draw: ", drawLoopMs, " ms) | ", sortedVisible_.size(), " visible | ",
+                 totalBatchesDrawn, " batches | ", boneMatrixUploads, " bone uploads");
+    }
 }
 
 void M2Renderer::renderShadow(GLuint shadowShaderProgram) {
