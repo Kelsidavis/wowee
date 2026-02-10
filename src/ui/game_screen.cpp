@@ -124,7 +124,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     renderVendorWindow(gameHandler);
     renderTrainerWindow(gameHandler);
     renderTaxiWindow(gameHandler);
-    renderQuestMarkers(gameHandler);
+    // renderQuestMarkers(gameHandler);  // Disabled - now using 3D M2 markers in application.cpp
     renderMinimapMarkers(gameHandler);
     renderDeathScreen(gameHandler);
     renderResurrectDialog(gameHandler);
