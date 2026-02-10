@@ -175,7 +175,7 @@ void QuestMarkerRenderer::render(const Camera& camera) {
 
     // WoW-style quest marker tuning parameters
     constexpr float BASE_SIZE = 0.65f;          // Base world-space size
-    constexpr float HEIGHT_OFFSET = 2.1f;       // Height above NPC bounds
+    constexpr float HEIGHT_OFFSET = 1.1f;       // Height above NPC bounds
     constexpr float BOB_AMPLITUDE = 0.10f;      // Bob animation amplitude
     constexpr float BOB_FREQUENCY = 1.25f;      // Bob frequency (Hz)
     constexpr float MIN_DIST = 4.0f;            // Near clamp

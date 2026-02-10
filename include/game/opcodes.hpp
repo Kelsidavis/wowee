@@ -223,6 +223,8 @@ enum class Opcode : uint16_t {
     SMSG_QUESTGIVER_QUEST_INVALID    = 0x18F,
     SMSG_QUESTGIVER_QUEST_COMPLETE   = 0x191,
     CMSG_QUESTLOG_REMOVE_QUEST       = 0x194,
+    CMSG_QUEST_QUERY                 = 0x05C,  // Client requests quest data
+    SMSG_QUEST_QUERY_RESPONSE        = 0x05D,  // Server sends quest data
 
     // ---- Phase 5: Vendor ----
     CMSG_LIST_INVENTORY              = 0x19E,

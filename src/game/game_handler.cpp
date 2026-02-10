@@ -883,6 +883,27 @@ void GameHandler::handlePacket(network::Packet& packet) {
             }
             break;
         }
+        case Opcode::SMSG_QUEST_QUERY_RESPONSE: {
+            // Quest data from server (big packet with title, objectives, rewards, etc.)
+            LOG_INFO("SMSG_QUEST_QUERY_RESPONSE: packet size=", packet.getSize());
+
+            if (packet.getSize() < 8) {
+                LOG_WARNING("SMSG_QUEST_QUERY_RESPONSE: packet too small (", packet.getSize(), " bytes)");
+                break;
+            }
+
+            uint32_t questId = packet.readUInt32();
+            uint32_t questMethod = packet.readUInt32();  // Quest method/type
+
+            LOG_INFO("  questId=", questId, " questMethod=", questMethod);
+
+            // We received quest template data - this means the quest exists
+            // Check if player has this quest active by checking if it's in gossip
+            // For now, just log that we received the data
+            // TODO: Parse full quest template (title, objectives, etc.)
+
+            break;
+        }
         case Opcode::SMSG_QUESTGIVER_REQUEST_ITEMS:
             handleQuestRequestItems(packet);
             break;
@@ -3700,9 +3721,11 @@ void GameHandler::handleBattlefieldStatus(network::Packet& packet) {
 
     if (packet.getSize() - packet.getReadPos() < 4) return;
     uint32_t clientInstanceId = packet.readUInt32();
+    (void)clientInstanceId;
 
     if (packet.getSize() - packet.getReadPos() < 1) return;
     uint8_t isRatedArena = packet.readUInt8();
+    (void)isRatedArena;
 
     if (packet.getSize() - packet.getReadPos() < 4) return;
     uint32_t statusId = packet.readUInt32();
@@ -4324,6 +4347,12 @@ void GameHandler::selectGossipQuest(uint32_t questId) {
         }
     }
 
+    LOG_INFO("selectGossipQuest: questId=", questId, " isInLog=", isInLog, " isCompletable=", isCompletable);
+    LOG_INFO("  Current quest log size: ", questLog_.size());
+    for (const auto& q : questLog_) {
+        LOG_INFO("    Quest ", q.questId, ": complete=", q.complete);
+    }
+
     if (isInLog && isCompletable) {
         // Quest is ready to turn in - request reward
         LOG_INFO("Turning in quest: questId=", questId, " npcGuid=", currentGossip.npcGuid);
@@ -4626,6 +4655,39 @@ void GameHandler::handleGossipMessage(network::Packet& packet) {
     if (questDetailsOpen) return; // Don't reopen gossip while viewing quest
     gossipWindowOpen = true;
     vendorWindowOpen = false; // Close vendor if gossip opens
+
+    // Query quest data and update quest log based on gossip quests
+    for (const auto& questItem : currentGossip.quests) {
+        // Update quest log based on questIcon:
+        // questIcon & 0x04 = blue ? (turn-in/reward)
+        // questIcon & 0x02 = yellow ! (available)
+        // questIcon & 0x01 = gray ? (incomplete)
+        bool isCompletable = (questItem.questIcon & 0x04) != 0;  // Can turn in
+        bool isIncomplete = (questItem.questIcon & 0x01) != 0;   // Have but incomplete
+        // Note: questIcon & 0x02 = available (new quest), not added to log yet
+
+        // Add or update quest in log
+        bool found = false;
+        for (auto& quest : questLog_) {
+            if (quest.questId == questItem.questId) {
+                quest.complete = isCompletable;
+                quest.title = questItem.title;
+                found = true;
+                LOG_INFO("Updated quest ", questItem.questId, " in log: complete=", isCompletable);
+                break;
+            }
+        }
+
+        if (!found && (isCompletable || isIncomplete)) {
+            // Quest is active (either completable or incomplete) - add to log
+            QuestLogEntry entry;
+            entry.questId = questItem.questId;
+            entry.complete = isCompletable;
+            entry.title = questItem.title;
+            questLog_.push_back(entry);
+            LOG_INFO("Added quest ", questItem.questId, " to log: complete=", isCompletable);
+        }
+    }
 
     // Play NPC greeting voice
     if (npcGreetingCallback_ && currentGossip.npcGuid != 0) {
