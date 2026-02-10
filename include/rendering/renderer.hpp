@@ -8,7 +8,7 @@
 namespace wowee {
 namespace core { class Window; }
 namespace game { class World; class ZoneManager; }
-namespace audio { class MusicManager; class FootstepManager; class ActivitySoundManager; class MountSoundManager; class NpcVoiceManager; class AmbientSoundManager; enum class FootstepSurface : uint8_t; enum class VoiceType; }
+namespace audio { class MusicManager; class FootstepManager; class ActivitySoundManager; class MountSoundManager; class NpcVoiceManager; class AmbientSoundManager; class UiSoundManager; class CombatSoundManager; class SpellSoundManager; class MovementSoundManager; enum class FootstepSurface : uint8_t; enum class VoiceType; }
 namespace pipeline { class AssetManager; }
 
 namespace rendering {
@@ -151,6 +151,10 @@ public:
     audio::MountSoundManager* getMountSoundManager() { return mountSoundManager.get(); }
     audio::NpcVoiceManager* getNpcVoiceManager() { return npcVoiceManager.get(); }
     audio::AmbientSoundManager* getAmbientSoundManager() { return ambientSoundManager.get(); }
+    audio::UiSoundManager* getUiSoundManager() { return uiSoundManager.get(); }
+    audio::CombatSoundManager* getCombatSoundManager() { return combatSoundManager.get(); }
+    audio::SpellSoundManager* getSpellSoundManager() { return spellSoundManager.get(); }
+    audio::MovementSoundManager* getMovementSoundManager() { return movementSoundManager.get(); }
 
 private:
     core::Window* window = nullptr;
@@ -179,6 +183,10 @@ private:
     std::unique_ptr<audio::MountSoundManager> mountSoundManager;
     std::unique_ptr<audio::NpcVoiceManager> npcVoiceManager;
     std::unique_ptr<audio::AmbientSoundManager> ambientSoundManager;
+    std::unique_ptr<audio::UiSoundManager> uiSoundManager;
+    std::unique_ptr<audio::CombatSoundManager> combatSoundManager;
+    std::unique_ptr<audio::SpellSoundManager> spellSoundManager;
+    std::unique_ptr<audio::MovementSoundManager> movementSoundManager;
     std::unique_ptr<game::ZoneManager> zoneManager;
     std::unique_ptr<Shader> underwaterOverlayShader;
     uint32_t underwaterOverlayVAO = 0;

@@ -82,6 +82,7 @@ public:
 
     // Volume control
     void setVolumeScale(float scale);
+    float getVolumeScale() const { return volumeScale_; }
 
 private:
     struct AmbientEmitter {

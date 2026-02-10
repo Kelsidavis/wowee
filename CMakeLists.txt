@@ -208,6 +208,12 @@ set(WOWEE_HEADERS
     include/audio/footstep_manager.hpp
     include/audio/activity_sound_manager.hpp
     include/audio/mount_sound_manager.hpp
+    include/audio/npc_voice_manager.hpp
+    include/audio/ambient_sound_manager.hpp
+    include/audio/ui_sound_manager.hpp
+    include/audio/combat_sound_manager.hpp
+    include/audio/spell_sound_manager.hpp
+    include/audio/movement_sound_manager.hpp
 
     include/pipeline/mpq_manager.hpp
     include/pipeline/blp_loader.hpp

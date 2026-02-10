@@ -39,6 +39,10 @@
 #include "audio/mount_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
+#include "audio/ui_sound_manager.hpp"
+#include "audio/combat_sound_manager.hpp"
+#include "audio/spell_sound_manager.hpp"
+#include "audio/movement_sound_manager.hpp"
 #include <GL/glew.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -346,6 +350,10 @@ bool Renderer::initialize(core::Window* win) {
     mountSoundManager = std::make_unique<audio::MountSoundManager>();
     npcVoiceManager = std::make_unique<audio::NpcVoiceManager>();
     ambientSoundManager = std::make_unique<audio::AmbientSoundManager>();
+    uiSoundManager = std::make_unique<audio::UiSoundManager>();
+    combatSoundManager = std::make_unique<audio::CombatSoundManager>();
+    spellSoundManager = std::make_unique<audio::SpellSoundManager>();
+    movementSoundManager = std::make_unique<audio::MovementSoundManager>();
 
     // Underwater full-screen tint overlay (applies to all world geometry).
     underwaterOverlayShader = std::make_unique<Shader>();
@@ -2204,6 +2212,18 @@ bool Renderer::loadTestTerrain(pipeline::AssetManager* assetManager, const std::
         if (ambientSoundManager) {
             ambientSoundManager->initialize(assetManager);
         }
+        if (uiSoundManager) {
+            uiSoundManager->initialize(assetManager);
+        }
+        if (combatSoundManager) {
+            combatSoundManager->initialize(assetManager);
+        }
+        if (spellSoundManager) {
+            spellSoundManager->initialize(assetManager);
+        }
+        if (movementSoundManager) {
+            movementSoundManager->initialize(assetManager);
+        }
         cachedAssetManager = assetManager;
     }
 
@@ -2290,6 +2310,18 @@ bool Renderer::loadTerrainArea(const std::string& mapName, int centerX, int cent
     }
     if (ambientSoundManager && cachedAssetManager) {
         ambientSoundManager->initialize(cachedAssetManager);
+    }
+    if (uiSoundManager && cachedAssetManager) {
+        uiSoundManager->initialize(cachedAssetManager);
+    }
+    if (combatSoundManager && cachedAssetManager) {
+        combatSoundManager->initialize(cachedAssetManager);
+    }
+    if (spellSoundManager && cachedAssetManager) {
+        spellSoundManager->initialize(cachedAssetManager);
+    }
+    if (movementSoundManager && cachedAssetManager) {
+        movementSoundManager->initialize(cachedAssetManager);
     }
 
     // Wire ambient sound manager to terrain manager for emitter registration

@@ -42,6 +42,7 @@ public:
 
     bool isMounted() const { return mounted_; }
     void setVolumeScale(float scale) { volumeScale_ = scale; }
+    float getVolumeScale() const { return volumeScale_; }
 
 private:
     MountType detectMountType(uint32_t creatureDisplayId) const;

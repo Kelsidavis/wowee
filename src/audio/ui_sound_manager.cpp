@@ -6,7 +6,7 @@
 namespace wowee {
 namespace audio {
 
-bool UISoundManager::initialize(pipeline::AssetManager* assets) {
+bool UiSoundManager::initialize(pipeline::AssetManager* assets) {
     if (!assets) {
         LOG_ERROR("UISoundManager: AssetManager is null");
         return false;
@@ -136,11 +136,11 @@ bool UISoundManager::initialize(pipeline::AssetManager* assets) {
     return true;
 }
 
-void UISoundManager::shutdown() {
+void UiSoundManager::shutdown() {
     initialized_ = false;
 }
 
-bool UISoundManager::loadSound(const std::string& path, UISample& sample, pipeline::AssetManager* assets) {
+bool UiSoundManager::loadSound(const std::string& path, UISample& sample, pipeline::AssetManager* assets) {
     sample.path = path;
     sample.loaded = false;
 
@@ -157,63 +157,63 @@ bool UISoundManager::loadSound(const std::string& path, UISample& sample, pipeli
     return false;
 }
 
-void UISoundManager::playSound(const std::vector<UISample>& library) {
+void UiSoundManager::playSound(const std::vector<UISample>& library) {
     if (!initialized_ || library.empty() || !library[0].loaded) return;
 
     float volume = 0.7f * volumeScale_;
     AudioEngine::instance().playSound2D(library[0].data, volume, 1.0f);
 }
 
-void UISoundManager::setVolumeScale(float scale) {
+void UiSoundManager::setVolumeScale(float scale) {
     volumeScale_ = std::max(0.0f, std::min(1.0f, scale));
 }
 
 // Window sounds
-void UISoundManager::playBagOpen() { playSound(bagOpenSounds_); }
-void UISoundManager::playBagClose() { playSound(bagCloseSounds_); }
-void UISoundManager::playQuestLogOpen() { playSound(questLogOpenSounds_); }
-void UISoundManager::playQuestLogClose() { playSound(questLogCloseSounds_); }
-void UISoundManager::playCharacterSheetOpen() { playSound(characterSheetOpenSounds_); }
-void UISoundManager::playCharacterSheetClose() { playSound(characterSheetCloseSounds_); }
-void UISoundManager::playAuctionHouseOpen() { playSound(auctionOpenSounds_); }
-void UISoundManager::playAuctionHouseClose() { playSound(auctionCloseSounds_); }
-void UISoundManager::playGuildBankOpen() { playSound(guildBankOpenSounds_); }
-void UISoundManager::playGuildBankClose() { playSound(guildBankCloseSounds_); }
+void UiSoundManager::playBagOpen() { playSound(bagOpenSounds_); }
+void UiSoundManager::playBagClose() { playSound(bagCloseSounds_); }
+void UiSoundManager::playQuestLogOpen() { playSound(questLogOpenSounds_); }
+void UiSoundManager::playQuestLogClose() { playSound(questLogCloseSounds_); }
+void UiSoundManager::playCharacterSheetOpen() { playSound(characterSheetOpenSounds_); }
+void UiSoundManager::playCharacterSheetClose() { playSound(characterSheetCloseSounds_); }
+void UiSoundManager::playAuctionHouseOpen() { playSound(auctionOpenSounds_); }
+void UiSoundManager::playAuctionHouseClose() { playSound(auctionCloseSounds_); }
+void UiSoundManager::playGuildBankOpen() { playSound(guildBankOpenSounds_); }
+void UiSoundManager::playGuildBankClose() { playSound(guildBankCloseSounds_); }
 
 // Button sounds
-void UISoundManager::playButtonClick() { playSound(buttonClickSounds_); }
-void UISoundManager::playMenuButtonClick() { playSound(menuButtonSounds_); }
+void UiSoundManager::playButtonClick() { playSound(buttonClickSounds_); }
+void UiSoundManager::playMenuButtonClick() { playSound(menuButtonSounds_); }
 
 // Quest sounds
-void UISoundManager::playQuestActivate() { playSound(questActivateSounds_); }
-void UISoundManager::playQuestComplete() { playSound(questCompleteSounds_); }
-void UISoundManager::playQuestFailed() { playSound(questFailedSounds_); }
-void UISoundManager::playQuestUpdate() { playSound(questUpdateSounds_); }
+void UiSoundManager::playQuestActivate() { playSound(questActivateSounds_); }
+void UiSoundManager::playQuestComplete() { playSound(questCompleteSounds_); }
+void UiSoundManager::playQuestFailed() { playSound(questFailedSounds_); }
+void UiSoundManager::playQuestUpdate() { playSound(questUpdateSounds_); }
 
 // Loot sounds
-void UISoundManager::playLootCoinSmall() { playSound(lootCoinSmallSounds_); }
-void UISoundManager::playLootCoinLarge() { playSound(lootCoinLargeSounds_); }
-void UISoundManager::playLootItem() { playSound(lootItemSounds_); }
+void UiSoundManager::playLootCoinSmall() { playSound(lootCoinSmallSounds_); }
+void UiSoundManager::playLootCoinLarge() { playSound(lootCoinLargeSounds_); }
+void UiSoundManager::playLootItem() { playSound(lootItemSounds_); }
 
 // Item sounds
-void UISoundManager::playDropOnGround() { playSound(dropSounds_); }
-void UISoundManager::playPickupBag() { playSound(pickupBagSounds_); }
-void UISoundManager::playPickupBook() { playSound(pickupBookSounds_); }
-void UISoundManager::playPickupCloth() { playSound(pickupClothSounds_); }
-void UISoundManager::playPickupFood() { playSound(pickupFoodSounds_); }
-void UISoundManager::playPickupGem() { playSound(pickupGemSounds_); }
+void UiSoundManager::playDropOnGround() { playSound(dropSounds_); }
+void UiSoundManager::playPickupBag() { playSound(pickupBagSounds_); }
+void UiSoundManager::playPickupBook() { playSound(pickupBookSounds_); }
+void UiSoundManager::playPickupCloth() { playSound(pickupClothSounds_); }
+void UiSoundManager::playPickupFood() { playSound(pickupFoodSounds_); }
+void UiSoundManager::playPickupGem() { playSound(pickupGemSounds_); }
 
 // Eating/drinking
-void UISoundManager::playEating() { playSound(eatingSounds_); }
-void UISoundManager::playDrinking() { playSound(drinkingSounds_); }
+void UiSoundManager::playEating() { playSound(eatingSounds_); }
+void UiSoundManager::playDrinking() { playSound(drinkingSounds_); }
 
 // Level up
-void UISoundManager::playLevelUp() { playSound(levelUpSounds_); }
+void UiSoundManager::playLevelUp() { playSound(levelUpSounds_); }
 
 // Error/feedback
-void UISoundManager::playError() { playSound(errorSounds_); }
-void UISoundManager::playTargetSelect() { playSound(selectTargetSounds_); }
-void UISoundManager::playTargetDeselect() { playSound(deselectTargetSounds_); }
+void UiSoundManager::playError() { playSound(errorSounds_); }
+void UiSoundManager::playTargetSelect() { playSound(selectTargetSounds_); }
+void UiSoundManager::playTargetDeselect() { playSound(deselectTargetSounds_); }
 
 } // namespace audio
 } // namespace wowee

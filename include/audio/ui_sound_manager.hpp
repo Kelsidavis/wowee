@@ -12,10 +12,10 @@ class AssetManager;
 
 namespace audio {
 
-class UISoundManager {
+class UiSoundManager {
 public:
-    UISoundManager() = default;
-    ~UISoundManager() = default;
+    UiSoundManager() = default;
+    ~UiSoundManager() = default;
 
     // Initialization
     bool initialize(pipeline::AssetManager* assets);
@@ -23,6 +23,7 @@ public:
 
     // Volume control
     void setVolumeScale(float scale);
+    float getVolumeScale() const { return volumeScale_; }
 
     // Window sounds
     void playBagOpen();

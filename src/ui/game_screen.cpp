@@ -12,6 +12,13 @@
 #include "audio/music_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
+#include "audio/mount_sound_manager.hpp"
+#include "audio/npc_voice_manager.hpp"
+#include "audio/ambient_sound_manager.hpp"
+#include "audio/ui_sound_manager.hpp"
+#include "audio/combat_sound_manager.hpp"
+#include "audio/spell_sound_manager.hpp"
+#include "audio/movement_sound_manager.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/blp_loader.hpp"
@@ -4039,19 +4046,36 @@ void GameScreen::renderSettingsWindow() {
         pendingVsync = window->isVsyncEnabled();
         pendingShadows = renderer ? renderer->areShadowsEnabled() : true;
         if (renderer) {
+            // Load volumes from all audio managers
             if (auto* music = renderer->getMusicManager()) {
                 pendingMusicVolume = music->getVolume();
             }
+            if (auto* ambient = renderer->getAmbientSoundManager()) {
+                pendingAmbientVolume = static_cast<int>(ambient->getVolumeScale() * 100.0f + 0.5f);
+            }
+            if (auto* ui = renderer->getUiSoundManager()) {
+                pendingUiVolume = static_cast<int>(ui->getVolumeScale() * 100.0f + 0.5f);
+            }
+            if (auto* combat = renderer->getCombatSoundManager()) {
+                pendingCombatVolume = static_cast<int>(combat->getVolumeScale() * 100.0f + 0.5f);
+            }
+            if (auto* spell = renderer->getSpellSoundManager()) {
+                pendingSpellVolume = static_cast<int>(spell->getVolumeScale() * 100.0f + 0.5f);
+            }
+            if (auto* movement = renderer->getMovementSoundManager()) {
+                pendingMovementVolume = static_cast<int>(movement->getVolumeScale() * 100.0f + 0.5f);
+            }
             if (auto* footstep = renderer->getFootstepManager()) {
-                float scale = footstep->getVolumeScale();
-                pendingSfxVolume = static_cast<int>(scale * 100.0f + 0.5f);
-                if (pendingSfxVolume < 0) pendingSfxVolume = 0;
-                if (pendingSfxVolume > 100) pendingSfxVolume = 100;
-            } else if (auto* activity = renderer->getActivitySoundManager()) {
-                float scale = activity->getVolumeScale();
-                pendingSfxVolume = static_cast<int>(scale * 100.0f + 0.5f);
-                if (pendingSfxVolume < 0) pendingSfxVolume = 0;
-                if (pendingSfxVolume > 100) pendingSfxVolume = 100;
+                pendingFootstepVolume = static_cast<int>(footstep->getVolumeScale() * 100.0f + 0.5f);
+            }
+            if (auto* npcVoice = renderer->getNpcVoiceManager()) {
+                pendingNpcVoiceVolume = static_cast<int>(npcVoice->getVolumeScale() * 100.0f + 0.5f);
+            }
+            if (auto* mount = renderer->getMountSoundManager()) {
+                pendingMountVolume = static_cast<int>(mount->getVolumeScale() * 100.0f + 0.5f);
+            }
+            if (auto* activity = renderer->getActivitySoundManager()) {
+                pendingActivityVolume = static_cast<int>(activity->getVolumeScale() * 100.0f + 0.5f);
             }
             if (auto* cameraController = renderer->getCameraController()) {
                 pendingMouseSensitivity = cameraController->getMouseSensitivity();
@@ -4080,7 +4104,7 @@ void GameScreen::renderSettingsWindow() {
     ImGuiIO& io = ImGui::GetIO();
     float screenW = io.DisplaySize.x;
     float screenH = io.DisplaySize.y;
-    ImVec2 size(440.0f, 520.0f);
+    ImVec2 size(520.0f, std::min(screenH * 0.9f, 720.0f));
     ImVec2 pos((screenW - size.x) * 0.5f, (screenH - size.y) * 0.5f);
 
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
@@ -4092,60 +4116,148 @@ void GameScreen::renderSettingsWindow() {
         ImGui::Text("Settings");
         ImGui::Separator();
 
-        ImGui::Text("Video");
-        ImGui::Checkbox("Fullscreen", &pendingFullscreen);
-        ImGui::Checkbox("VSync", &pendingVsync);
-        ImGui::Checkbox("Shadows", &pendingShadows);
+        if (ImGui::BeginTabBar("SettingsTabs", ImGuiTabBarFlags_None)) {
+            // ============================================================
+            // VIDEO TAB
+            // ============================================================
+            if (ImGui::BeginTabItem("Video")) {
+                ImGui::Spacing();
+                ImGui::Checkbox("Fullscreen", &pendingFullscreen);
+                ImGui::Checkbox("VSync", &pendingVsync);
+                ImGui::Checkbox("Shadows", &pendingShadows);
 
-        const char* resLabel = "Resolution";
-        const char* resItems[kResCount];
-        char resBuf[kResCount][16];
-        for (int i = 0; i < kResCount; i++) {
-            snprintf(resBuf[i], sizeof(resBuf[i]), "%dx%d", kResolutions[i][0], kResolutions[i][1]);
-            resItems[i] = resBuf[i];
-        }
-        ImGui::Combo(resLabel, &pendingResIndex, resItems, kResCount);
-        if (ImGui::Button("Restore Video Defaults", ImVec2(-1, 0))) {
-            pendingFullscreen = kDefaultFullscreen;
-            pendingVsync = kDefaultVsync;
-            pendingShadows = kDefaultShadows;
-            pendingResIndex = defaultResIndex;
-        }
+                const char* resLabel = "Resolution";
+                const char* resItems[kResCount];
+                char resBuf[kResCount][16];
+                for (int i = 0; i < kResCount; i++) {
+                    snprintf(resBuf[i], sizeof(resBuf[i]), "%dx%d", kResolutions[i][0], kResolutions[i][1]);
+                    resItems[i] = resBuf[i];
+                }
+                ImGui::Combo(resLabel, &pendingResIndex, resItems, kResCount);
 
-        ImGui::Spacing();
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if (ImGui::Button("Restore Video Defaults", ImVec2(-1, 0))) {
+                    pendingFullscreen = kDefaultFullscreen;
+                    pendingVsync = kDefaultVsync;
+                    pendingShadows = kDefaultShadows;
+                    pendingResIndex = defaultResIndex;
+                }
+
+                ImGui::EndTabItem();
+            }
+
+            // ============================================================
+            // AUDIO TAB
+            // ============================================================
+            if (ImGui::BeginTabItem("Audio")) {
+                ImGui::Spacing();
+        ImGui::BeginChild("AudioSettings", ImVec2(0, 360), true);
+
+        ImGui::Text("Master Volume");
+        ImGui::SliderInt("##MasterVolume", &pendingMasterVolume, 0, 100, "%d%%");
         ImGui::Separator();
-        ImGui::Spacing();
 
-        ImGui::Text("Audio");
-        ImGui::SliderInt("Music Volume", &pendingMusicVolume, 0, 100, "%d");
-        ImGui::SliderInt("SFX Volume", &pendingSfxVolume, 0, 100, "%d");
+        ImGui::Text("Music");
+        ImGui::SliderInt("##MusicVolume", &pendingMusicVolume, 0, 100, "%d%%");
+
+        ImGui::Spacing();
+        ImGui::Text("Ambient Sounds");
+        ImGui::SliderInt("##AmbientVolume", &pendingAmbientVolume, 0, 100, "%d%%");
+        ImGui::TextWrapped("Weather, zones, cities, emitters");
+
+        ImGui::Spacing();
+        ImGui::Text("UI Sounds");
+        ImGui::SliderInt("##UiVolume", &pendingUiVolume, 0, 100, "%d%%");
+        ImGui::TextWrapped("Buttons, loot, quest complete");
+
+        ImGui::Spacing();
+        ImGui::Text("Combat Sounds");
+        ImGui::SliderInt("##CombatVolume", &pendingCombatVolume, 0, 100, "%d%%");
+        ImGui::TextWrapped("Weapon swings, impacts, grunts");
+
+        ImGui::Spacing();
+        ImGui::Text("Spell Sounds");
+        ImGui::SliderInt("##SpellVolume", &pendingSpellVolume, 0, 100, "%d%%");
+        ImGui::TextWrapped("Magic casting and impacts");
+
+        ImGui::Spacing();
+        ImGui::Text("Movement Sounds");
+        ImGui::SliderInt("##MovementVolume", &pendingMovementVolume, 0, 100, "%d%%");
+        ImGui::TextWrapped("Water splashes, jump/land");
+
+        ImGui::Spacing();
+        ImGui::Text("Footsteps");
+        ImGui::SliderInt("##FootstepVolume", &pendingFootstepVolume, 0, 100, "%d%%");
+
+        ImGui::Spacing();
+        ImGui::Text("NPC Voices");
+        ImGui::SliderInt("##NpcVoiceVolume", &pendingNpcVoiceVolume, 0, 100, "%d%%");
+
+        ImGui::Spacing();
+        ImGui::Text("Mount Sounds");
+        ImGui::SliderInt("##MountVolume", &pendingMountVolume, 0, 100, "%d%%");
+
+        ImGui::Spacing();
+        ImGui::Text("Activity Sounds");
+        ImGui::SliderInt("##ActivityVolume", &pendingActivityVolume, 0, 100, "%d%%");
+        ImGui::TextWrapped("Swimming, eating, drinking");
+
+        ImGui::EndChild();
+
         if (ImGui::Button("Restore Audio Defaults", ImVec2(-1, 0))) {
+            pendingMasterVolume = 100;
             pendingMusicVolume = kDefaultMusicVolume;
-            pendingSfxVolume = kDefaultSfxVolume;
+            pendingAmbientVolume = 100;
+            pendingUiVolume = 100;
+            pendingCombatVolume = 100;
+            pendingSpellVolume = 100;
+            pendingMovementVolume = 100;
+            pendingFootstepVolume = 100;
+            pendingNpcVoiceVolume = 100;
+            pendingMountVolume = 100;
+            pendingActivityVolume = 100;
         }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+                ImGui::EndTabItem();
+            }
 
-        ImGui::Text("Controls");
-        ImGui::SliderFloat("Mouse Sensitivity", &pendingMouseSensitivity, 0.05f, 1.0f, "%.2f");
-        ImGui::Checkbox("Invert Mouse", &pendingInvertMouse);
-        if (ImGui::Button("Restore Control Defaults", ImVec2(-1, 0))) {
-            pendingMouseSensitivity = kDefaultMouseSensitivity;
-            pendingInvertMouse = kDefaultInvertMouse;
-        }
+            // ============================================================
+            // GAMEPLAY TAB
+            // ============================================================
+            if (ImGui::BeginTabItem("Gameplay")) {
+                ImGui::Spacing();
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+                ImGui::Text("Controls");
+                ImGui::Separator();
+                ImGui::SliderFloat("Mouse Sensitivity", &pendingMouseSensitivity, 0.05f, 1.0f, "%.2f");
+                ImGui::Checkbox("Invert Mouse", &pendingInvertMouse);
 
-        ImGui::Text("Interface");
-        ImGui::SliderInt("UI Opacity", &pendingUiOpacity, 20, 100, "%d%%");
-        ImGui::Checkbox("Rotate Minimap", &pendingMinimapRotate);
-        if (ImGui::Button("Restore Interface Defaults", ImVec2(-1, 0))) {
-            pendingUiOpacity = 65;
-            pendingMinimapRotate = false;
+                ImGui::Spacing();
+                ImGui::Spacing();
+
+                ImGui::Text("Interface");
+                ImGui::Separator();
+                ImGui::SliderInt("UI Opacity", &pendingUiOpacity, 20, 100, "%d%%");
+                ImGui::Checkbox("Rotate Minimap", &pendingMinimapRotate);
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if (ImGui::Button("Restore Gameplay Defaults", ImVec2(-1, 0))) {
+                    pendingMouseSensitivity = kDefaultMouseSensitivity;
+                    pendingInvertMouse = kDefaultInvertMouse;
+                    pendingUiOpacity = 65;
+                    pendingMinimapRotate = false;
+                }
+
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
         }
 
         ImGui::Spacing();
@@ -4164,16 +4276,40 @@ void GameScreen::renderSettingsWindow() {
                 if (auto* minimap = renderer->getMinimap()) {
                     minimap->setRotateWithCamera(minimapRotate_);
                 }
+
+                // Apply all audio volume settings
+                float masterScale = static_cast<float>(pendingMasterVolume) / 100.0f;
                 if (auto* music = renderer->getMusicManager()) {
-                    music->setVolume(pendingMusicVolume);
+                    music->setVolume(static_cast<int>(pendingMusicVolume * masterScale));
                 }
-                float sfxScale = static_cast<float>(pendingSfxVolume) / 100.0f;
+                if (auto* ambient = renderer->getAmbientSoundManager()) {
+                    ambient->setVolumeScale(pendingAmbientVolume / 100.0f * masterScale);
+                }
+                if (auto* ui = renderer->getUiSoundManager()) {
+                    ui->setVolumeScale(pendingUiVolume / 100.0f * masterScale);
+                }
+                if (auto* combat = renderer->getCombatSoundManager()) {
+                    combat->setVolumeScale(pendingCombatVolume / 100.0f * masterScale);
+                }
+                if (auto* spell = renderer->getSpellSoundManager()) {
+                    spell->setVolumeScale(pendingSpellVolume / 100.0f * masterScale);
+                }
+                if (auto* movement = renderer->getMovementSoundManager()) {
+                    movement->setVolumeScale(pendingMovementVolume / 100.0f * masterScale);
+                }
                 if (auto* footstep = renderer->getFootstepManager()) {
-                    footstep->setVolumeScale(sfxScale);
+                    footstep->setVolumeScale(pendingFootstepVolume / 100.0f * masterScale);
+                }
+                if (auto* npcVoice = renderer->getNpcVoiceManager()) {
+                    npcVoice->setVolumeScale(pendingNpcVoiceVolume / 100.0f * masterScale);
+                }
+                if (auto* mount = renderer->getMountSoundManager()) {
+                    mount->setVolumeScale(pendingMountVolume / 100.0f * masterScale);
                 }
                 if (auto* activity = renderer->getActivitySoundManager()) {
-                    activity->setVolumeScale(sfxScale);
+                    activity->setVolumeScale(pendingActivityVolume / 100.0f * masterScale);
                 }
+
                 if (auto* cameraController = renderer->getCameraController()) {
                     cameraController->setMouseSensitivity(pendingMouseSensitivity);
                     cameraController->setInvertMouse(pendingInvertMouse);
