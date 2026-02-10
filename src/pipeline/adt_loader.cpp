@@ -203,15 +203,13 @@ void ADTLoader::parseMWMO(const uint8_t* data, size_t size, ADTTerrain& terrain)
         offset += nameLen + 1;
     }
 
-    if (terrain.wmoNames.size() > 0) {
-        LOG_INFO("Loaded ", terrain.wmoNames.size(), " WMO names");
-        for (size_t i = 0; i < terrain.wmoNames.size(); i++) {
-            LOG_INFO("  WMO[", i, "]: ", terrain.wmoNames[i]);
-            // Flag potential duplicate cathedral models
-            if (terrain.wmoNames[i].find("cathedral") != std::string::npos ||
-                terrain.wmoNames[i].find("Cathedral") != std::string::npos) {
-                LOG_INFO("*** CATHEDRAL WMO FOUND: ", terrain.wmoNames[i]);
-            }
+    LOG_INFO("Loaded ", terrain.wmoNames.size(), " WMO names from MWMO chunk");
+    for (size_t i = 0; i < terrain.wmoNames.size(); i++) {
+        LOG_INFO("  WMO[", i, "]: ", terrain.wmoNames[i]);
+        // Flag potential duplicate cathedral models
+        if (terrain.wmoNames[i].find("cathedral") != std::string::npos ||
+            terrain.wmoNames[i].find("Cathedral") != std::string::npos) {
+            LOG_INFO("*** CATHEDRAL WMO FOUND: ", terrain.wmoNames[i]);
         }
     }
 }
