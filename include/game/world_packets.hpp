@@ -234,6 +234,7 @@ struct CharCreateData {
     uint8_t hairStyle = 0;
     uint8_t hairColor = 0;
     uint8_t facialHair = 0;
+    bool useFemaleModel = false;  // For nonbinary: choose body type
 };
 
 class CharCreatePacket {

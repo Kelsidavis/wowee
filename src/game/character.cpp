@@ -93,9 +93,12 @@ const char* getGenderName(Gender gender) {
     }
 }
 
-std::string getPlayerModelPath(Race race, Gender gender) {
-    // For nonbinary, default to male model (can be extended later for model selection)
-    bool useFemale = (gender == Gender::FEMALE);
+std::string getPlayerModelPath(Race race, Gender gender, bool useFemaleModel) {
+    // Female always uses female model
+    // Nonbinary uses chosen model (useFemaleModel parameter)
+    // Male always uses male model
+    bool useFemale = (gender == Gender::FEMALE) ||
+                     (gender == Gender::NONBINARY && useFemaleModel);
 
     switch (race) {
         case Race::HUMAN:
@@ -141,6 +144,10 @@ std::string getPlayerModelPath(Race race, Gender gender) {
         default:
             return "Character\\Human\\Male\\HumanMale.m2";
     }
+}
+
+std::string getPlayerModelPath(const Character& character) {
+    return getPlayerModelPath(character.race, character.gender, character.useFemaleModel);
 }
 
 } // namespace game

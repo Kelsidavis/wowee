@@ -105,6 +105,7 @@ void CharacterCreateScreen::updatePreviewIfNeeded() {
 
     bool changed = (raceIndex != prevRaceIndex_ ||
                     genderIndex != prevGenderIndex_ ||
+                    bodyTypeIndex != prevBodyTypeIndex_ ||
                     skin != prevSkin_ ||
                     face != prevFace_ ||
                     hairStyle != prevHairStyle_ ||
@@ -112,6 +113,7 @@ void CharacterCreateScreen::updatePreviewIfNeeded() {
                     facialHair != prevFacialHair_);
 
     if (changed) {
+        bool useFemaleModel = (genderIndex == 2 && bodyTypeIndex == 1);  // Nonbinary + Feminine
         preview_->loadCharacter(
             allRaces[raceIndex],
             static_cast<game::Gender>(genderIndex),
@@ -119,10 +121,12 @@ void CharacterCreateScreen::updatePreviewIfNeeded() {
             static_cast<uint8_t>(face),
             static_cast<uint8_t>(hairStyle),
             static_cast<uint8_t>(hairColor),
-            static_cast<uint8_t>(facialHair));
+            static_cast<uint8_t>(facialHair),
+            useFemaleModel);
 
         prevRaceIndex_ = raceIndex;
         prevGenderIndex_ = genderIndex;
+        prevBodyTypeIndex_ = bodyTypeIndex;
         prevSkin_ = skin;
         prevFace_ = face;
         prevHairStyle_ = hairStyle;
@@ -276,7 +280,7 @@ void CharacterCreateScreen::render(game::GameHandler& /*gameHandler*/) {
             // Mouse drag rotation on the preview image
             if (ImGui::IsItemHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 float deltaX = ImGui::GetIO().MouseDelta.x;
-                preview_->rotate(deltaX * 0.5f);
+                preview_->rotate(deltaX * 0.2f);
             }
 
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Drag to rotate");
@@ -365,6 +369,15 @@ void CharacterCreateScreen::render(game::GameHandler& /*gameHandler*/) {
     ImGui::SameLine();
     ImGui::RadioButton("Nonbinary", &genderIndex, 2);
 
+    // Body type selection for nonbinary
+    if (genderIndex == 2) {  // Nonbinary
+        ImGui::Text("Body Type:");
+        ImGui::SameLine(80);
+        ImGui::RadioButton("Masculine", &bodyTypeIndex, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("Feminine", &bodyTypeIndex, 1);
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -433,6 +446,7 @@ void CharacterCreateScreen::render(game::GameHandler& /*gameHandler*/) {
             data.race = allRaces[raceIndex];
             data.characterClass = availableClasses[classIndex];
             data.gender = currentGender;
+            data.useFemaleModel = (genderIndex == 2 && bodyTypeIndex == 1);  // Nonbinary + Feminine
             data.skin = static_cast<uint8_t>(skin);
             data.face = static_cast<uint8_t>(face);
             data.hairStyle = static_cast<uint8_t>(hairStyle);

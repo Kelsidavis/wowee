@@ -33,6 +33,7 @@ private:
     int raceIndex = 0;
     int classIndex = 0;
     int genderIndex = 0;
+    int bodyTypeIndex = 0;  // For nonbinary: 0=masculine, 1=feminine
     int skin = 0, face = 0, hairStyle = 0, hairColor = 0, facialHair = 0;
     int maxSkin = 9, maxFace = 9, maxHairStyle = 11, maxHairColor = 9, maxFacialHair = 8;
     std::string statusMessage;
@@ -49,6 +50,7 @@ private:
     pipeline::AssetManager* assetManager_ = nullptr;
     int prevRaceIndex_ = -1;
     int prevGenderIndex_ = -1;
+    int prevBodyTypeIndex_ = -1;
     int prevSkin_ = -1;
     int prevFace_ = -1;
     int prevHairStyle_ = -1;

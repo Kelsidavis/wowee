@@ -23,7 +23,7 @@ public:
     bool loadCharacter(game::Race race, game::Gender gender,
                        uint8_t skin, uint8_t face,
                        uint8_t hairStyle, uint8_t hairColor,
-                       uint8_t facialHair);
+                       uint8_t facialHair, bool useFemaleModel = false);
 
     void update(float deltaTime);
     void render();

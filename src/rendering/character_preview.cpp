@@ -97,7 +97,7 @@ void CharacterPreview::destroyFBO() {
 bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
                                       uint8_t skin, uint8_t face,
                                       uint8_t hairStyle, uint8_t hairColor,
-                                      uint8_t facialHair) {
+                                      uint8_t facialHair, bool useFemaleModel) {
     if (!charRenderer_ || !assetManager_ || !assetManager_->isInitialized()) {
         return false;
     }
@@ -109,7 +109,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
         modelLoaded_ = false;
     }
 
-    std::string m2Path = game::getPlayerModelPath(race, gender);
+    std::string m2Path = game::getPlayerModelPath(race, gender, useFemaleModel);
     std::string modelDir;
     std::string baseName;
     {

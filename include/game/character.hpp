@@ -114,6 +114,7 @@ struct Character {
     Race race;                  // Character race
     Class characterClass;       // Character class (renamed from 'class' keyword)
     Gender gender;              // Character gender
+    bool useFemaleModel = false; // For nonbinary: body type preference (client-side only)
     uint8_t level;              // Character level (1-80)
 
     // Appearance
@@ -167,8 +168,14 @@ const char* getGenderName(Gender gender);
 
 /**
  * Get M2 model path for a given race and gender
+ * useFemaleModel allows nonbinary characters to choose body type
  */
-std::string getPlayerModelPath(Race race, Gender gender);
+std::string getPlayerModelPath(Race race, Gender gender, bool useFemaleModel = false);
+
+/**
+ * Get M2 model path for a character (uses character's body type preference)
+ */
+std::string getPlayerModelPath(const Character& character);
 
 } // namespace game
 } // namespace wowee
