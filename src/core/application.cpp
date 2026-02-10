@@ -2573,7 +2573,7 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t displayId, float
     bool isWmo = lowerPath.size() >= 4 && lowerPath.substr(lowerPath.size() - 4) == ".wmo";
 
     glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
-    float renderYaw = orientation + glm::radians(90.0f);
+    float renderYaw = orientation;
 
     bool loadedAsWmo = false;
     if (isWmo) {
