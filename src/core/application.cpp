@@ -2549,6 +2549,8 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t displayId, float
         // Already have a render instance — update its position (e.g. transport re-creation)
         auto& info = gameObjectInstances_[guid];
         glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
+        LOG_INFO("GameObject position update: displayId=", displayId, " guid=0x", std::hex, guid, std::dec,
+                 " pos=(", x, ", ", y, ", ", z, ")");
         if (renderer) {
             if (info.isWmo) {
                 if (auto* wr = renderer->getWMORenderer())
@@ -2566,6 +2568,10 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t displayId, float
         LOG_WARNING("No model path for gameobject displayId ", displayId, " (guid 0x", std::hex, guid, std::dec, ")");
         return;
     }
+
+    // Log spawns to help debug duplicate objects (e.g., cathedral issue)
+    LOG_INFO("GameObject spawn: displayId=", displayId, " guid=0x", std::hex, guid, std::dec,
+             " model=", modelPath, " pos=(", x, ", ", y, ", ", z, ")");
 
     std::string lowerPath = modelPath;
     std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(),
