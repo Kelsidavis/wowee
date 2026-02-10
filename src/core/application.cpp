@@ -3035,12 +3035,27 @@ void Application::loadQuestMarkerModels() {
 }
 
 void Application::updateQuestMarkers() {
-    if (!gameHandler || !renderer || questExclamationModelId_ == 0) return;
+    if (!gameHandler || !renderer || questExclamationModelId_ == 0) {
+        static bool logged = false;
+        if (!logged) {
+            LOG_INFO("updateQuestMarkers: skipped - gameHandler=", (gameHandler ? "yes" : "no"),
+                     " renderer=", (renderer ? "yes" : "no"),
+                     " questExclamationModelId=", questExclamationModelId_);
+            logged = true;
+        }
+        return;
+    }
 
     auto* m2Renderer = renderer->getM2Renderer();
     if (!m2Renderer) return;
 
     const auto& questStatuses = gameHandler->getNpcQuestStatuses();
+
+    static int logCounter = 0;
+    if (++logCounter % 300 == 0) {  // Log every ~10 seconds at 30fps
+        LOG_INFO("Quest markers: ", questStatuses.size(), " NPCs with status, ",
+                 questMarkerInstances_.size(), " markers active");
+    }
 
     // Remove markers for NPCs that no longer have quest status
     std::vector<uint64_t> toRemove;
