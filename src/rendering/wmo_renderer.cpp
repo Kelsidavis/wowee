@@ -110,11 +110,8 @@ bool WMORenderer::initialize(pipeline::AssetManager* assets) {
                 // Alpha test only for cutout materials (lattice, grating, etc.)
                 if (uAlphaTest && texColor.a < 0.5) discard;
                 alpha = texColor.a;
-                // Exterior: multiply vertex color (MOCV baked AO) into texture
-                // Interior: keep texture clean — vertex color is used as light below
-                if (!uIsInterior) {
-                    texColor.rgb *= VertexColor.rgb;
-                }
+                // Don't multiply texture by vertex color here - it zeros out black MOCV areas
+                // Vertex colors will be applied as AO modulation after lighting
             } else {
                 // MOCV vertex color alpha is a lighting blend factor, not transparency
                 texColor = vec4(VertexColor.rgb, 1.0);
@@ -177,6 +174,11 @@ bool WMORenderer::initialize(pipeline::AssetManager* assets) {
                 shadow = mix(1.0, shadow, clamp(uShadowStrength, 0.0, 1.0));
 
                 litColor = (ambient + (diffuse + specular) * shadow) * texColor.rgb;
+
+                // Apply vertex color as ambient occlusion (AO) with minimum to prevent blackout
+                // MOCV values of (0,0,0) are clamped to 0.5 to keep areas visible
+                vec3 ao = max(VertexColor.rgb, vec3(0.5));
+                litColor *= ao;
             }
 
             // Fog
