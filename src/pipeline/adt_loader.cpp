@@ -2,6 +2,7 @@
 #include "core/logger.hpp"
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 
 namespace wowee {
 namespace pipeline {
@@ -268,14 +269,19 @@ void ADTLoader::parseMODF(const uint8_t* data, size_t size, ADTTerrain& terrain)
 
         terrain.wmoPlacements.push_back(placement);
 
-        // Log cathedral placements with their positions to identify duplicates
+        // Log STORMWIND.WMO placements to detect duplicates at different Z heights
         if (placement.nameId < terrain.wmoNames.size()) {
             const std::string& wmoName = terrain.wmoNames[placement.nameId];
-            if (wmoName.find("cathedral") != std::string::npos ||
-                wmoName.find("Cathedral") != std::string::npos) {
-                LOG_INFO("*** CATHEDRAL PLACEMENT: ", wmoName,
-                         " at (", placement.position[0], ", ",
-                         placement.position[1], ", ", placement.position[2], ")");
+            std::string upperName = wmoName;
+            std::transform(upperName.begin(), upperName.end(), upperName.begin(), ::toupper);
+
+            if (upperName.find("STORMWIND.WMO") != std::string::npos) {
+                LOG_INFO("*** STORMWIND.WMO PLACEMENT:",
+                         " uniqueId=", placement.uniqueId,
+                         " pos=(", placement.position[0], ", ", placement.position[1], ", ", placement.position[2], ")",
+                         " rot=(", placement.rotation[0], ", ", placement.rotation[1], ", ", placement.rotation[2], ")",
+                         " doodadSet=", placement.doodadSet,
+                         " flags=0x", std::hex, placement.flags, std::dec);
             }
         }
     }
