@@ -36,6 +36,8 @@ enum class VoiceType {
     UNDEAD_FEMALE,
     GNOME_MALE,
     GNOME_FEMALE,
+    GOBLIN_MALE,
+    GOBLIN_FEMALE,
     GENERIC,  // Fallback
 };
 
