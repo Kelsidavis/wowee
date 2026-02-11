@@ -757,8 +757,9 @@ void Renderer::setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float h
         bool isAttackOrCombat = (seq.id >= 11 && seq.id <= 21);
         bool isSpecial = (seq.id == 2 || seq.id == 3);  // Often aggressive specials
 
-        // Select fidgets: STRICT - require BOTH frequency AND replay to ensure proper idle markers
-        if (!isLoop && hasFrequency && hasReplay && isStationary && reasonableDuration &&
+        // Select fidgets: (frequency OR replay) + exclude problematic ID ranges
+        // Relaxed back to OR since some mounts may only have one metadata marker
+        if (!isLoop && (hasFrequency || hasReplay) && isStationary && reasonableDuration &&
             !isDeathOrWound && !isAttackOrCombat && !isSpecial) {
             // Bonus: chains back to stand (indicates idle behavior)
             bool chainsToStand = (seq.nextAnimation == (int16_t)mountAnims_.stand) ||
@@ -1124,15 +1125,15 @@ void Renderer::updateCharacterAnimation() {
                 mountActiveFidget_ = 0;  // Cancel any active fidget
             }
 
-            // Idle ambient sounds: snorts and whinnies only, less frequent
+            // Idle ambient sounds: snorts and whinnies only, infrequent
             if (!moving && mountSoundManager) {
                 mountIdleSoundTimer_ += lastDeltaTime_;
-                static float nextIdleSoundTime = 20.0f + (rand() % 21);  // 20-40 seconds
+                static float nextIdleSoundTime = 45.0f + (rand() % 46);  // 45-90 seconds
 
                 if (mountIdleSoundTimer_ >= nextIdleSoundTime) {
                     mountSoundManager->playIdleSound();
                     mountIdleSoundTimer_ = 0.0f;
-                    nextIdleSoundTime = 20.0f + (rand() % 21);  // Randomize next sound time
+                    nextIdleSoundTime = 45.0f + (rand() % 46);  // Randomize next sound time
                 }
             } else if (moving) {
                 mountIdleSoundTimer_ = 0.0f;  // Reset timer when moving
