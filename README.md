@@ -1,5 +1,9 @@
 # Wowee
 
+<p align="center">
+  <img src="assets/Wowee.png" alt="Wowee Logo" width="240" />
+</p>
+
 A native C++ client for World of Warcraft 3.3.5a (Wrath of the Lich King) with a fully functional OpenGL rendering engine.
 
 > **Legal Disclaimer**: This is an educational/research project. It does not include any Blizzard Entertainment assets, data files, or proprietary code. World of Warcraft and all related assets are the property of Blizzard Entertainment, Inc. This project is not affiliated with or endorsed by Blizzard Entertainment. Users are responsible for supplying their own legally obtained game data files and for ensuring compliance with all applicable laws in their jurisdiction.
