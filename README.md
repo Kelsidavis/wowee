@@ -84,7 +84,7 @@ Alternatively, set the `WOW_DATA_PATH` environment variable to point to your WoW
 ### Compile & Run
 
 ```bash
-git clone https://github.com/yourname/wowee.git
+git clone https://github.com/Kelsidavis/WoWee.git
 cd wowee
 
 # Get ImGui (required)

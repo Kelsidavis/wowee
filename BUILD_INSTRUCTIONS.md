@@ -51,7 +51,7 @@ sudo pacman -S --needed \
 ## 2. Clone + Prepare
 
 ```bash
-git clone git@github.com:Kelsidavis/wowee.git
+git clone https://github.com/Kelsidavis/WoWee.git
 cd wowee
 git clone https://github.com/ocornut/imgui.git extern/imgui
 ```

@@ -157,7 +157,7 @@ Wowee follows a modular architecture with clear separation of concerns:
 - Race, class, gender, appearance
 - Creation and customization
 - 3D model preview
-- Persistence (online and offline)
+- Online character lifecycle and state synchronization
 
 **Entity** - Game entities
 - NPCs and creatures with display info
@@ -172,7 +172,7 @@ Wowee follows a modular architecture with clear separation of concerns:
 - Drag-drop system
 - Auto-equip and unequip
 
-**NPCManager** - NPC interactions
+**NPC Interactions** - handled through `GameHandler`
 - Gossip system
 - Quest givers with markers (! and ?)
 - Vendors (buy/sell)
@@ -256,7 +256,6 @@ Wowee follows a modular architecture with clear separation of concerns:
 **AuthScreen** - Login interface
 - Username/password input fields
 - Server address configuration
-- "Single Player" offline mode button
 - Connection status and error messages
 
 **RealmScreen** - Server selection
@@ -500,8 +499,7 @@ Currently hardcoded, future config system:
 - Visual verification of rendering (terrain, water, models, particles)
 - Performance profiling (F1 performance HUD)
 - Memory leak checking (valgrind)
-- Online gameplay against TrinityCore/MaNGOS servers
-- Single-player mode functionality
+- Online gameplay against AzerothCore/TrinityCore/MaNGOS servers
 - UI interactions (drag-drop, click events)
 
 **Current Test Coverage:**
@@ -530,7 +528,7 @@ Currently hardcoded, future config system:
 
 ## Code Style
 
-- **C++17 standard**
+- **C++20 standard**
 - **Namespaces:** wowee::core, wowee::rendering, etc.
 - **Naming:** PascalCase for classes, camelCase for functions/variables
 - **Headers:** .hpp extension
