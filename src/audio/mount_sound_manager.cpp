@@ -277,16 +277,16 @@ void MountSoundManager::playJumpSound() {
     if (elapsed < 200) return;
     lastActionSoundTime_ = now;
 
-    // Jump effort sound
-    if (currentMountType_ == MountType::GROUND && !horseJumpSounds_.empty()) {
-        // TODO: Select family-specific sounds once organized by family
-        static std::mt19937 rng(std::random_device{}());
-        std::uniform_int_distribution<size_t> dist(0, horseJumpSounds_.size() - 1);
-        const auto& sample = horseJumpSounds_[dist(rng)];
-        if (!sample.data.empty()) {
-            AudioEngine::instance().playSound2D(sample.data, 0.5f * volumeScale_, 1.1f);
-        }
-    } else if (currentMountType_ == MountType::FLYING && !wingFlapSounds_.empty()) {
+    // Jump effort sound - DISABLED (attack sounds have pained growls)
+    // if (currentMountType_ == MountType::GROUND && !horseJumpSounds_.empty()) {
+    //     static std::mt19937 rng(std::random_device{}());
+    //     std::uniform_int_distribution<size_t> dist(0, horseJumpSounds_.size() - 1);
+    //     const auto& sample = horseJumpSounds_[dist(rng)];
+    //     if (!sample.data.empty()) {
+    //         AudioEngine::instance().playSound2D(sample.data, 0.5f * volumeScale_, 1.1f);
+    //     }
+    // } else
+    if (currentMountType_ == MountType::FLYING && !wingFlapSounds_.empty()) {
         // Flying mounts: wing whoosh
         static std::mt19937 rng(std::random_device{}());
         std::uniform_int_distribution<size_t> dist(0, wingFlapSounds_.size() - 1);
@@ -306,16 +306,15 @@ void MountSoundManager::playLandSound() {
     if (elapsed < 200) return;
     lastActionSoundTime_ = now;
 
-    // Landing thud/hoof sound
-    if (currentMountType_ == MountType::GROUND && !horseLandSounds_.empty()) {
-        // Ground mounts: hoof thud / impact
-        static std::mt19937 rng(std::random_device{}());
-        std::uniform_int_distribution<size_t> dist(0, horseLandSounds_.size() - 1);
-        const auto& sample = horseLandSounds_[dist(rng)];
-        if (!sample.data.empty()) {
-            AudioEngine::instance().playSound2D(sample.data, 0.6f * volumeScale_, 0.85f);  // Lower pitch for thud
-        }
-    }
+    // Landing thud/hoof sound - DISABLED (wound sounds have pained growls)
+    // if (currentMountType_ == MountType::GROUND && !horseLandSounds_.empty()) {
+    //     static std::mt19937 rng(std::random_device{}());
+    //     std::uniform_int_distribution<size_t> dist(0, horseLandSounds_.size() - 1);
+    //     const auto& sample = horseLandSounds_[dist(rng)];
+    //     if (!sample.data.empty()) {
+    //         AudioEngine::instance().playSound2D(sample.data, 0.6f * volumeScale_, 0.85f);
+    //     }
+    // }
 }
 
 void MountSoundManager::playIdleSound() {
