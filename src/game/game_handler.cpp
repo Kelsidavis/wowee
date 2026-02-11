@@ -1,4 +1,5 @@
 #include "game/game_handler.hpp"
+#include "game/transport_manager.hpp"
 #include "game/opcodes.hpp"
 #include "network/world_socket.hpp"
 #include "network/packet.hpp"
@@ -27,6 +28,9 @@ namespace game {
 
 GameHandler::GameHandler() {
     LOG_DEBUG("GameHandler created");
+
+    // Initialize transport manager
+    transportManager_ = std::make_unique<TransportManager>();
 
     // Default spells always available
     knownSpells.push_back(6603);  // Attack
@@ -304,6 +308,11 @@ void GameHandler::update(float deltaTime) {
 
         auto taxiEnd = std::chrono::high_resolution_clock::now();
         taxiTime += std::chrono::duration<float, std::milli>(taxiEnd - taxiStart).count();
+
+        // Update transport manager
+        if (transportManager_) {
+            transportManager_->update(deltaTime);
+        }
 
         // Distance check timing
         auto distanceStart = std::chrono::high_resolution_clock::now();
@@ -6765,6 +6774,14 @@ void GameHandler::loadCharacterConfig() {
         }
         LOG_INFO("Character config loaded from ", path);
     }
+}
+
+glm::vec3 GameHandler::getComposedWorldPosition() {
+    if (playerTransportGuid_ != 0 && transportManager_) {
+        return transportManager_->getPlayerWorldPosition(playerTransportGuid_, playerTransportOffset_);
+    }
+    // Not on transport, return normal movement position
+    return glm::vec3(movementInfo.x, movementInfo.y, movementInfo.z);
 }
 
 } // namespace game

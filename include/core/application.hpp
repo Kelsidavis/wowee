@@ -14,7 +14,7 @@ namespace wowee {
 namespace rendering { class Renderer; }
 namespace ui { class UIManager; }
 namespace auth { class AuthHandler; }
-namespace game { class GameHandler; class World; class NpcManager; }
+namespace game { class GameHandler; class World; }
 namespace pipeline { class AssetManager; }
 namespace audio { enum class VoiceType; }
 
@@ -79,7 +79,6 @@ private:
     void render();
     void setupUICallbacks();
     void spawnPlayerCharacter();
-    void spawnNpcs();
     std::string getPlayerModelPath() const;
     static const char* mapIdToName(uint32_t mapId);
     void loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float z);
@@ -93,6 +92,7 @@ private:
     void buildGameObjectDisplayLookups();
     std::string getGameObjectModelPathForDisplayId(uint32_t displayId) const;
     audio::VoiceType detectVoiceTypeFromDisplayId(uint32_t displayId) const;
+    void setupTestTransport();  // Test transport boat for development
 
     static Application* instance;
 
@@ -102,7 +102,6 @@ private:
     std::unique_ptr<auth::AuthHandler> authHandler;
     std::unique_ptr<game::GameHandler> gameHandler;
     std::unique_ptr<game::World> world;
-    std::unique_ptr<game::NpcManager> npcManager;
     std::unique_ptr<pipeline::AssetManager> assetManager;
 
     AppState state = AppState::AUTHENTICATION;

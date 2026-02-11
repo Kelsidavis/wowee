@@ -17,6 +17,10 @@
 #include <unordered_set>
 #include <map>
 
+namespace wowee::game {
+    class TransportManager;
+}
+
 namespace wowee {
 namespace network { class WorldSocket; class Packet; }
 
@@ -483,6 +487,16 @@ public:
     bool isOnTransport() const { return playerTransportGuid_ != 0; }
     uint64_t getPlayerTransportGuid() const { return playerTransportGuid_; }
     glm::vec3 getPlayerTransportOffset() const { return playerTransportOffset_; }
+    glm::vec3 getComposedWorldPosition();  // Compose transport transform * local offset
+    TransportManager* getTransportManager() { return transportManager_.get(); }
+    void setPlayerOnTransport(uint64_t transportGuid, const glm::vec3& localOffset) {
+        playerTransportGuid_ = transportGuid;
+        playerTransportOffset_ = localOffset;
+    }
+    void clearPlayerTransport() {
+        playerTransportGuid_ = 0;
+        playerTransportOffset_ = glm::vec3(0.0f);
+    }
 
     // Cooldowns
     float getSpellCooldown(uint32_t spellId) const;
@@ -972,6 +986,7 @@ private:
     std::unordered_set<uint64_t> transportGuids_;  // GUIDs of known transport GameObjects
     uint64_t playerTransportGuid_ = 0;             // Transport the player is riding (0 = none)
     glm::vec3 playerTransportOffset_ = glm::vec3(0.0f); // Player offset on transport
+    std::unique_ptr<TransportManager> transportManager_;  // Transport movement manager
     std::vector<uint32_t> knownSpells;
     std::unordered_map<uint32_t, float> spellCooldowns;    // spellId -> remaining seconds
     uint8_t castCount = 0;

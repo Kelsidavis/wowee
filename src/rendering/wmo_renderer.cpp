@@ -554,6 +554,49 @@ void WMORenderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posi
     rebuildSpatialIndex();
 }
 
+void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return;
+    auto& inst = instances[idxIt->second];
+
+    // Decompose transform to position/rotation/scale
+    inst.position = glm::vec3(transform[3]);
+
+    // Extract rotation (assuming uniform scale)
+    glm::mat3 rotationMatrix(transform);
+    float scaleX = glm::length(glm::vec3(transform[0]));
+    float scaleY = glm::length(glm::vec3(transform[1]));
+    float scaleZ = glm::length(glm::vec3(transform[2]));
+    inst.scale = scaleX;  // Assume uniform scale
+
+    if (scaleX > 0.0001f) rotationMatrix[0] /= scaleX;
+    if (scaleY > 0.0001f) rotationMatrix[1] /= scaleY;
+    if (scaleZ > 0.0001f) rotationMatrix[2] /= scaleZ;
+
+    inst.rotation = glm::vec3(0.0f);  // Euler angles not directly used, so zero them
+
+    // Update model matrix and bounds
+    inst.modelMatrix = transform;
+    inst.invModelMatrix = glm::inverse(transform);
+
+    auto modelIt = loadedModels.find(inst.modelId);
+    if (modelIt != loadedModels.end()) {
+        const ModelData& model = modelIt->second;
+        transformAABB(inst.modelMatrix, model.boundingBoxMin, model.boundingBoxMax,
+                      inst.worldBoundsMin, inst.worldBoundsMax);
+        inst.worldGroupBounds.clear();
+        inst.worldGroupBounds.reserve(model.groups.size());
+        for (const auto& group : model.groups) {
+            glm::vec3 gMin, gMax;
+            transformAABB(inst.modelMatrix, group.boundingBoxMin, group.boundingBoxMax, gMin, gMax);
+            gMin -= glm::vec3(0.5f);
+            gMax += glm::vec3(0.5f);
+            inst.worldGroupBounds.emplace_back(gMin, gMax);
+        }
+    }
+    rebuildSpatialIndex();
+}
+
 void WMORenderer::removeInstance(uint32_t instanceId) {
     auto it = std::find_if(instances.begin(), instances.end(),
                           [instanceId](const WMOInstance& inst) { return inst.id == instanceId; });

@@ -35,8 +35,8 @@
 #include "ui/ui_manager.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
+#include "game/transport_manager.hpp"
 #include "game/world.hpp"
-#include "game/npc_manager.hpp"
 #include "pipeline/asset_manager.hpp"
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
@@ -409,12 +409,6 @@ void Application::update(float deltaTime) {
             auto w2 = std::chrono::high_resolution_clock::now();
             worldTime += std::chrono::duration<float, std::milli>(w2 - w1).count();
 
-            auto s1 = std::chrono::high_resolution_clock::now();
-            // Spawn NPCs once when entering world
-            spawnNpcs();
-            auto s2 = std::chrono::high_resolution_clock::now();
-            spawnTime += std::chrono::duration<float, std::milli>(s2 - s1).count();
-
             auto cq1 = std::chrono::high_resolution_clock::now();
             // Process deferred online creature spawns (throttled)
             processCreatureSpawnQueue();
@@ -432,9 +426,6 @@ void Application::update(float deltaTime) {
             mountTime += std::chrono::duration<float, std::milli>(m2 - m1).count();
 
             auto nm1 = std::chrono::high_resolution_clock::now();
-            if (npcManager && renderer && renderer->getCharacterRenderer()) {
-                npcManager->update(deltaTime, renderer->getCharacterRenderer());
-            }
             auto nm2 = std::chrono::high_resolution_clock::now();
             npcMgrTime += std::chrono::duration<float, std::milli>(nm2 - nm1).count();
 
@@ -493,6 +484,8 @@ void Application::update(float deltaTime) {
 
             // Sync character render position ↔ canonical WoW coords each frame
             if (renderer && gameHandler) {
+                bool onTransport = gameHandler->isOnTransport();
+
                 if (onTaxi) {
                     auto playerEntity = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
                     if (playerEntity) {
@@ -502,6 +495,18 @@ void Application::update(float deltaTime) {
                         // Lock yaw to server/taxi orientation so mouse cannot steer during taxi.
                         float yawDeg = glm::degrees(playerEntity->getOrientation()) + 90.0f;
                         renderer->setCharacterYaw(yawDeg);
+                    }
+                } else if (onTransport) {
+                    // Transport mode: compose world position from transport transform + local offset
+                    glm::vec3 canonical = gameHandler->getComposedWorldPosition();
+                    glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
+                    renderer->getCharacterPosition() = renderPos;
+                    // Update camera follow target
+                    if (renderer->getCameraController()) {
+                        glm::vec3* followTarget = renderer->getCameraController()->getFollowTargetMutable();
+                        if (followTarget) {
+                            *followTarget = renderPos;
+                        }
                     }
                 } else {
                     glm::vec3 renderPos = renderer->getCharacterPosition();
@@ -1487,93 +1492,6 @@ void Application::loadEquippedWeapons() {
     }
 }
 
-void Application::spawnNpcs() {
-    if (npcsSpawned) return;
-    LOG_INFO("spawnNpcs: checking preconditions...");
-    if (!assetManager || !assetManager->isInitialized()) {
-        LOG_INFO("spawnNpcs: assetManager not ready");
-        return;
-    }
-    if (!renderer || !renderer->getCharacterRenderer() || !renderer->getCamera()) {
-        LOG_INFO("spawnNpcs: renderer not ready");
-        return;
-    }
-    if (!gameHandler) {
-        LOG_INFO("spawnNpcs: gameHandler not ready");
-        return;
-    }
-
-    LOG_INFO("spawnNpcs: spawning NPCs...");
-    if (npcManager) {
-        npcManager->clear(renderer->getCharacterRenderer(), &gameHandler->getEntityManager());
-    }
-    npcManager = std::make_unique<game::NpcManager>();
-    glm::vec3 playerSpawnGL = renderer->getCharacterPosition();
-    glm::vec3 playerCanonical = core::coords::renderToCanonical(playerSpawnGL);
-    LOG_INFO("spawnNpcs: player position GL=(", playerSpawnGL.x, ",", playerSpawnGL.y, ",", playerSpawnGL.z,
-             ") canonical=(", playerCanonical.x, ",", playerCanonical.y, ",", playerCanonical.z, ")");
-    std::string mapName = "Azeroth";
-    if (auto* minimap = renderer->getMinimap()) {
-        mapName = minimap->getMapName();
-    }
-
-    npcManager->initialize(assetManager.get(),
-                           renderer->getCharacterRenderer(),
-                           gameHandler->getEntityManager(),
-                           mapName,
-                           playerCanonical,
-                           renderer->getTerrainManager());
-
-    // If the player WoW position hasn't been set by the server yet (offline mode),
-    // derive it from the camera so targeting distance calculations work.
-    const auto& movement = gameHandler->getMovementInfo();
-    if (movement.x == 0.0f && movement.y == 0.0f && movement.z == 0.0f) {
-        glm::vec3 canonical = playerCanonical;
-        gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
-    }
-
-    // Set NPC animation callbacks (works for both single-player and online creatures)
-    if (gameHandler && npcManager) {
-        auto* npcMgr = npcManager.get();
-        auto* cr = renderer->getCharacterRenderer();
-        auto* app = this;
-        gameHandler->setNpcDeathCallback([npcMgr, cr, app](uint64_t guid) {
-            uint32_t instanceId = npcMgr->findRenderInstanceId(guid);
-            if (instanceId == 0) {
-                auto it = app->creatureInstances_.find(guid);
-                if (it != app->creatureInstances_.end()) instanceId = it->second;
-            }
-            if (instanceId != 0 && cr) {
-                cr->playAnimation(instanceId, 1, false); // animation ID 1 = Death
-            }
-        });
-        gameHandler->setNpcRespawnCallback([npcMgr, cr, app](uint64_t guid) {
-            uint32_t instanceId = npcMgr->findRenderInstanceId(guid);
-            if (instanceId == 0) {
-                auto it = app->creatureInstances_.find(guid);
-                if (it != app->creatureInstances_.end()) instanceId = it->second;
-            }
-            if (instanceId != 0 && cr) {
-                cr->playAnimation(instanceId, 0, true); // animation ID 0 = Idle
-            }
-        });
-        gameHandler->setNpcSwingCallback([npcMgr, cr, app](uint64_t guid) {
-            uint32_t instanceId = npcMgr->findRenderInstanceId(guid);
-            if (instanceId == 0) {
-                auto it = app->creatureInstances_.find(guid);
-                if (it != app->creatureInstances_.end()) instanceId = it->second;
-            }
-            if (instanceId != 0 && cr) {
-                cr->playAnimation(instanceId, 16, false); // animation ID 16 = Attack1
-            }
-        });
-    }
-
-    npcsSpawned = true;
-    LOG_INFO("NPCs spawned for in-game session");
-}
-
-
 void Application::buildFactionHostilityMap(uint8_t playerRace) {
     if (!assetManager || !assetManager->isInitialized() || !gameHandler) return;
 
@@ -1901,6 +1819,36 @@ void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         loadingScreen.shutdown();
     }
 
+    // Set up test transport (development feature)
+    setupTestTransport();
+
+    // Set up NPC animation callbacks (for online creatures)
+    if (gameHandler && renderer && renderer->getCharacterRenderer()) {
+        auto* cr = renderer->getCharacterRenderer();
+        auto* app = this;
+
+        gameHandler->setNpcDeathCallback([cr, app](uint64_t guid) {
+            auto it = app->creatureInstances_.find(guid);
+            if (it != app->creatureInstances_.end() && cr) {
+                cr->playAnimation(it->second, 1, false); // animation ID 1 = Death
+            }
+        });
+
+        gameHandler->setNpcRespawnCallback([cr, app](uint64_t guid) {
+            auto it = app->creatureInstances_.find(guid);
+            if (it != app->creatureInstances_.end() && cr) {
+                cr->playAnimation(it->second, 0, true); // animation ID 0 = Idle
+            }
+        });
+
+        gameHandler->setNpcSwingCallback([cr, app](uint64_t guid) {
+            auto it = app->creatureInstances_.find(guid);
+            if (it != app->creatureInstances_.end() && cr) {
+                cr->playAnimation(it->second, 16, false); // animation ID 16 = Attack1
+            }
+        });
+    }
+
     // Set game state
     setState(AppState::IN_GAME);
 }
@@ -2167,9 +2115,6 @@ bool Application::getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, fl
         auto it = creatureInstances_.find(guid);
         if (it != creatureInstances_.end()) instanceId = it->second;
     }
-    if (instanceId == 0 && npcManager) {
-        instanceId = npcManager->findRenderInstanceId(guid);
-    }
     if (instanceId == 0) return false;
 
     return renderer->getCharacterRenderer()->getInstanceBounds(instanceId, outCenter, outRadius);
@@ -2379,6 +2324,25 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
 
     // Convert canonical → render coordinates
     glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
+
+    // Smart filtering for bad spawn data:
+    // - If over ocean AND at continental height (Z > 50): bad data, skip
+    // - If over ocean AND near sea level (Z <= 50): water creature, allow
+    // - If over land: snap to terrain height
+    if (renderer->getTerrainManager()) {
+        auto terrainH = renderer->getTerrainManager()->getHeightAt(renderPos.x, renderPos.y);
+        if (!terrainH) {
+            // No terrain at this X,Y position (ocean/void)
+            if (z > 50.0f) {
+                // High altitude over ocean = bad spawn data (e.g., bears at Z=94 over water)
+                return;
+            }
+            // Low altitude = probably legitimate water creature, allow spawn at original Z
+        } else {
+            // Valid terrain found - snap to terrain height
+            renderPos.z = *terrainH + 0.1f;
+        }
+    }
 
     // Convert canonical WoW orientation (0=north) -> render yaw (0=west)
     float renderYaw = orientation + glm::radians(90.0f);
@@ -3145,6 +3109,131 @@ void Application::updateQuestMarkers() {
         LOG_INFO("Quest markers: Added ", markersAdded, " markers on first run");
         firstRun = false;
     }
+}
+
+void Application::setupTestTransport() {
+    if (!gameHandler || !renderer || !assetManager) return;
+
+    auto* transportManager = gameHandler->getTransportManager();
+    auto* wmoRenderer = renderer->getWMORenderer();
+    if (!transportManager || !wmoRenderer) return;
+
+    LOG_INFO("========================================");
+    LOG_INFO("   SETTING UP TEST TRANSPORT");
+    LOG_INFO("========================================");
+
+    // Connect transport manager to WMO renderer
+    transportManager->setWMORenderer(wmoRenderer);
+
+    // Define a simple circular path around Stormwind harbor (canonical coordinates)
+    // These coordinates are approximate - adjust based on actual harbor layout
+    std::vector<glm::vec3> harborPath = {
+        {-8833.0f, 628.0f, 94.0f},   // Start point (Stormwind harbor)
+        {-8900.0f, 650.0f, 94.0f},   // Move west
+        {-8950.0f, 700.0f, 94.0f},   // Northwest
+        {-8950.0f, 780.0f, 94.0f},   // North
+        {-8900.0f, 830.0f, 94.0f},   // Northeast
+        {-8833.0f, 850.0f, 94.0f},   // East
+        {-8766.0f, 830.0f, 94.0f},   // Southeast
+        {-8716.0f, 780.0f, 94.0f},   // South
+        {-8716.0f, 700.0f, 94.0f},   // Southwest
+        {-8766.0f, 650.0f, 94.0f},   // Back to start direction
+    };
+
+    // Register the path with transport manager
+    uint32_t pathId = 1;
+    float speed = 12.0f;  // 12 units/sec (slower than taxi for a leisurely boat ride)
+    transportManager->loadPathFromNodes(pathId, harborPath, true, speed);
+    LOG_INFO("Registered transport path ", pathId, " with ", harborPath.size(), " waypoints, speed=", speed);
+
+    // Try to load a transport WMO model
+    // Common transport WMOs: Transportship.wmo (generic ship)
+    std::string transportWmoPath = "Transports\\Transportship\\Transportship.wmo";
+
+    auto wmoData = assetManager->readFile(transportWmoPath);
+    if (wmoData.empty()) {
+        LOG_WARNING("Could not load transport WMO: ", transportWmoPath);
+        LOG_INFO("Trying alternative: Boat transport");
+        transportWmoPath = "Transports\\Boat\\Boat.wmo";
+        wmoData = assetManager->readFile(transportWmoPath);
+    }
+
+    if (wmoData.empty()) {
+        LOG_WARNING("No transport WMO found - test transport disabled");
+        LOG_INFO("Available transport WMOs are typically in Transports\\ directory");
+        return;
+    }
+
+    // Load WMO model
+    pipeline::WMOModel wmoModel = pipeline::WMOLoader::load(wmoData);
+    LOG_INFO("Transport WMO root loaded: ", transportWmoPath, " nGroups=", wmoModel.nGroups);
+
+    // Load WMO groups
+    int loadedGroups = 0;
+    if (wmoModel.nGroups > 0) {
+        std::string basePath = transportWmoPath.substr(0, transportWmoPath.size() - 4);
+
+        for (uint32_t gi = 0; gi < wmoModel.nGroups; gi++) {
+            char groupSuffix[16];
+            snprintf(groupSuffix, sizeof(groupSuffix), "_%03u.wmo", gi);
+            std::string groupPath = basePath + groupSuffix;
+            std::vector<uint8_t> groupData = assetManager->readFile(groupPath);
+
+            if (!groupData.empty()) {
+                pipeline::WMOLoader::loadGroup(groupData, wmoModel, gi);
+                loadedGroups++;
+            } else {
+                LOG_WARNING("  Failed to load WMO group ", gi, " for: ", basePath);
+            }
+        }
+    }
+
+    if (loadedGroups == 0 && wmoModel.nGroups > 0) {
+        LOG_WARNING("Failed to load any WMO groups for transport");
+        return;
+    }
+
+    // Load WMO into renderer
+    uint32_t wmoModelId = 99999;  // Use high ID to avoid conflicts
+    if (!wmoRenderer->loadModel(wmoModel, wmoModelId)) {
+        LOG_WARNING("Failed to load transport WMO model into renderer");
+        return;
+    }
+
+    // Create WMO instance at first waypoint (convert canonical to render coords)
+    glm::vec3 startCanonical = harborPath[0];
+    glm::vec3 startRender = core::coords::canonicalToRender(startCanonical);
+
+    uint32_t wmoInstanceId = wmoRenderer->createInstance(wmoModelId, startRender,
+                                                          glm::vec3(0.0f, 0.0f, 0.0f), 1.0f);
+
+    if (wmoInstanceId == 0) {
+        LOG_WARNING("Failed to create transport WMO instance");
+        return;
+    }
+
+    // Register transport with transport manager
+    uint64_t transportGuid = 0x1000000000000001ULL;  // Fake GUID for test
+    transportManager->registerTransport(transportGuid, wmoInstanceId, pathId);
+
+    // Optional: Set deck bounds (rough estimate for a ship deck)
+    transportManager->setDeckBounds(transportGuid,
+                                    glm::vec3(-15.0f, -30.0f, 0.0f),
+                                    glm::vec3(15.0f, 30.0f, 10.0f));
+
+    LOG_INFO("========================================");
+    LOG_INFO("Test transport registered:");
+    LOG_INFO("  GUID: 0x", std::hex, transportGuid, std::dec);
+    LOG_INFO("  WMO Instance: ", wmoInstanceId);
+    LOG_INFO("  Path: ", pathId, " (", harborPath.size(), " waypoints)");
+    LOG_INFO("  Speed: ", speed, " units/sec");
+    LOG_INFO("========================================");
+    LOG_INFO("");
+    LOG_INFO("To board the transport, use console command:");
+    LOG_INFO("  /transport board");
+    LOG_INFO("To disembark:");
+    LOG_INFO("  /transport leave");
+    LOG_INFO("========================================");
 }
 
 } // namespace core

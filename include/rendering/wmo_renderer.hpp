@@ -83,6 +83,13 @@ public:
     void setInstancePosition(uint32_t instanceId, const glm::vec3& position);
 
     /**
+     * Update the full transform of an existing instance (for moving transports)
+     * @param instanceId Instance to update
+     * @param transform World transform matrix
+     */
+    void setInstanceTransform(uint32_t instanceId, const glm::mat4& transform);
+
+    /**
      * Remove WMO instance
      * @param instanceId Instance to remove
      */

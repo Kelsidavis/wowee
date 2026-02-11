@@ -88,6 +88,7 @@ set(WOWEE_SOURCES
 
     # Game
     src/game/game_handler.cpp
+    src/game/transport_manager.cpp
     src/game/world.cpp
     src/game/player.cpp
     src/game/entity.cpp
@@ -95,7 +96,6 @@ set(WOWEE_SOURCES
     src/game/world_packets.cpp
     src/game/character.cpp
     src/game/zone_manager.cpp
-    src/game/npc_manager.cpp
     src/game/inventory.cpp
 
     # Audio
@@ -199,7 +199,6 @@ set(WOWEE_HEADERS
     include/game/entity.hpp
     include/game/opcodes.hpp
     include/game/zone_manager.hpp
-    include/game/npc_manager.hpp
     include/game/inventory.hpp
     include/game/spell_defines.hpp
     include/game/group_defines.hpp

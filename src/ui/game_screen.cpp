@@ -1758,6 +1758,51 @@ void GameScreen::sendChatMessage(game::GameHandler& gameHandler) {
                 return;
             }
 
+            // /transport board — board test transport
+            if (cmdLower == "transport board") {
+                auto* tm = gameHandler.getTransportManager();
+                if (tm) {
+                    // Test transport GUID
+                    uint64_t testTransportGuid = 0x1000000000000001ULL;
+                    // Place player at center of deck (rough estimate)
+                    glm::vec3 deckCenter(0.0f, 0.0f, 5.0f);
+                    gameHandler.setPlayerOnTransport(testTransportGuid, deckCenter);
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::SYSTEM;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = "Boarded test transport. Use '/transport leave' to disembark.";
+                    gameHandler.addLocalChatMessage(msg);
+                } else {
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::SYSTEM;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = "Transport system not available.";
+                    gameHandler.addLocalChatMessage(msg);
+                }
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
+            // /transport leave — disembark from transport
+            if (cmdLower == "transport leave") {
+                if (gameHandler.isOnTransport()) {
+                    gameHandler.clearPlayerTransport();
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::SYSTEM;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = "Disembarked from transport.";
+                    gameHandler.addLocalChatMessage(msg);
+                } else {
+                    game::MessageChatData msg;
+                    msg.type = game::ChatType::SYSTEM;
+                    msg.language = game::ChatLanguage::UNIVERSAL;
+                    msg.message = "You are not on a transport.";
+                    gameHandler.addLocalChatMessage(msg);
+                }
+                chatInputBuffer[0] = '\0';
+                return;
+            }
+
             // Chat channel slash commands
             // If used without a message (e.g. just "/s"), switch the chat type dropdown
             bool isChannelCommand = false;
