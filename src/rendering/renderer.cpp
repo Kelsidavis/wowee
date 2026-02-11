@@ -715,12 +715,15 @@ void Renderer::setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float h
 
     // Discover idle fidget animations (head turn, tail swish, weight shift)
     mountAnims_.fidgets.clear();
+    core::Logger::getInstance().info("Scanning for fidget animations in ", sequences.size(), " sequences");
     for (const auto& seq : sequences) {
         bool isLoop = (seq.flags & 0x01) == 0;
-        if (!isLoop && seq.duration >= 500 && seq.duration <= 1500 &&
-            std::abs(seq.movingSpeed) < 0.1f && seq.id >= 1 && seq.id <= 10) {
-            // Likely a fidget: non-looping, short, stationary, low ID near stand
+        // Relaxed criteria: non-looping, 500-3000ms, stationary, ID 1-20
+        if (!isLoop && seq.duration >= 500 && seq.duration <= 3000 &&
+            std::abs(seq.movingSpeed) < 0.1f && seq.id >= 1 && seq.id <= 20) {
+            // Likely a fidget: non-looping, short, stationary, low ID
             mountAnims_.fidgets.push_back(seq.id);
+            core::Logger::getInstance().info("  Found fidget: id=", seq.id, " duration=", seq.duration, "ms");
         }
     }
 
@@ -1041,8 +1044,21 @@ void Renderer::updateCharacterAnimation() {
                 }
             }
 
+            // Check if active fidget has completed
+            if (mountActiveFidget_ != 0) {
+                uint32_t curAnim = 0;
+                float curTime = 0.0f, curDur = 0.0f;
+                if (characterRenderer->getAnimationState(mountInstanceId_, curAnim, curTime, curDur)) {
+                    // If animation changed or completed, clear active fidget
+                    if (curAnim != mountActiveFidget_ || curTime >= curDur * 0.95f) {
+                        mountActiveFidget_ = 0;
+                        LOG_INFO("Mount fidget completed");
+                    }
+                }
+            }
+
             // Idle fidgets: random one-shot animations when standing still
-            if (!moving && mountAction_ == MountAction::None && !mountAnims_.fidgets.empty()) {
+            if (!moving && mountAction_ == MountAction::None && mountActiveFidget_ == 0 && !mountAnims_.fidgets.empty()) {
                 mountIdleFidgetTimer_ += lastDeltaTime_;
                 static float nextFidgetTime = 6.0f + (rand() % 7);  // 6-12 seconds
 
@@ -1053,6 +1069,7 @@ void Renderer::updateCharacterAnimation() {
                     uint32_t fidgetAnim = mountAnims_.fidgets[dist(rng)];
 
                     characterRenderer->playAnimation(mountInstanceId_, fidgetAnim, false);
+                    mountActiveFidget_ = fidgetAnim;  // Track active fidget
                     mountIdleFidgetTimer_ = 0.0f;
                     nextFidgetTime = 6.0f + (rand() % 7);  // Randomize next fidget time
 
@@ -1060,6 +1077,7 @@ void Renderer::updateCharacterAnimation() {
                 }
             } else if (moving) {
                 mountIdleFidgetTimer_ = 0.0f;  // Reset timer when moving
+                mountActiveFidget_ = 0;  // Cancel any active fidget
             }
 
             // Idle ambient sounds: random snorts/stomps/breaths when standing still
@@ -1076,8 +1094,8 @@ void Renderer::updateCharacterAnimation() {
                 mountIdleSoundTimer_ = 0.0f;  // Reset timer when moving
             }
 
-            // Only update animation if it changed and we're not in an action sequence
-            if (mountAction_ == MountAction::None && (!haveMountState || curMountAnim != mountAnimId)) {
+            // Only update animation if it changed and we're not in an action sequence or playing a fidget
+            if (mountAction_ == MountAction::None && mountActiveFidget_ == 0 && (!haveMountState || curMountAnim != mountAnimId)) {
                 bool loop = true;  // Normal movement animations loop
                 characterRenderer->playAnimation(mountInstanceId_, mountAnimId, loop);
             }

@@ -330,6 +330,7 @@ private:
     MountAnimSet mountAnims_;  // Cached animation IDs for current mount
     float mountIdleFidgetTimer_ = 0.0f;  // Timer for random idle fidgets
     float mountIdleSoundTimer_ = 0.0f;   // Timer for ambient idle sounds
+    uint32_t mountActiveFidget_ = 0;     // Currently playing fidget animation ID (0 = none)
     bool taxiFlight_ = false;
 
     bool terrainEnabled = true;
