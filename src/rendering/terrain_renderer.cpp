@@ -405,8 +405,20 @@ void TerrainRenderer::render(const Camera& camera) {
     GLuint lastBound[7] = {0, 0, 0, 0, 0, 0, 0};
     int lastLayerConfig = -1; // track hasLayer1|hasLayer2|hasLayer3 bitmask
 
+    // Distance culling: maximum render distance for terrain
+    const float maxTerrainDistSq = 1200.0f * 1200.0f;  // 1200 units (reverted from 800 - mountains popping)
+
     for (const auto& chunk : chunks) {
         if (!chunk.isValid()) {
+            continue;
+        }
+
+        // Early distance culling (before expensive frustum check)
+        float dx = chunk.boundingSphereCenter.x - camPos.x;
+        float dy = chunk.boundingSphereCenter.y - camPos.y;
+        float distSq = dx * dx + dy * dy;
+        if (distSq > maxTerrainDistSq) {
+            culledChunks++;
             continue;
         }
 

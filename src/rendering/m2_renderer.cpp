@@ -779,6 +779,10 @@ void M2ModelGPU::CollisionMesh::getWallTrisInRange(
     out.erase(std::unique(out.begin(), out.end()), out.end());
 }
 
+bool M2Renderer::hasModel(uint32_t modelId) const {
+    return models.find(modelId) != models.end();
+}
+
 bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     if (models.find(modelId) != models.end()) {
         // Already loaded
@@ -1541,16 +1545,20 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         }
 
         // Frustum + distance cull: skip expensive bone computation for off-screen instances
+        // Aggressive culling for performance (double frame rate target)
         float worldRadius = model.boundRadius * instance.scale;
         float cullRadius = worldRadius;
         glm::vec3 toCam = instance.position - cachedCamPos_;
         float distSq = glm::dot(toCam, toCam);
         float effectiveMaxDistSq = cachedMaxRenderDistSq_ * std::max(1.0f, cullRadius / 12.0f);
         if (!model.disableAnimation) {
+            // Ultra-aggressive animation culling for 60fps target
             if (worldRadius < 0.8f) {
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 95.0f * 95.0f);
+                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 25.0f * 25.0f);  // Ultra tight for small
             } else if (worldRadius < 1.5f) {
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 140.0f * 140.0f);
+                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 50.0f * 50.0f);  // Very tight for medium
+            } else if (worldRadius < 3.0f) {
+                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 80.0f * 80.0f);  // Tight for large
             }
         }
         if (distSq > effectiveMaxDistSq) continue;
@@ -1562,7 +1570,7 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
     // Phase 2: Compute bone matrices (expensive, parallel if enough work)
     const size_t animCount = boneWorkIndices_.size();
     if (animCount > 0) {
-        if (animCount < 32 || numAnimThreads_ <= 1) {
+        if (animCount < 6 || numAnimThreads_ <= 1) {
             // Sequential — not enough work to justify thread overhead
             for (size_t i : boneWorkIndices_) {
                 if (i >= instances.size()) continue;
@@ -1672,9 +1680,8 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
 
     lastDrawCallCount = 0;
 
-    // Adaptive render distance: balanced for smooth pop-in/out
-    // Increased distances to prevent premature culling in cities
-    const float maxRenderDistance = onTaxi_ ? 1200.0f : (instances.size() > 2000) ? 1200.0f : 3500.0f;
+    // Adaptive render distance: balanced for performance without excessive pop-in
+    const float maxRenderDistance = onTaxi_ ? 700.0f : (instances.size() > 2000) ? 350.0f : 1000.0f;
     const float maxRenderDistanceSq = maxRenderDistance * maxRenderDistance;
     const float fadeStartFraction = 0.75f;
     const glm::vec3 camPos = camera.getPosition();
@@ -1682,19 +1689,27 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
     // Build sorted visible instance list: cull then sort by modelId to batch VAO binds
     // Reuse persistent vector to avoid allocation
     sortedVisible_.clear();
-    if (sortedVisible_.capacity() < instances.size() / 2) {
-        sortedVisible_.reserve(instances.size() / 2);
+    // Reserve based on expected visible count (roughly 30% of total instances in dense areas)
+    const size_t expectedVisible = std::min(instances.size() / 3, size_t(600));
+    if (sortedVisible_.capacity() < expectedVisible) {
+        sortedVisible_.reserve(expectedVisible);
     }
+
+    // Early distance rejection: max possible render distance (tight but safe upper bound)
+    const float maxPossibleDistSq = maxRenderDistance * maxRenderDistance * 4.0f;  // 2x safety margin (reduced from 4x)
 
     for (uint32_t i = 0; i < static_cast<uint32_t>(instances.size()); ++i) {
         const auto& instance = instances[i];
+
+        // Fast early rejection: skip instances that are definitely too far
+        glm::vec3 toCam = instance.position - camPos;
+        float distSq = glm::dot(toCam, toCam);
+        if (distSq > maxPossibleDistSq) continue;  // Early out before model lookup
+
         auto it = models.find(instance.modelId);
         if (it == models.end()) continue;
         const M2ModelGPU& model = it->second;
         if (!model.isValid() || model.isSmoke || model.isInvisibleTrap) continue;
-
-        glm::vec3 toCam = instance.position - camPos;
-        float distSq = glm::dot(toCam, toCam);
         float worldRadius = model.boundRadius * instance.scale;
         float cullRadius = worldRadius;
         if (model.disableAnimation) {
@@ -1708,17 +1723,17 @@ void M2Renderer::render(const Camera& camera, const glm::mat4& view, const glm::
         // Small props (barrels, lanterns, etc.) now use same distance as larger objects
         if (distSq > effectiveMaxDistSq) continue;
 
-        // Frustum cull with very generous padding to prevent edge pop-out during camera rotation
-        // Add 150% radius padding (+ minimum 5 units) so objects remain visible at viewport edges
-        float paddedRadius = std::max(cullRadius * 2.5f, cullRadius + 5.0f);
+        // Frustum cull with moderate padding to prevent edge pop-out during camera rotation
+        // Reduced from 2.5x to 1.5x for better performance
+        float paddedRadius = std::max(cullRadius * 1.5f, cullRadius + 3.0f);
         if (cullRadius > 0.0f && !frustum.intersectsSphere(instance.position, paddedRadius)) continue;
 
         sortedVisible_.push_back({i, instance.modelId, distSq, effectiveMaxDistSq});
     }
 
-    // Sort by modelId to minimize VAO rebinds
-    std::sort(sortedVisible_.begin(), sortedVisible_.end(),
-              [](const VisibleEntry& a, const VisibleEntry& b) { return a.modelId < b.modelId; });
+    // Sort by modelId to minimize VAO rebinds (using stable_sort for better cache behavior)
+    std::stable_sort(sortedVisible_.begin(), sortedVisible_.end(),
+                     [](const VisibleEntry& a, const VisibleEntry& b) { return a.modelId < b.modelId; });
 
     auto cullingSortTime = std::chrono::high_resolution_clock::now();
     double cullingSortMs = std::chrono::duration<double, std::milli>(cullingSortTime - renderStartTime).count();

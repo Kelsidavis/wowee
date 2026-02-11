@@ -151,6 +151,9 @@ struct M2Instance {
     std::vector<float> emitterAccumulators;  // fractional particle counter per emitter
     std::vector<M2Particle> particles;
 
+    // Frame-skip optimization (update distant animations less frequently)
+    uint8_t frameSkipCounter = 0;
+
     void updateModelMatrix();
 };
 
@@ -179,6 +182,13 @@ public:
 
     bool initialize(pipeline::AssetManager* assets);
     void shutdown();
+
+    /**
+     * Check if a model is already loaded
+     * @param modelId ID to check
+     * @return True if model is loaded
+     */
+    bool hasModel(uint32_t modelId) const;
 
     /**
      * Load an M2 model to GPU
