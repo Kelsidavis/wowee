@@ -28,6 +28,10 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <future>
+#include <functional>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace wowee {
 namespace rendering {
@@ -899,18 +903,21 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
             instance.currentSequenceIndex = 0;
             instance.currentAnimationId = model.sequences[0].id;
         }
-        core::Logger::getInstance().warning("Animation ", animationId, " not found, using default");
-        // Dump available animation IDs for debugging
-        std::string ids;
-        for (size_t i = 0; i < model.sequences.size(); i++) {
-            if (!ids.empty()) ids += ", ";
-            ids += std::to_string(model.sequences[i].id);
+
+        // Only log missing animation once per model (reduce spam)
+        static std::unordered_map<uint32_t, std::unordered_set<uint32_t>> loggedMissingAnims;
+        uint32_t modelId = instance.modelId;  // Use modelId as identifier
+        if (loggedMissingAnims[modelId].insert(animationId).second) {
+            // First time seeing this missing animation for this model
+            LOG_WARNING("Animation ", animationId, " not found in model ", modelId, ", using default");
         }
-        core::Logger::getInstance().info("Available animation IDs (", model.sequences.size(), "): ", ids);
     }
 }
 
-void CharacterRenderer::update(float deltaTime) {
+void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
+    // Distance culling for animation updates (150 unit radius)
+    const float animUpdateRadiusSq = 150.0f * 150.0f;
+
     // Update fade-in opacity
     for (auto& [id, inst] : instances) {
         if (inst.fadeInDuration > 0.0f && inst.opacity < 1.0f) {
@@ -940,8 +947,47 @@ void CharacterRenderer::update(float deltaTime) {
         }
     }
 
+    // Only update animations for nearby characters (performance optimization)
+    // Collect instances that need updates
+    std::vector<std::reference_wrapper<CharacterInstance>> toUpdate;
+    toUpdate.reserve(instances.size());
+
     for (auto& pair : instances) {
-        updateAnimation(pair.second, deltaTime);
+        float distSq = glm::distance2(pair.second.position, cameraPos);
+        if (distSq < animUpdateRadiusSq) {
+            toUpdate.push_back(std::ref(pair.second));
+        }
+    }
+
+    int updatedCount = toUpdate.size();
+
+    // Thread bone calculations if we have many characters (4+)
+    if (updatedCount >= 4) {
+        std::vector<std::future<void>> futures;
+        futures.reserve(updatedCount);
+
+        for (auto& instRef : toUpdate) {
+            futures.push_back(std::async(std::launch::async, [this, &instRef, deltaTime]() {
+                updateAnimation(instRef.get(), deltaTime);
+            }));
+        }
+
+        // Wait for all to complete
+        for (auto& f : futures) {
+            f.get();
+        }
+    } else {
+        // Sequential for small counts (avoid thread overhead)
+        for (auto& instRef : toUpdate) {
+            updateAnimation(instRef.get(), deltaTime);
+        }
+    }
+
+    static int logCounter = 0;
+    if (++logCounter >= 300) {  // Log every 10 seconds at 30fps
+        LOG_INFO("CharacterRenderer: ", updatedCount, "/", instances.size(), " instances updated (",
+                 instances.size() - updatedCount, " culled)");
+        logCounter = 0;
     }
 
     // Update weapon attachment transforms (after all bone matrices are computed)
@@ -1727,6 +1773,88 @@ void CharacterRenderer::detachWeapon(uint32_t charInstanceId, uint32_t attachmen
             return;
         }
     }
+}
+
+bool CharacterRenderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform) {
+    auto instIt = instances.find(instanceId);
+    if (instIt == instances.end()) return false;
+    const auto& instance = instIt->second;
+
+    auto modelIt = models.find(instance.modelId);
+    if (modelIt == models.end()) return false;
+    const auto& model = modelIt->second.data;
+
+    // Find attachment point
+    uint16_t boneIndex = 0;
+    glm::vec3 offset(0.0f);
+    bool found = false;
+
+    // Try attachment lookup first
+    if (attachmentId < model.attachmentLookup.size()) {
+        uint16_t attIdx = model.attachmentLookup[attachmentId];
+        if (attIdx < model.attachments.size()) {
+            boneIndex = model.attachments[attIdx].bone;
+            offset = model.attachments[attIdx].position;
+            found = true;
+        }
+    }
+
+    // Fallback: scan attachments by id
+    if (!found) {
+        for (const auto& att : model.attachments) {
+            if (att.id == attachmentId) {
+                boneIndex = att.bone;
+                offset = att.position;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found) return false;
+
+    // Get bone matrix
+    glm::mat4 boneMat(1.0f);
+    if (boneIndex < instance.boneMatrices.size()) {
+        boneMat = instance.boneMatrices[boneIndex];
+    }
+
+    // Compute world transform: modelMatrix * boneMatrix * offsetTranslation
+    glm::mat4 modelMat = instance.hasOverrideModelMatrix
+        ? instance.overrideModelMatrix
+        : getModelMatrix(instance);
+
+    outTransform = modelMat * boneMat * glm::translate(glm::mat4(1.0f), offset);
+    return true;
+}
+
+void CharacterRenderer::dumpAnimations(uint32_t instanceId) const {
+    auto instIt = instances.find(instanceId);
+    if (instIt == instances.end()) {
+        core::Logger::getInstance().info("dumpAnimations: instance ", instanceId, " not found");
+        return;
+    }
+    const auto& instance = instIt->second;
+
+    auto modelIt = models.find(instance.modelId);
+    if (modelIt == models.end()) {
+        core::Logger::getInstance().info("dumpAnimations: model not found for instance ", instanceId);
+        return;
+    }
+    const auto& model = modelIt->second.data;
+
+    core::Logger::getInstance().info("=== Animation dump for ", model.name, " ===");
+    core::Logger::getInstance().info("Total animations: ", model.sequences.size());
+
+    for (size_t i = 0; i < model.sequences.size(); i++) {
+        const auto& seq = model.sequences[i];
+        core::Logger::getInstance().info("  [", i, "] animId=", seq.id,
+            " variation=", seq.variationIndex,
+            " duration=", seq.duration, "ms",
+            " speed=", seq.movingSpeed,
+            " flags=0x", std::hex, seq.flags, std::dec);
+    }
+    core::Logger::getInstance().info("=== End animation dump ===");
 }
 
 } // namespace rendering

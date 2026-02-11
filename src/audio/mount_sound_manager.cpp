@@ -116,16 +116,19 @@ void MountSoundManager::loadMountSounds() {
 
 bool MountSoundManager::loadSound(const std::string& path, MountSample& sample) {
     if (!assetManager_ || !assetManager_->fileExists(path)) {
+        LOG_WARNING("Mount sound file not found: ", path);
         return false;
     }
 
     auto data = assetManager_->readFile(path);
     if (data.empty()) {
+        LOG_WARNING("Mount sound file empty: ", path);
         return false;
     }
 
     sample.path = path;
     sample.data = std::move(data);
+    LOG_INFO("Loaded mount sound: ", path);
     return true;
 }
 
@@ -182,6 +185,85 @@ void MountSoundManager::setFlying(bool flying) {
 
 void MountSoundManager::setGrounded(bool grounded) {
     setFlying(!grounded);
+}
+
+void MountSoundManager::playRearUpSound() {
+    if (!mounted_) return;
+
+    // Cooldown to prevent spam (200ms)
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastActionSoundTime_).count();
+    if (elapsed < 200) return;
+    lastActionSoundTime_ = now;
+
+    // Use semantic sound based on mount family
+    if (currentMountType_ == MountType::GROUND && !horseMoveSounds_.empty()) {
+        // Ground mounts: whinny/roar
+        static std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, horseMoveSounds_.size() - 1);
+        const auto& sample = horseMoveSounds_[dist(rng)];
+        if (!sample.data.empty()) {
+            AudioEngine::instance().playSound2D(sample.data, 0.7f * volumeScale_, 1.0f);
+        }
+    } else if (currentMountType_ == MountType::FLYING && !wingIdleSounds_.empty()) {
+        // Flying mounts: screech/roar
+        static std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, wingIdleSounds_.size() - 1);
+        const auto& sample = wingIdleSounds_[dist(rng)];
+        if (!sample.data.empty()) {
+            AudioEngine::instance().playSound2D(sample.data, 0.6f * volumeScale_, 1.1f);
+        }
+    }
+}
+
+void MountSoundManager::playJumpSound() {
+    if (!mounted_) return;
+
+    // Cooldown to prevent spam
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastActionSoundTime_).count();
+    if (elapsed < 200) return;
+    lastActionSoundTime_ = now;
+
+    // Shorter, quieter sound for jump start
+    if (currentMountType_ == MountType::GROUND && !horseBreathSounds_.empty()) {
+        // Ground mounts: grunt/snort
+        static std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, horseBreathSounds_.size() - 1);
+        const auto& sample = horseBreathSounds_[dist(rng)];
+        if (!sample.data.empty()) {
+            AudioEngine::instance().playSound2D(sample.data, 0.5f * volumeScale_, 1.2f);
+        }
+    } else if (currentMountType_ == MountType::FLYING && !wingFlapSounds_.empty()) {
+        // Flying mounts: wing whoosh
+        static std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, wingFlapSounds_.size() - 1);
+        const auto& sample = wingFlapSounds_[dist(rng)];
+        if (!sample.data.empty()) {
+            AudioEngine::instance().playSound2D(sample.data, 0.4f * volumeScale_, 1.0f);
+        }
+    }
+}
+
+void MountSoundManager::playLandSound() {
+    if (!mounted_) return;
+
+    // Cooldown to prevent spam
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastActionSoundTime_).count();
+    if (elapsed < 200) return;
+    lastActionSoundTime_ = now;
+
+    // Landing thud/hoof sound
+    if (currentMountType_ == MountType::GROUND && !horseBreathSounds_.empty()) {
+        // Ground mounts: hoof thud (use breath as placeholder for now)
+        static std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, horseBreathSounds_.size() - 1);
+        const auto& sample = horseBreathSounds_[dist(rng)];
+        if (!sample.data.empty()) {
+            AudioEngine::instance().playSound2D(sample.data, 0.6f * volumeScale_, 0.8f);  // Lower pitch for thud
+        }
+    }
 }
 
 MountType MountSoundManager::detectMountType(uint32_t creatureDisplayId) const {

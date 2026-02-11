@@ -389,25 +389,62 @@ void Application::update(float deltaTime) {
             break;
 
         case AppState::IN_GAME: {
+            // Application update profiling
+            static int appProfileCounter = 0;
+            static float ghTime = 0.0f, worldTime = 0.0f, spawnTime = 0.0f;
+            static float creatureQTime = 0.0f, goQTime = 0.0f, mountTime = 0.0f;
+            static float npcMgrTime = 0.0f, questMarkTime = 0.0f, syncTime = 0.0f;
+
+            auto gh1 = std::chrono::high_resolution_clock::now();
             if (gameHandler) {
                 gameHandler->update(deltaTime);
             }
+            auto gh2 = std::chrono::high_resolution_clock::now();
+            ghTime += std::chrono::duration<float, std::milli>(gh2 - gh1).count();
+
+            auto w1 = std::chrono::high_resolution_clock::now();
             if (world) {
                 world->update(deltaTime);
             }
+            auto w2 = std::chrono::high_resolution_clock::now();
+            worldTime += std::chrono::duration<float, std::milli>(w2 - w1).count();
+
+            auto s1 = std::chrono::high_resolution_clock::now();
             // Spawn NPCs once when entering world
             spawnNpcs();
+            auto s2 = std::chrono::high_resolution_clock::now();
+            spawnTime += std::chrono::duration<float, std::milli>(s2 - s1).count();
 
+            auto cq1 = std::chrono::high_resolution_clock::now();
             // Process deferred online creature spawns (throttled)
             processCreatureSpawnQueue();
+            auto cq2 = std::chrono::high_resolution_clock::now();
+            creatureQTime += std::chrono::duration<float, std::milli>(cq2 - cq1).count();
+
+            auto goq1 = std::chrono::high_resolution_clock::now();
             processGameObjectSpawnQueue();
+            auto goq2 = std::chrono::high_resolution_clock::now();
+            goQTime += std::chrono::duration<float, std::milli>(goq2 - goq1).count();
+
+            auto m1 = std::chrono::high_resolution_clock::now();
             processPendingMount();
+            auto m2 = std::chrono::high_resolution_clock::now();
+            mountTime += std::chrono::duration<float, std::milli>(m2 - m1).count();
+
+            auto nm1 = std::chrono::high_resolution_clock::now();
             if (npcManager && renderer && renderer->getCharacterRenderer()) {
                 npcManager->update(deltaTime, renderer->getCharacterRenderer());
             }
+            auto nm2 = std::chrono::high_resolution_clock::now();
+            npcMgrTime += std::chrono::duration<float, std::milli>(nm2 - nm1).count();
 
+            auto qm1 = std::chrono::high_resolution_clock::now();
             // Update 3D quest markers above NPCs
             updateQuestMarkers();
+            auto qm2 = std::chrono::high_resolution_clock::now();
+            questMarkTime += std::chrono::duration<float, std::milli>(qm2 - qm1).count();
+
+            auto sync1 = std::chrono::high_resolution_clock::now();
 
             // Sync server run speed to camera controller
             if (renderer && gameHandler && renderer->getCameraController()) {
@@ -489,6 +526,22 @@ void Application::update(float deltaTime) {
             } else {
                 movementHeartbeatTimer = 0.0f;
             }
+
+            auto sync2 = std::chrono::high_resolution_clock::now();
+            syncTime += std::chrono::duration<float, std::milli>(sync2 - sync1).count();
+
+            // Log profiling every 60 frames
+            if (++appProfileCounter >= 60) {
+                LOG_INFO("APP UPDATE PROFILE (60 frames): gameHandler=", ghTime / 60.0f,
+                         "ms world=", worldTime / 60.0f, "ms spawn=", spawnTime / 60.0f,
+                         "ms creatureQ=", creatureQTime / 60.0f, "ms goQ=", goQTime / 60.0f,
+                         "ms mount=", mountTime / 60.0f, "ms npcMgr=", npcMgrTime / 60.0f,
+                         "ms questMark=", questMarkTime / 60.0f, "ms sync=", syncTime / 60.0f, "ms");
+                appProfileCounter = 0;
+                ghTime = worldTime = spawnTime = 0.0f;
+                creatureQTime = goQTime = mountTime = 0.0f;
+                npcMgrTime = questMarkTime = syncTime = 0.0f;
+            }
             break;
         }
 
@@ -498,13 +551,29 @@ void Application::update(float deltaTime) {
     }
 
     // Update renderer (camera, etc.) only when in-game
+    static int rendererProfileCounter = 0;
+    static float rendererTime = 0.0f, uiTime = 0.0f;
+
+    auto r1 = std::chrono::high_resolution_clock::now();
     if (renderer && state == AppState::IN_GAME) {
         renderer->update(deltaTime);
     }
+    auto r2 = std::chrono::high_resolution_clock::now();
+    rendererTime += std::chrono::duration<float, std::milli>(r2 - r1).count();
 
     // Update UI
+    auto u1 = std::chrono::high_resolution_clock::now();
     if (uiManager) {
         uiManager->update(deltaTime);
+    }
+    auto u2 = std::chrono::high_resolution_clock::now();
+    uiTime += std::chrono::duration<float, std::milli>(u2 - u1).count();
+
+    if (state == AppState::IN_GAME && ++rendererProfileCounter >= 60) {
+        LOG_INFO("RENDERER/UI PROFILE (60 frames): renderer=", rendererTime / 60.0f,
+                 "ms ui=", uiTime / 60.0f, "ms");
+        rendererProfileCounter = 0;
+        rendererTime = uiTime = 0.0f;
     }
 }
 
@@ -518,9 +587,9 @@ void Application::render() {
     // Only render 3D world when in-game (after server connect or single-player)
     if (state == AppState::IN_GAME) {
         if (world) {
-            renderer->renderWorld(world.get());
+            renderer->renderWorld(world.get(), gameHandler.get());
         } else {
-            renderer->renderWorld(nullptr);
+            renderer->renderWorld(nullptr, gameHandler.get());
         }
     }
 

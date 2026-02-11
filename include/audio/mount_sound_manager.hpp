@@ -40,6 +40,11 @@ public:
     void setFlying(bool flying);
     void setGrounded(bool grounded);
 
+    // Play semantic mount action sounds (triggered on animation state changes)
+    void playRearUpSound();   // Rear-up flourish (whinny/roar)
+    void playJumpSound();     // Jump start (grunt/snort)
+    void playLandSound();     // Landing (thud/hoof)
+
     bool isMounted() const { return mounted_; }
     void setVolumeScale(float scale) { volumeScale_ = scale; }
     float getVolumeScale() const { return volumeScale_; }
@@ -69,6 +74,7 @@ private:
     bool playingMovementSound_ = false;
     bool playingIdleSound_ = false;
     std::chrono::steady_clock::time_point lastSoundUpdate_;
+    std::chrono::steady_clock::time_point lastActionSoundTime_;  // Cooldown for action sounds
     float soundLoopTimer_ = 0.0f;
 };
 

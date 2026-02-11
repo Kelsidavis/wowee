@@ -7,7 +7,7 @@
 
 namespace wowee {
 namespace core { class Window; }
-namespace game { class World; class ZoneManager; }
+namespace game { class World; class ZoneManager; class GameHandler; }
 namespace audio { class MusicManager; class FootstepManager; class ActivitySoundManager; class MountSoundManager; class NpcVoiceManager; class AmbientSoundManager; class UiSoundManager; class CombatSoundManager; class SpellSoundManager; class MovementSoundManager; enum class FootstepSurface : uint8_t; enum class VoiceType; }
 namespace pipeline { class AssetManager; }
 
@@ -27,6 +27,7 @@ class Clouds;
 class LensFlare;
 class Weather;
 class LightingManager;
+class SkySystem;
 class SwimEffects;
 class MountDust;
 class CharacterRenderer;
@@ -47,7 +48,7 @@ public:
     void beginFrame();
     void endFrame();
 
-    void renderWorld(game::World* world);
+    void renderWorld(game::World* world, game::GameHandler* gameHandler = nullptr);
 
     /**
      * Update renderer (camera, etc.)
@@ -108,6 +109,7 @@ public:
     M2Renderer* getM2Renderer() const { return m2Renderer.get(); }
     Minimap* getMinimap() const { return minimap.get(); }
     QuestMarkerRenderer* getQuestMarkerRenderer() const { return questMarkerRenderer.get(); }
+    SkySystem* getSkySystem() const { return skySystem.get(); }
     const std::string& getCurrentZoneName() const { return currentZoneName; }
 
     // Third-person character follow
@@ -176,6 +178,7 @@ private:
     std::unique_ptr<LensFlare> lensFlare;
     std::unique_ptr<Weather> weather;
     std::unique_ptr<LightingManager> lightingManager;
+    std::unique_ptr<SkySystem> skySystem;  // Coordinator for sky rendering
     std::unique_ptr<SwimEffects> swimEffects;
     std::unique_ptr<MountDust> mountDust;
     std::unique_ptr<CharacterRenderer> characterRenderer;
@@ -302,10 +305,27 @@ private:
     uint32_t equippedWeaponInvType_ = 0;
 
     // Mount state
+    // Mount animation capabilities (discovered at mount time, varies per model)
+    struct MountAnimSet {
+        uint32_t jumpStart = 0;  // Jump start animation
+        uint32_t jumpLoop = 0;   // Jump airborne loop
+        uint32_t jumpEnd = 0;    // Jump landing
+        uint32_t rearUp = 0;     // Rear-up / special flourish
+        uint32_t run = 0;        // Run animation (discovered, don't assume)
+        uint32_t stand = 0;      // Stand animation (discovered)
+    };
+
+    enum class MountAction { None, Jump, RearUp };
+
     uint32_t mountInstanceId_ = 0;
     float mountHeightOffset_ = 0.0f;
     float mountPitch_ = 0.0f;  // Up/down tilt (radians)
     float mountRoll_ = 0.0f;   // Left/right banking (radians)
+    float prevMountYaw_ = 0.0f; // Previous yaw for turn rate calculation (procedural lean)
+    float lastDeltaTime_ = 0.0f; // Cached for use in updateCharacterAnimation()
+    MountAction mountAction_ = MountAction::None;  // Current mount action (jump/rear-up)
+    uint32_t mountActionPhase_ = 0;  // 0=start, 1=loop, 2=end (for jump chaining)
+    MountAnimSet mountAnims_;  // Cached animation IDs for current mount
     bool taxiFlight_ = false;
 
     bool terrainEnabled = true;

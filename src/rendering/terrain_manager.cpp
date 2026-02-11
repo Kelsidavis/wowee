@@ -150,6 +150,7 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
     }
 
     // Always process ready tiles each frame (GPU uploads from background thread)
+    // Time budget prevents frame spikes from heavy tiles
     processReadyTiles();
 
     timeSinceLastUpdate += deltaTime;
@@ -641,7 +642,8 @@ void TerrainManager::finalizeTile(const std::shared_ptr<PendingTile>& pending) {
             m2Renderer->initialize(assetManager);
         }
 
-        // Upload unique M2 models to GPU (stays in VRAM permanently until shutdown)
+        // Upload M2 models immediately (batching was causing hangs)
+        // The 5ms time budget in processReadyTiles() limits the spike
         std::unordered_set<uint32_t> uploadedModelIds;
         for (auto& m2Ready : pending->m2Models) {
             if (m2Renderer->loadModel(m2Ready.model, m2Ready.modelId)) {
@@ -649,7 +651,7 @@ void TerrainManager::finalizeTile(const std::shared_ptr<PendingTile>& pending) {
             }
         }
         if (!uploadedModelIds.empty()) {
-            LOG_DEBUG("  Uploaded ", uploadedModelIds.size(), " unique M2 models to VRAM for tile [", x, ",", y, "]");
+            LOG_DEBUG("  Uploaded ", uploadedModelIds.size(), " M2 models for tile [", x, ",", y, "]");
         }
 
         // Create instances (deduplicate by uniqueId across tile boundaries)
@@ -813,11 +815,13 @@ void TerrainManager::workerLoop() {
 }
 
 void TerrainManager::processReadyTiles() {
-    // Process up to 1 ready tile per frame to avoid main-thread stalls
+    // Process tiles with time budget to avoid frame spikes
+    // Budget: 5ms per frame (allows 3 tiles at ~1.5ms each or 1 heavy tile)
+    const float timeBudgetMs = 5.0f;
+    auto startTime = std::chrono::high_resolution_clock::now();
     int processed = 0;
-    const int maxPerFrame = 1;
 
-    while (processed < maxPerFrame) {
+    while (true) {
         std::shared_ptr<PendingTile> pending;
 
         {
@@ -831,13 +835,45 @@ void TerrainManager::processReadyTiles() {
 
         if (pending) {
             TileCoord coord = pending->coord;
+            auto tileStart = std::chrono::high_resolution_clock::now();
+
             finalizeTile(pending);
+
+            auto tileEnd = std::chrono::high_resolution_clock::now();
+            float tileTimeMs = std::chrono::duration<float, std::milli>(tileEnd - tileStart).count();
+
             {
                 std::lock_guard<std::mutex> lock(queueMutex);
                 pendingTiles.erase(coord);
             }
             processed++;
+
+            // Check if we've exceeded time budget
+            float elapsedMs = std::chrono::duration<float, std::milli>(tileEnd - startTime).count();
+            if (elapsedMs >= timeBudgetMs) {
+                if (processed > 1) {
+                    LOG_DEBUG("Processed ", processed, " tiles in ", elapsedMs, "ms (budget: ", timeBudgetMs, "ms)");
+                }
+                break;
+            }
         }
+    }
+}
+
+void TerrainManager::processM2UploadQueue() {
+    // Upload up to MAX_M2_UPLOADS_PER_FRAME models per frame
+    int uploaded = 0;
+    while (!m2UploadQueue_.empty() && uploaded < MAX_M2_UPLOADS_PER_FRAME) {
+        auto& upload = m2UploadQueue_.front();
+        if (m2Renderer) {
+            m2Renderer->loadModel(upload.model, upload.modelId);
+        }
+        m2UploadQueue_.pop();
+        uploaded++;
+    }
+
+    if (uploaded > 0) {
+        LOG_DEBUG("Uploaded ", uploaded, " M2 models (", m2UploadQueue_.size(), " remaining in queue)");
     }
 }
 

@@ -13,6 +13,7 @@
 #include "rendering/lens_flare.hpp"
 #include "rendering/weather.hpp"
 #include "rendering/lighting_manager.hpp"
+#include "rendering/sky_system.hpp"
 #include "rendering/swim_effects.hpp"
 #include "rendering/mount_dust.hpp"
 #include "rendering/character_renderer.hpp"
@@ -21,6 +22,7 @@
 #include "rendering/minimap.hpp"
 #include "rendering/quest_marker_renderer.hpp"
 #include "rendering/shader.hpp"
+#include "game/game_handler.hpp"
 #include "pipeline/m2_loader.hpp"
 #include <algorithm>
 #include "pipeline/asset_manager.hpp"
@@ -55,6 +57,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 
 namespace wowee {
 namespace rendering {
@@ -288,6 +291,17 @@ bool Renderer::initialize(core::Window* win) {
     if (!lensFlare->initialize()) {
         LOG_WARNING("Failed to initialize lens flare");
         lensFlare.reset();
+    }
+
+    // Create sky system (coordinator for sky rendering)
+    skySystem = std::make_unique<SkySystem>();
+    if (!skySystem->initialize()) {
+        LOG_WARNING("Failed to initialize sky system");
+        skySystem.reset();
+    } else {
+        // Note: SkySystem manages its own components internally
+        // Keep existing components for backwards compatibility (PerformanceHUD access)
+        LOG_INFO("Sky system initialized successfully (coordinator active)");
     }
 
     // Create weather system
@@ -543,11 +557,172 @@ void Renderer::setCharacterFollow(uint32_t instanceId) {
 void Renderer::setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float heightOffset) {
     mountInstanceId_ = mountInstId;
     mountHeightOffset_ = heightOffset;
+    mountAction_ = MountAction::None;  // Clear mount action state
+    mountActionPhase_ = 0;
     charAnimState = CharAnimState::MOUNT;
     if (cameraController) {
         cameraController->setMounted(true);
         cameraController->setMountHeightOffset(heightOffset);
     }
+
+    // Debug: dump available mount animations
+    if (characterRenderer && mountInstId > 0) {
+        characterRenderer->dumpAnimations(mountInstId);
+    }
+
+    // Discover mount animation capabilities (property-based, not hardcoded IDs)
+    LOG_INFO("=== Mount Animation Dump (Display ID ", mountDisplayId, ") ===");
+    characterRenderer->dumpAnimations(mountInstId);
+
+    // Get all sequences for property-based analysis
+    std::vector<pipeline::M2Sequence> sequences;
+    if (!characterRenderer->getAnimationSequences(mountInstId, sequences)) {
+        LOG_WARNING("Failed to get animation sequences for mount, using fallback IDs");
+        sequences.clear();
+    }
+
+    // Helper: ID-based fallback finder
+    auto findFirst = [&](std::initializer_list<uint32_t> candidates) -> uint32_t {
+        for (uint32_t id : candidates) {
+            if (characterRenderer->hasAnimation(mountInstId, id)) {
+                return id;
+            }
+        }
+        return 0;
+    };
+
+    // Property-based jump animation discovery with chain-based scoring
+    auto discoverJumpSet = [&]() {
+        // Debug: log all sequences for analysis
+        LOG_INFO("=== Full sequence table for mount ===");
+        for (const auto& seq : sequences) {
+            LOG_INFO("SEQ id=", seq.id,
+                     " dur=", seq.duration,
+                     " flags=0x", std::hex, seq.flags, std::dec,
+                     " moveSpd=", seq.movingSpeed,
+                     " blend=", seq.blendTime,
+                     " next=", seq.nextAnimation,
+                     " alias=", seq.aliasNext);
+        }
+        LOG_INFO("=== End sequence table ===");
+
+        // Known combat/bad animation IDs to avoid
+        std::set<uint32_t> forbiddenIds = {53, 54, 16};  // jumpkick, attack
+
+        auto scoreNear = [](int a, int b) -> int {
+            int d = std::abs(a - b);
+            return (d <= 8) ? (20 - d) : 0; // within 8 IDs gets points
+        };
+
+        auto isForbidden = [&](uint32_t id) {
+            return forbiddenIds.count(id) != 0;
+        };
+
+        auto findSeqById = [&](uint32_t id) -> const pipeline::M2Sequence* {
+            for (const auto& s : sequences) {
+                if (s.id == id) return &s;
+            }
+            return nullptr;
+        };
+
+        uint32_t runId = findFirst({5, 4});
+        uint32_t standId = findFirst({0});
+
+        // Step A: Find loop candidates
+        std::vector<uint32_t> loops;
+        for (const auto& seq : sequences) {
+            if (isForbidden(seq.id)) continue;
+            // Bit 0x01 NOT set = loops (0x20, 0x60), bit 0x01 set = non-looping (0x21, 0x61)
+            bool isLoop = (seq.flags & 0x01) == 0;
+            if (isLoop && seq.duration >= 350 && seq.duration <= 1000 &&
+                seq.id != runId && seq.id != standId) {
+                loops.push_back(seq.id);
+            }
+        }
+
+        // Choose loop: prefer one near known classic IDs (38), else best duration
+        uint32_t loop = 0;
+        if (!loops.empty()) {
+            uint32_t best = loops[0];
+            int bestScore = -999;
+            for (uint32_t id : loops) {
+                int sc = 0;
+                sc += scoreNear((int)id, 38);  // classic hint
+                const auto* s = findSeqById(id);
+                if (s) sc += (s->duration >= 500 && s->duration <= 800) ? 5 : 0;
+                if (sc > bestScore) {
+                    bestScore = sc;
+                    best = id;
+                }
+            }
+            loop = best;
+        }
+
+        // Step B: Score start/end candidates
+        uint32_t start = 0, end = 0;
+        int bestStart = -999, bestEnd = -999;
+
+        for (const auto& seq : sequences) {
+            if (isForbidden(seq.id)) continue;
+            // Only consider non-looping animations for start/end
+            bool isLoop = (seq.flags & 0x01) == 0;
+            if (isLoop) continue;
+
+            // Start window
+            if (seq.duration >= 450 && seq.duration <= 1100) {
+                int sc = 0;
+                if (loop) sc += scoreNear((int)seq.id, (int)loop);
+                // Chain bonus: if this start points at loop or near it
+                if (loop && (seq.nextAnimation == (int16_t)loop || seq.aliasNext == loop)) sc += 30;
+                if (loop && scoreNear(seq.nextAnimation, (int)loop) > 0) sc += 10;
+                // Penalize "stop/brake-ish": very long blendTime can be a stop transition
+                if (seq.blendTime > 400) sc -= 5;
+
+                if (sc > bestStart) {
+                    bestStart = sc;
+                    start = seq.id;
+                }
+            }
+
+            // End window
+            if (seq.duration >= 650 && seq.duration <= 1600) {
+                int sc = 0;
+                if (loop) sc += scoreNear((int)seq.id, (int)loop);
+                // Chain bonus: end often points to run/stand or has no next
+                if (seq.nextAnimation == (int16_t)runId || seq.nextAnimation == (int16_t)standId) sc += 10;
+                if (seq.nextAnimation < 0) sc += 5; // no chain sometimes = terminal
+                if (sc > bestEnd) {
+                    bestEnd = sc;
+                    end = seq.id;
+                }
+            }
+        }
+
+        LOG_INFO("Property-based jump discovery: start=", start, " loop=", loop, " end=", end,
+                 " scores: start=", bestStart, " end=", bestEnd);
+        return std::make_tuple(start, loop, end);
+    };
+
+    auto [discoveredStart, discoveredLoop, discoveredEnd] = discoverJumpSet();
+
+    // Use discovered animations, fallback to known IDs if discovery fails
+    mountAnims_.jumpStart = discoveredStart > 0 ? discoveredStart : findFirst({40, 37});
+    mountAnims_.jumpLoop  = discoveredLoop > 0 ? discoveredLoop : findFirst({38});
+    mountAnims_.jumpEnd   = discoveredEnd > 0 ? discoveredEnd : findFirst({39});
+    mountAnims_.rearUp    = findFirst({94, 92, 40}); // RearUp/Special
+    mountAnims_.run       = findFirst({5, 4});       // Run/Walk
+    mountAnims_.stand     = findFirst({0});          // Stand (almost always 0)
+
+    // Ensure we have fallbacks for movement
+    if (mountAnims_.stand == 0) mountAnims_.stand = 0;  // Force 0 even if not found
+    if (mountAnims_.run == 0) mountAnims_.run = mountAnims_.stand;  // Fallback to stand if no run
+
+    core::Logger::getInstance().info("Mount animation set: jumpStart=", mountAnims_.jumpStart,
+        " jumpLoop=", mountAnims_.jumpLoop,
+        " jumpEnd=", mountAnims_.jumpEnd,
+        " rearUp=", mountAnims_.rearUp,
+        " run=", mountAnims_.run,
+        " stand=", mountAnims_.stand);
 
     // Notify mount sound manager
     if (mountSoundManager) {
@@ -561,6 +736,8 @@ void Renderer::clearMount() {
     mountHeightOffset_ = 0.0f;
     mountPitch_ = 0.0f;
     mountRoll_ = 0.0f;
+    mountAction_ = MountAction::None;
+    mountActionPhase_ = 0;
     charAnimState = CharAnimState::IDLE;
     if (cameraController) {
         cameraController->setMounted(false);
@@ -717,6 +894,23 @@ void Renderer::updateCharacterAnimation() {
         if (mountInstanceId_ > 0) {
             characterRenderer->setInstancePosition(mountInstanceId_, characterPosition);
             float yawRad = glm::radians(characterYaw);
+
+            // Procedural lean into turns (ground mounts only, optional enhancement)
+            if (!taxiFlight_ && moving && lastDeltaTime_ > 0.0f) {
+                float currentYawDeg = characterYaw;
+                float turnRate = (currentYawDeg - prevMountYaw_) / lastDeltaTime_;
+                // Normalize to [-180, 180] for wrap-around
+                while (turnRate > 180.0f) turnRate -= 360.0f;
+                while (turnRate < -180.0f) turnRate += 360.0f;
+
+                float targetLean = glm::clamp(turnRate * 0.15f, -0.25f, 0.25f);
+                mountRoll_ = glm::mix(mountRoll_, targetLean, lastDeltaTime_ * 6.0f);
+                prevMountYaw_ = currentYawDeg;
+            } else {
+                // Return to upright when not turning
+                mountRoll_ = glm::mix(mountRoll_, 0.0f, lastDeltaTime_ * 8.0f);
+            }
+
             // Apply pitch (up/down), roll (banking), and yaw for realistic flight
             characterRenderer->setInstanceRotation(mountInstanceId_, glm::vec3(mountPitch_, mountRoll_, yawRad));
 
@@ -731,7 +925,99 @@ void Renderer::updateCharacterAnimation() {
             };
 
             uint32_t mountAnimId = ANIM_STAND;
-            if (moving) {
+
+            // Get current mount animation state (used throughout)
+            uint32_t curMountAnim = 0;
+            float curMountTime = 0, curMountDur = 0;
+            bool haveMountState = characterRenderer->getAnimationState(mountInstanceId_, curMountAnim, curMountTime, curMountDur);
+
+            // Check for jump trigger - use cached per-mount animation IDs
+            if (cameraController->isJumpKeyPressed() && grounded && mountAction_ == MountAction::None) {
+                if (moving && mountAnims_.jumpLoop > 0) {
+                    // Moving: skip JumpStart (looks like stopping), go straight to airborne loop
+                    LOG_INFO("Mount jump triggered while moving: using jumpLoop anim ", mountAnims_.jumpLoop);
+                    characterRenderer->playAnimation(mountInstanceId_, mountAnims_.jumpLoop, true);
+                    mountAction_ = MountAction::Jump;
+                    mountActionPhase_ = 1;  // Start in airborne phase
+                    mountAnimId = mountAnims_.jumpLoop;
+                    if (mountSoundManager) {
+                        mountSoundManager->playJumpSound();
+                    }
+                    if (cameraController) {
+                        cameraController->triggerMountJump();
+                    }
+                } else if (!moving && mountAnims_.rearUp > 0) {
+                    // Standing still: rear-up flourish
+                    LOG_INFO("Mount rear-up triggered: playing rearUp anim ", mountAnims_.rearUp);
+                    characterRenderer->playAnimation(mountInstanceId_, mountAnims_.rearUp, false);
+                    mountAction_ = MountAction::RearUp;
+                    mountActionPhase_ = 0;
+                    mountAnimId = mountAnims_.rearUp;
+                    // Trigger semantic rear-up sound
+                    if (mountSoundManager) {
+                        mountSoundManager->playRearUpSound();
+                    }
+                }
+            }
+
+            // Handle active mount actions (jump chaining or rear-up)
+            if (mountAction_ != MountAction::None) {
+                bool animFinished = haveMountState && curMountDur > 0.1f &&
+                                   (curMountTime >= curMountDur - 0.05f);
+
+                if (mountAction_ == MountAction::Jump) {
+                    // Jump sequence: start → loop → end (physics-driven)
+                    if (mountActionPhase_ == 0 && animFinished && mountAnims_.jumpLoop > 0) {
+                        // JumpStart finished, go to JumpLoop (airborne)
+                        LOG_INFO("Mount jump: phase 0→1 (JumpStart→JumpLoop anim ", mountAnims_.jumpLoop, ")");
+                        characterRenderer->playAnimation(mountInstanceId_, mountAnims_.jumpLoop, true);
+                        mountActionPhase_ = 1;
+                        mountAnimId = mountAnims_.jumpLoop;
+                    } else if (mountActionPhase_ == 0 && animFinished && mountAnims_.jumpLoop == 0) {
+                        // No JumpLoop, go straight to airborne phase 1 (hold JumpStart pose)
+                        LOG_INFO("Mount jump: phase 0→1 (no JumpLoop, holding JumpStart)");
+                        mountActionPhase_ = 1;
+                    } else if (mountActionPhase_ == 1 && grounded && mountAnims_.jumpEnd > 0) {
+                        // Landed after airborne phase! Go to JumpEnd (grounded-triggered)
+                        LOG_INFO("Mount jump: phase 1→2 (landed, JumpEnd anim ", mountAnims_.jumpEnd, ")");
+                        characterRenderer->playAnimation(mountInstanceId_, mountAnims_.jumpEnd, false);
+                        mountActionPhase_ = 2;
+                        mountAnimId = mountAnims_.jumpEnd;
+                        // Trigger semantic landing sound
+                        if (mountSoundManager) {
+                            mountSoundManager->playLandSound();
+                        }
+                    } else if (mountActionPhase_ == 1 && grounded && mountAnims_.jumpEnd == 0) {
+                        // No JumpEnd animation, return directly to movement after landing
+                        LOG_INFO("Mount jump: phase 1→done (landed, no JumpEnd, returning to ",
+                                 moving ? "run" : "stand", " anim ", (moving ? mountAnims_.run : mountAnims_.stand), ")");
+                        mountAction_ = MountAction::None;
+                        mountAnimId = moving ? mountAnims_.run : mountAnims_.stand;
+                        characterRenderer->playAnimation(mountInstanceId_, mountAnimId, true);
+                    } else if (mountActionPhase_ == 2 && animFinished) {
+                        // JumpEnd finished, return to movement
+                        LOG_INFO("Mount jump: phase 2→done (JumpEnd finished, returning to ",
+                                 moving ? "run" : "stand", " anim ", (moving ? mountAnims_.run : mountAnims_.stand), ")");
+                        mountAction_ = MountAction::None;
+                        mountAnimId = moving ? mountAnims_.run : mountAnims_.stand;
+                        characterRenderer->playAnimation(mountInstanceId_, mountAnimId, true);
+                    } else {
+                        mountAnimId = curMountAnim;  // Keep current jump animation
+                    }
+                } else if (mountAction_ == MountAction::RearUp) {
+                    // Rear-up: single animation, return to stand when done
+                    if (animFinished) {
+                        LOG_INFO("Mount rear-up: finished, returning to ",
+                                 moving ? "run" : "stand", " anim ", (moving ? mountAnims_.run : mountAnims_.stand));
+                        mountAction_ = MountAction::None;
+                        mountAnimId = moving ? mountAnims_.run : mountAnims_.stand;
+                        characterRenderer->playAnimation(mountInstanceId_, mountAnimId, true);
+                    } else {
+                        mountAnimId = curMountAnim;  // Keep current rear-up animation
+                    }
+                }
+            } else if (moving) {
+                // Normal movement animations
                 if (anyStrafeLeft) {
                     mountAnimId = pickMountAnim({ANIM_STRAFE_RUN_LEFT, ANIM_STRAFE_WALK_LEFT, ANIM_RUN}, ANIM_RUN);
                 } else if (anyStrafeRight) {
@@ -742,14 +1028,15 @@ void Renderer::updateCharacterAnimation() {
                     mountAnimId = ANIM_RUN;
                 }
             }
-            uint32_t curMountAnim = 0;
-            float curMountTime = 0, curMountDur = 0;
-            bool haveMountState = characterRenderer->getAnimationState(mountInstanceId_, curMountAnim, curMountTime, curMountDur);
-            if (!haveMountState || curMountAnim != mountAnimId) {
-                characterRenderer->playAnimation(mountInstanceId_, mountAnimId, true);
+
+            // Only update animation if it changed and we're not in an action sequence
+            if (mountAction_ == MountAction::None && (!haveMountState || curMountAnim != mountAnimId)) {
+                bool loop = true;  // Normal movement animations loop
+                characterRenderer->playAnimation(mountInstanceId_, mountAnimId, loop);
             }
 
-            // Rider bob: sinusoidal motion synced to mount's run animation
+            // Rider bob: sinusoidal motion synced to mount's run animation (only used in fallback positioning)
+            mountBob = 0.0f;
             if (moving && haveMountState && curMountDur > 1.0f) {
                 float norm = std::fmod(curMountTime, curMountDur) / curMountDur;
                 // One bounce per stride cycle
@@ -758,28 +1045,35 @@ void Renderer::updateCharacterAnimation() {
             }
         }
 
-        // Character follows mount's full rotation (pitch, roll, yaw)
-        // This keeps the character "glued" to the mount during banking/climbing
-        float yawRad = glm::radians(characterYaw);
+        // Use mount's attachment point for proper bone-driven rider positioning
+        glm::mat4 mountSeatTransform;
+        if (characterRenderer->getAttachmentTransform(mountInstanceId_, 0, mountSeatTransform)) {
+            // Extract position from mount seat transform (attachment point already includes proper seat height)
+            glm::vec3 mountSeatPos = glm::vec3(mountSeatTransform[3]);
 
-        // Create rotation matrix from mount's orientation
-        glm::mat4 mountRotation = glm::mat4(1.0f);
-        mountRotation = glm::rotate(mountRotation, yawRad, glm::vec3(0.0f, 0.0f, 1.0f));       // Yaw (Z)
-        mountRotation = glm::rotate(mountRotation, mountRoll_, glm::vec3(1.0f, 0.0f, 0.0f));   // Roll (X)
-        mountRotation = glm::rotate(mountRotation, mountPitch_, glm::vec3(0.0f, 1.0f, 0.0f));  // Pitch (Y)
+            // Apply small vertical offset to reduce foot clipping (mount attachment point has correct X/Y)
+            glm::vec3 seatOffset = glm::vec3(0.0f, 0.0f, 0.2f);
 
-        // Offset in mount's local space (rider sits above mount)
-        glm::vec3 localOffset(0.0f, 0.0f, mountHeightOffset_ + mountBob);
+            // Position rider at mount seat
+            characterRenderer->setInstancePosition(characterInstanceId, mountSeatPos + seatOffset);
 
-        // Transform offset through mount's rotation to get world-space offset
-        glm::vec3 worldOffset = glm::vec3(mountRotation * glm::vec4(localOffset, 0.0f));
-
-        // Character position = mount position + rotated offset
-        glm::vec3 playerPos = characterPosition + worldOffset;
-        characterRenderer->setInstancePosition(characterInstanceId, playerPos);
-
-        // Character rotates with mount (same pitch, roll, yaw)
-        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(mountPitch_, mountRoll_, yawRad));
+            // Rider uses character facing yaw, not mount bone rotation
+            // (rider faces character direction, seat bone only provides position)
+            float yawRad = glm::radians(characterYaw);
+            characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(0.0f, 0.0f, yawRad));
+        } else {
+            // Fallback to old manual positioning if attachment not found
+            float yawRad = glm::radians(characterYaw);
+            glm::mat4 mountRotation = glm::mat4(1.0f);
+            mountRotation = glm::rotate(mountRotation, yawRad, glm::vec3(0.0f, 0.0f, 1.0f));
+            mountRotation = glm::rotate(mountRotation, mountRoll_, glm::vec3(1.0f, 0.0f, 0.0f));
+            mountRotation = glm::rotate(mountRotation, mountPitch_, glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::vec3 localOffset(0.0f, 0.0f, mountHeightOffset_ + mountBob);
+            glm::vec3 worldOffset = glm::vec3(mountRotation * glm::vec4(localOffset, 0.0f));
+            glm::vec3 playerPos = characterPosition + worldOffset;
+            characterRenderer->setInstancePosition(characterInstanceId, playerPos);
+            characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(mountPitch_, mountRoll_, yawRad));
+        }
         return;
     }
 
@@ -1184,9 +1478,18 @@ audio::FootstepSurface Renderer::resolveFootstepSurface() const {
 
 void Renderer::update(float deltaTime) {
     auto updateStart = std::chrono::steady_clock::now();
+    lastDeltaTime_ = deltaTime;  // Cache for use in updateCharacterAnimation()
+
+    // Renderer update profiling
+    static int rendProfileCounter = 0;
+    static float camTime = 0.0f, lightTime = 0.0f, charAnimTime = 0.0f;
+    static float terrainTime = 0.0f, skyTime = 0.0f, charRendTime = 0.0f;
+    static float audioTime = 0.0f, footstepTime = 0.0f, ambientTime = 0.0f;
+
     if (wmoRenderer) wmoRenderer->resetQueryStats();
     if (m2Renderer) m2Renderer->resetQueryStats();
 
+    auto cam1 = std::chrono::high_resolution_clock::now();
     if (cameraController) {
         auto cameraStart = std::chrono::steady_clock::now();
         cameraController->update(deltaTime);
@@ -1201,8 +1504,11 @@ void Renderer::update(float deltaTime) {
     } else {
         lastCameraUpdateMs = 0.0;
     }
+    auto cam2 = std::chrono::high_resolution_clock::now();
+    camTime += std::chrono::duration<float, std::milli>(cam2 - cam1).count();
 
     // Update lighting system
+    auto light1 = std::chrono::high_resolution_clock::now();
     if (lightingManager) {
         // TODO: Get actual map ID from game state (0 = Eastern Kingdoms for now)
         // TODO: Get actual game time from server (use -1 for local time fallback)
@@ -1214,8 +1520,11 @@ void Renderer::update(float deltaTime) {
 
         lightingManager->update(characterPosition, mapId, gameTime, isRaining, isUnderwater);
     }
+    auto light2 = std::chrono::high_resolution_clock::now();
+    lightTime += std::chrono::duration<float, std::milli>(light2 - light1).count();
 
     // Sync character model position/rotation and animation with follow target
+    auto charAnim1 = std::chrono::high_resolution_clock::now();
     if (characterInstanceId > 0 && characterRenderer && cameraController && cameraController->isThirdPerson()) {
         if (meleeSwingCooldown > 0.0f) {
             meleeSwingCooldown = std::max(0.0f, meleeSwingCooldown - deltaTime);
@@ -1261,13 +1570,19 @@ void Renderer::update(float deltaTime) {
         // Update animation based on movement state
         updateCharacterAnimation();
     }
+    auto charAnim2 = std::chrono::high_resolution_clock::now();
+    charAnimTime += std::chrono::duration<float, std::milli>(charAnim2 - charAnim1).count();
 
     // Update terrain streaming
+    auto terrain1 = std::chrono::high_resolution_clock::now();
     if (terrainManager && camera) {
         terrainManager->update(*camera, deltaTime);
     }
+    auto terrain2 = std::chrono::high_resolution_clock::now();
+    terrainTime += std::chrono::duration<float, std::milli>(terrain2 - terrain1).count();
 
     // Update skybox time progression
+    auto sky1 = std::chrono::high_resolution_clock::now();
     if (skybox) {
         skybox->update(deltaTime);
     }
@@ -1319,16 +1634,25 @@ void Renderer::update(float deltaTime) {
             }
         }
     }
+    auto sky2 = std::chrono::high_resolution_clock::now();
+    skyTime += std::chrono::duration<float, std::milli>(sky2 - sky1).count();
 
     // Update character animations
-    if (characterRenderer) {
-        characterRenderer->update(deltaTime);
+    auto charRend1 = std::chrono::high_resolution_clock::now();
+    if (characterRenderer && camera) {
+        characterRenderer->update(deltaTime, camera->getPosition());
     }
+    auto charRend2 = std::chrono::high_resolution_clock::now();
+    charRendTime += std::chrono::duration<float, std::milli>(charRend2 - charRend1).count();
 
     // Update AudioEngine (cleanup finished sounds, etc.)
+    auto audio1 = std::chrono::high_resolution_clock::now();
     audio::AudioEngine::instance().update(deltaTime);
+    auto audio2 = std::chrono::high_resolution_clock::now();
+    audioTime += std::chrono::duration<float, std::milli>(audio2 - audio1).count();
 
     // Footsteps: animation-event driven + surface query at event time.
+    auto footstep1 = std::chrono::high_resolution_clock::now();
     if (footstepManager) {
         footstepManager->update(deltaTime);
         cachedFootstepUpdateTimer += deltaTime;  // Update surface cache timer
@@ -1448,8 +1772,11 @@ void Renderer::update(float deltaTime) {
             mountSoundManager->setFlying(flying);
         }
     }
+    auto footstep2 = std::chrono::high_resolution_clock::now();
+    footstepTime += std::chrono::duration<float, std::milli>(footstep2 - footstep1).count();
 
     // Ambient environmental sounds: fireplaces, water, birds, etc.
+    auto ambient1 = std::chrono::high_resolution_clock::now();
     if (ambientSoundManager && camera && wmoRenderer && cameraController) {
         glm::vec3 camPos = camera->getPosition();
         uint32_t wmoId = 0;
@@ -1489,12 +1816,19 @@ void Renderer::update(float deltaTime) {
 
         ambientSoundManager->update(deltaTime, camPos, isIndoor, isSwimming, isBlacksmith);
     }
+    auto ambient2 = std::chrono::high_resolution_clock::now();
+    ambientTime += std::chrono::duration<float, std::milli>(ambient2 - ambient1).count();
 
     // Update M2 doodad animations (pass camera for frustum-culling bone computation)
+    static int m2ProfileCounter = 0;
+    static float m2Time = 0.0f;
+    auto m21 = std::chrono::high_resolution_clock::now();
     if (m2Renderer && camera) {
         m2Renderer->update(deltaTime, camera->getPosition(),
                            camera->getProjectionMatrix() * camera->getViewMatrix());
     }
+    auto m22 = std::chrono::high_resolution_clock::now();
+    m2Time += std::chrono::duration<float, std::milli>(m22 - m21).count();
 
     // Update zone detection and music
     if (zoneManager && musicManager && terrainManager && camera) {
@@ -1617,6 +1951,24 @@ void Renderer::update(float deltaTime) {
 
     auto updateEnd = std::chrono::steady_clock::now();
     lastUpdateMs = std::chrono::duration<double, std::milli>(updateEnd - updateStart).count();
+
+    // Log renderer profiling every 60 frames
+    if (++rendProfileCounter >= 60) {
+        LOG_INFO("RENDERER UPDATE PROFILE (60 frames): camera=", camTime / 60.0f,
+                 "ms light=", lightTime / 60.0f, "ms charAnim=", charAnimTime / 60.0f,
+                 "ms terrain=", terrainTime / 60.0f, "ms sky=", skyTime / 60.0f,
+                 "ms charRend=", charRendTime / 60.0f, "ms audio=", audioTime / 60.0f,
+                 "ms footstep=", footstepTime / 60.0f, "ms ambient=", ambientTime / 60.0f,
+                 "ms m2Anim=", m2Time / 60.0f, "ms");
+        rendProfileCounter = 0;
+        camTime = lightTime = charAnimTime = 0.0f;
+        terrainTime = skyTime = charRendTime = 0.0f;
+        audioTime = footstepTime = ambientTime = 0.0f;
+        m2Time = 0.0f;
+    }
+    if (++m2ProfileCounter >= 60) {
+        m2ProfileCounter = 0;
+    }
 }
 
 // ============================================================
@@ -1729,7 +2081,7 @@ void Renderer::renderSelectionCircle(const glm::mat4& view, const glm::mat4& pro
     glEnable(GL_CULL_FACE);
 }
 
-void Renderer::renderWorld(game::World* world) {
+void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     auto renderStart = std::chrono::steady_clock::now();
     lastTerrainRenderMs = 0.0;
     lastWMORenderMs = 0.0;
@@ -1759,50 +2111,72 @@ void Renderer::renderWorld(game::World* world) {
     bool underwater = false;
     bool canalUnderwater = false;
 
-    // Render skybox first (furthest back)
-    if (skybox && camera) {
-        skybox->render(*camera, timeOfDay);
-    }
+    // Render sky system (unified coordinator for skybox, stars, celestial, clouds, lens flare)
+    if (skySystem && camera) {
+        // Populate SkyParams from lighting manager
+        rendering::SkyParams skyParams;
+        skyParams.timeOfDay = timeOfDay;
+        skyParams.gameTime = gameHandler ? gameHandler->getGameTime() : -1.0f;
 
-    // Get lighting parameters for celestial rendering
-    const glm::vec3* sunDir = nullptr;
-    const glm::vec3* sunColor = nullptr;
-    float cloudDensity = 0.0f;
-    float fogDensity = 0.0f;
-    if (lightingManager) {
-        const auto& lighting = lightingManager->getLightingParams();
-        sunDir = &lighting.directionalDir;
-        sunColor = &lighting.diffuseColor;
-        cloudDensity = lighting.cloudDensity;
-        fogDensity = lighting.fogDensity;
-    }
-
-    // Render stars after skybox (affected by cloud/fog density)
-    if (starField && camera) {
-        starField->render(*camera, timeOfDay, cloudDensity, fogDensity);
-    }
-
-    // Render celestial bodies (sun/moon) after stars (sun uses lighting direction/color)
-    if (celestial && camera) {
-        celestial->render(*camera, timeOfDay, sunDir, sunColor);
-    }
-
-    // Render clouds after celestial bodies
-    if (clouds && camera) {
-        clouds->render(*camera, timeOfDay);
-    }
-
-    // Render lens flare (screen-space effect, render after celestial bodies)
-    if (lensFlare && camera && celestial) {
-        // Use lighting direction for sun position if available
-        glm::vec3 sunPosition;
-        if (sunDir) {
-            const float sunDistance = 800.0f;
-            sunPosition = -*sunDir * sunDistance;
-        } else {
-            sunPosition = celestial->getSunPosition(timeOfDay);
+        if (lightingManager) {
+            const auto& lighting = lightingManager->getLightingParams();
+            skyParams.directionalDir = lighting.directionalDir;
+            skyParams.sunColor = lighting.diffuseColor;
+            skyParams.skyTopColor = lighting.skyTopColor;
+            skyParams.skyMiddleColor = lighting.skyMiddleColor;
+            skyParams.skyBand1Color = lighting.skyBand1Color;
+            skyParams.skyBand2Color = lighting.skyBand2Color;
+            skyParams.cloudDensity = lighting.cloudDensity;
+            skyParams.fogDensity = lighting.fogDensity;
+            skyParams.horizonGlow = lighting.horizonGlow;
         }
-        lensFlare->render(*camera, sunPosition, timeOfDay);
+
+        // TODO: Set skyboxModelId from LightSkybox.dbc (future)
+        skyParams.skyboxModelId = 0;
+        skyParams.skyboxHasStars = false;  // Gradient skybox has no baked stars
+
+        skySystem->render(*camera, skyParams);
+    } else {
+        // Fallback: render individual components (backwards compatibility)
+        if (skybox && camera) {
+            skybox->render(*camera, timeOfDay);
+        }
+
+        // Get lighting parameters for celestial rendering
+        const glm::vec3* sunDir = nullptr;
+        const glm::vec3* sunColor = nullptr;
+        float cloudDensity = 0.0f;
+        float fogDensity = 0.0f;
+        if (lightingManager) {
+            const auto& lighting = lightingManager->getLightingParams();
+            sunDir = &lighting.directionalDir;
+            sunColor = &lighting.diffuseColor;
+            cloudDensity = lighting.cloudDensity;
+            fogDensity = lighting.fogDensity;
+        }
+
+        if (starField && camera) {
+            starField->render(*camera, timeOfDay, cloudDensity, fogDensity);
+        }
+
+        if (celestial && camera) {
+            celestial->render(*camera, timeOfDay, sunDir, sunColor);
+        }
+
+        if (clouds && camera) {
+            clouds->render(*camera, timeOfDay);
+        }
+
+        if (lensFlare && camera && celestial) {
+            glm::vec3 sunPosition;
+            if (sunDir) {
+                const float sunDistance = 800.0f;
+                sunPosition = -*sunDir * sunDistance;
+            } else {
+                sunPosition = celestial->getSunPosition(timeOfDay);
+            }
+            lensFlare->render(*camera, sunPosition, timeOfDay);
+        }
     }
 
     // Apply lighting and fog to all renderers

@@ -282,8 +282,8 @@ private:
 
     // Streaming parameters
     bool streamingEnabled = true;
-    int loadRadius = 8;      // Load tiles within this radius (17x17 grid)
-    int unloadRadius = 12;   // Unload tiles beyond this radius
+    int loadRadius = 4;      // Load tiles within this radius (9x9 grid = 81 tiles)
+    int unloadRadius = 7;    // Unload tiles beyond this radius
     float updateInterval = 0.033f;  // Check streaming every 33ms (~30 fps)
     float timeSinceLastUpdate = 0.0f;
 
@@ -326,6 +326,17 @@ private:
 
     // Dedup set for WMO placements across tile boundaries (prevents rendering Stormwind 16x)
     std::unordered_set<uint32_t> placedWmoIds;
+
+    // Progressive M2 upload queue (spread heavy uploads across frames)
+    struct PendingM2Upload {
+        uint32_t modelId;
+        pipeline::M2Model model;
+        std::string path;
+    };
+    std::queue<PendingM2Upload> m2UploadQueue_;
+    static constexpr int MAX_M2_UPLOADS_PER_FRAME = 5;  // Upload up to 5 models per frame
+
+    void processM2UploadQueue();
 };
 
 } // namespace rendering

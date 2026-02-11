@@ -75,6 +75,38 @@ void CameraController::startIntroPan(float durationSec, float orbitDegrees) {
     thirdPerson = true;
 }
 
+std::optional<float> CameraController::getCachedFloorHeight(float x, float y, float z) {
+    // Check cache validity (position within threshold and frame count)
+    glm::vec2 queryPos(x, y);
+    glm::vec2 cachedPos(lastFloorQueryPos.x, lastFloorQueryPos.y);
+    float dist = glm::length(queryPos - cachedPos);
+
+    if (dist < FLOOR_QUERY_DISTANCE_THRESHOLD && floorQueryFrameCounter < FLOOR_QUERY_FRAME_INTERVAL) {
+        floorQueryFrameCounter++;
+        return cachedFloorHeight;
+    }
+
+    // Cache miss - query and update
+    floorQueryFrameCounter = 0;
+    lastFloorQueryPos = glm::vec3(x, y, z);
+
+    std::optional<float> result;
+    if (terrainManager) {
+        result = terrainManager->getHeightAt(x, y);
+    }
+    if (wmoRenderer) {
+        auto wh = wmoRenderer->getFloorHeight(x, y, z + 2.0f);
+        if (wh && (!result || *wh > *result)) result = wh;
+    }
+    if (m2Renderer && !externalFollow_) {
+        auto mh = m2Renderer->getFloorHeight(x, y, z);
+        if (mh && (!result || *mh > *result)) result = mh;
+    }
+
+    cachedFloorHeight = result;
+    return result;
+}
+
 void CameraController::update(float deltaTime) {
     if (!enabled || !camera) {
         return;
@@ -342,17 +374,21 @@ void CameraController::update(float deltaTime) {
             float swimSpeed = speed * SWIM_SPEED_FACTOR;
             float waterSurfaceZ = waterH ? (*waterH - WATER_SURFACE_OFFSET) : targetPos.z;
 
-            glm::vec3 swimForward = glm::normalize(forward3D);
-            if (glm::length(swimForward) < 1e-4f) {
+            // For auto-run/auto-swim: use character facing (immune to camera pan)
+            // For manual W key: use camera direction (swim where you look)
+            glm::vec3 swimForward;
+            if (autoRunning || (leftMouseDown && rightMouseDown)) {
+                // Auto-running: use character's horizontal facing direction
                 swimForward = forward;
-            }
-            glm::vec3 swimRight = camera->getRight();
-            swimRight.z = 0.0f;
-            if (glm::length(swimRight) > 1e-4f) {
-                swimRight = glm::normalize(swimRight);
             } else {
-                swimRight = right;
+                // Manual control: use camera's 3D direction (swim where you look)
+                swimForward = glm::normalize(forward3D);
+                if (glm::length(swimForward) < 1e-4f) {
+                    swimForward = forward;
+                }
             }
+            // Use character's facing direction for strafe, not camera's right vector
+            glm::vec3 swimRight = right;  // Character's right (horizontal facing), not camera's
 
             glm::vec3 swimMove(0.0f);
             if (nowForward) swimMove += swimForward;
@@ -396,17 +432,32 @@ void CameraController::update(float deltaTime) {
             }
 
             // Prevent sinking/clipping through world floor while swimming.
+            // Cache floor queries (update every 3 frames or 1 unit movement)
             std::optional<float> floorH;
-            if (terrainManager) {
-                floorH = terrainManager->getHeightAt(targetPos.x, targetPos.y);
-            }
-            if (wmoRenderer) {
-                auto wh = wmoRenderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 2.0f);
-                if (wh && (!floorH || *wh > *floorH)) floorH = wh;
-            }
-            if (m2Renderer && !externalFollow_) {
-                auto mh = m2Renderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z);
-                if (mh && (!floorH || *mh > *floorH)) floorH = mh;
+            float dist2D = glm::length(glm::vec2(targetPos.x - lastFloorQueryPos.x,
+                                                   targetPos.y - lastFloorQueryPos.y));
+            bool updateFloorCache = (floorQueryFrameCounter++ >= FLOOR_QUERY_FRAME_INTERVAL) ||
+                                     (dist2D > FLOOR_QUERY_DISTANCE_THRESHOLD);
+
+            if (updateFloorCache) {
+                floorQueryFrameCounter = 0;
+                lastFloorQueryPos = targetPos;
+
+                if (terrainManager) {
+                    floorH = terrainManager->getHeightAt(targetPos.x, targetPos.y);
+                }
+                if (wmoRenderer) {
+                    auto wh = wmoRenderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 2.0f);
+                    if (wh && (!floorH || *wh > *floorH)) floorH = wh;
+                }
+                if (m2Renderer && !externalFollow_) {
+                    auto mh = m2Renderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z);
+                    if (mh && (!floorH || *mh > *floorH)) floorH = mh;
+                }
+
+                cachedFloorHeight = floorH;
+            } else {
+                floorH = cachedFloorHeight;
             }
             if (floorH) {
                 float swimFloor = *floorH + 0.5f;
@@ -469,7 +520,7 @@ void CameraController::update(float deltaTime) {
             if (nowJump) jumpBufferTimer = JUMP_BUFFER_TIME;
             if (grounded) coyoteTimer = COYOTE_TIME;
 
-            bool canJump = (coyoteTimer > 0.0f) && (jumpBufferTimer > 0.0f);
+            bool canJump = (coyoteTimer > 0.0f) && (jumpBufferTimer > 0.0f) && !mounted_;
             if (canJump) {
                 verticalVelocity = jumpVel;
                 grounded = false;
@@ -895,7 +946,7 @@ void CameraController::update(float deltaTime) {
             if (nowJump) jumpBufferTimer = JUMP_BUFFER_TIME;
             if (grounded) coyoteTimer = COYOTE_TIME;
 
-            if (coyoteTimer > 0.0f && jumpBufferTimer > 0.0f) {
+            if (coyoteTimer > 0.0f && jumpBufferTimer > 0.0f && !mounted_) {
                 verticalVelocity = jumpVel;
                 grounded = false;
                 jumpBufferTimer = 0.0f;
@@ -1398,6 +1449,16 @@ void CameraController::clearMovementInputs() {
 
 bool CameraController::isSprinting() const {
     return enabled && camera && runPace;
+}
+
+void CameraController::triggerMountJump() {
+    // Apply physics-driven mount jump: vz = sqrt(2 * g * h)
+    // Desired height and gravity are configurable constants
+    if (grounded || coyoteTimer > 0.0f) {
+        verticalVelocity = getMountJumpVelocity();
+        grounded = false;
+        coyoteTimer = 0.0f;
+    }
 }
 
 } // namespace rendering

@@ -42,6 +42,7 @@ enum class Opcode : uint16_t {
     SMSG_CHAR_DELETE                 = 0x03C,
     SMSG_PONG                        = 0x1DD,
     SMSG_LOGIN_VERIFY_WORLD          = 0x236,
+    SMSG_LOGIN_SETTIMESPEED          = 0x042,
     SMSG_ACCOUNT_DATA_TIMES          = 0x209,
     SMSG_FEATURE_SYSTEM_STATUS       = 0x3ED,
     SMSG_MOTD                        = 0x33D,

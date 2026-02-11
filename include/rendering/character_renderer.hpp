@@ -54,7 +54,7 @@ public:
 
     void playAnimation(uint32_t instanceId, uint32_t animationId, bool loop = true);
 
-    void update(float deltaTime);
+    void update(float deltaTime, const glm::vec3& cameraPos = glm::vec3(0.0f));
 
     void render(const Camera& camera, const glm::mat4& view, const glm::mat4& projection);
     void renderShadow(const glm::mat4& lightSpaceMatrix);
@@ -74,6 +74,9 @@ public:
     bool getInstanceModelName(uint32_t instanceId, std::string& modelName) const;
     bool getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, float& outRadius) const;
 
+    /** Debug: Log all available animations for an instance */
+    void dumpAnimations(uint32_t instanceId) const;
+
     /** Attach a weapon model to a character instance at the given attachment point. */
     bool attachWeapon(uint32_t charInstanceId, uint32_t attachmentId,
                       const pipeline::M2Model& weaponModel, uint32_t weaponModelId,
@@ -81,6 +84,15 @@ public:
 
     /** Detach a weapon from the given attachment point. */
     void detachWeapon(uint32_t charInstanceId, uint32_t attachmentId);
+
+    /** Get the world-space transform of an attachment point on an instance.
+     *  Used for mount seats, weapon positions, etc.
+     *  @param instanceId The character/mount instance
+     *  @param attachmentId The attachment point ID (0=Mount, 1=RightHand, 2=LeftHand, etc.)
+     *  @param outTransform The resulting world-space transform matrix
+     *  @return true if attachment found and matrix computed
+     */
+    bool getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform);
 
     size_t getInstanceCount() const { return instances.size(); }
 

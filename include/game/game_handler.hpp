@@ -425,6 +425,10 @@ public:
     uint32_t getPlayerLevel() const { return serverPlayerLevel_; }
     static uint32_t killXp(uint32_t playerLevel, uint32_t victimLevel);
 
+    // Server time (for deterministic moon phases, etc.)
+    float getGameTime() const { return gameTime_; }
+    float getTimeSpeed() const { return timeSpeed_; }
+
     // Player skills
     const std::map<uint32_t, PlayerSkill>& getPlayerSkills() const { return playerSkills_; }
     const std::string& getSkillName(uint32_t skillId) const;
@@ -1095,6 +1099,11 @@ private:
     uint32_t playerNextLevelXp_ = 0;
     uint32_t serverPlayerLevel_ = 1;
     static uint32_t xpForLevel(uint32_t level);
+
+    // ---- Server time tracking (for deterministic celestial/sky systems) ----
+    float gameTime_ = 0.0f;       // Server game time in seconds
+    float timeSpeed_ = 0.0166f;   // Time scale (default: 1 game day = 1 real hour)
+    void handleLoginSetTimeSpeed(network::Packet& packet);
 
     // ---- Player skills ----
     std::map<uint32_t, PlayerSkill> playerSkills_;

@@ -21,7 +21,7 @@ bool Celestial::initialize() {
     // Create celestial shader
     celestialShader = std::make_unique<Shader>();
 
-    // Vertex shader - billboard facing camera
+    // Vertex shader - billboard facing camera (sky dome locked)
     const char* vertexShaderSource = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
@@ -36,13 +36,10 @@ bool Celestial::initialize() {
         void main() {
             TexCoord = aTexCoord;
 
-            // Billboard: remove rotation from view matrix, keep only translation
-            mat4 viewNoRotation = view;
-            viewNoRotation[0][0] = 1.0; viewNoRotation[0][1] = 0.0; viewNoRotation[0][2] = 0.0;
-            viewNoRotation[1][0] = 0.0; viewNoRotation[1][1] = 1.0; viewNoRotation[1][2] = 0.0;
-            viewNoRotation[2][0] = 0.0; viewNoRotation[2][1] = 0.0; viewNoRotation[2][2] = 1.0;
+            // Sky object: remove translation, keep rotation (skybox technique)
+            mat4 viewNoTranslation = mat4(mat3(view));
 
-            gl_Position = projection * viewNoRotation * model * vec4(aPos, 1.0);
+            gl_Position = projection * viewNoTranslation * model * vec4(aPos, 1.0);
         }
     )";
 
@@ -128,20 +125,27 @@ void Celestial::shutdown() {
 void Celestial::render(const Camera& camera, float timeOfDay,
                        const glm::vec3* sunDir, const glm::vec3* sunColor, float gameTime) {
     if (!renderingEnabled || vao == 0 || !celestialShader) {
+        LOG_WARNING("Celestial render blocked: enabled=", renderingEnabled, " vao=", vao, " shader=", (celestialShader ? "ok" : "null"));
         return;
     }
+
+    LOG_INFO("Celestial render: timeOfDay=", timeOfDay, " gameTime=", gameTime);
 
     // Update moon phases from game time if available (deterministic)
     if (gameTime >= 0.0f) {
         updatePhasesFromGameTime(gameTime);
     }
 
-    // Enable blending for celestial glow
+    // Enable additive blending for celestial glow (brighter against sky)
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // Additive blending for brightness
 
-    // Disable depth writing (but keep depth testing)
+    // Disable depth testing entirely - celestial bodies render "on" the sky
+    glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
+
+    // Disable culling - billboards can face either way
+    glDisable(GL_CULL_FACE);
 
     // Render sun and moons (pass lighting parameters)
     renderSun(camera, timeOfDay, sunDir, sunColor);
@@ -152,34 +156,37 @@ void Celestial::render(const Camera& camera, float timeOfDay,
     }
 
     // Restore state
+    glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    glEnable(GL_CULL_FACE);
 }
 
 void Celestial::renderSun(const Camera& camera, float timeOfDay,
                           const glm::vec3* sunDir, const glm::vec3* sunColor) {
     // Sun visible from 5:00 to 19:00
     if (timeOfDay < 5.0f || timeOfDay >= 19.0f) {
+        LOG_INFO("Sun not visible: timeOfDay=", timeOfDay, " (visible 5:00-19:00)");
         return;
     }
 
+    LOG_INFO("Rendering sun: timeOfDay=", timeOfDay, " sunDir=", (sunDir ? "yes" : "no"), " sunColor=", (sunColor ? "yes" : "no"));
+
     celestialShader->use();
 
-    // Get sun position (use lighting direction if provided)
-    glm::vec3 sunPos;
-    if (sunDir) {
-        // Place sun along the lighting direction at far distance
-        const float sunDistance = 800.0f;
-        sunPos = -*sunDir * sunDistance;  // Negative because light comes FROM sun
-    } else {
-        // Fallback to time-based position
-        sunPos = getSunPosition(timeOfDay);
-    }
+    // TESTING: Try X-up (final axis test)
+    glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.0f, 0.0f));  // X-up test
+    LOG_INFO("Sun direction (TESTING X-UP): dir=(", dir.x, ",", dir.y, ",", dir.z, ")");
+
+    // Place sun on sky sphere at fixed distance
+    const float sunDistance = 800.0f;
+    glm::vec3 sunPos = dir * sunDistance;
+    LOG_INFO("Sun position: dir * ", sunDistance, " = (", sunPos.x, ",", sunPos.y, ",", sunPos.z, ")");
 
     // Create model matrix
     glm::mat4 model = glm::mat4(1.0f);
     model = glm::translate(model, sunPos);
-    model = glm::scale(model, glm::vec3(50.0f, 50.0f, 1.0f));  // 50 unit diameter
+    model = glm::scale(model, glm::vec3(500.0f, 500.0f, 1.0f));  // Large and visible
 
     // Set uniforms
     glm::mat4 view = camera.getViewMatrix();
@@ -309,13 +316,17 @@ glm::vec3 Celestial::getSunPosition(float timeOfDay) const {
     // Sun rises at 6:00, peaks at 12:00, sets at 18:00
     float angle = calculateCelestialAngle(timeOfDay, 6.0f, 18.0f);
 
-    const float radius = 800.0f;  // Distance from origin
-    const float height = 600.0f;  // Maximum height
+    const float radius = 800.0f;  // Horizontal distance
+    const float height = 600.0f;  // Maximum height at zenith
 
-    // Arc across sky
-    float x = radius * std::sin(angle);
-    float z = height * std::cos(angle);
-    float y = 0.0f;  // Y is horizontal in WoW coordinates
+    // Arc across sky (angle 0→π maps to sunrise→noon→sunset)
+    // Z is vertical (matches skybox: Altitude = aPos.z)
+    // At angle=0: x=radius, z=0 (east horizon)
+    // At angle=π/2: x=0, z=height (zenith, directly overhead)
+    // At angle=π: x=-radius, z=0 (west horizon)
+    float x = radius * std::cos(angle);  // Horizontal position (E→W)
+    float y = 0.0f;  // Y is north-south (keep at 0)
+    float z = height * std::sin(angle);  // Vertical position (Z is UP, matches skybox)
 
     return glm::vec3(x, y, z);
 }
@@ -331,9 +342,10 @@ glm::vec3 Celestial::getMoonPosition(float timeOfDay) const {
     const float radius = 800.0f;
     const float height = 600.0f;
 
-    float x = radius * std::sin(angle);
-    float z = height * std::cos(angle);
+    // Same arc formula as sun (Z is vertical, matches skybox)
+    float x = radius * std::cos(angle);
     float y = 0.0f;
+    float z = height * std::sin(angle);
 
     return glm::vec3(x, y, z);
 }

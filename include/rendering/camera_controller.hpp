@@ -67,6 +67,7 @@ public:
     bool isGrounded() const { return grounded; }
     bool isJumping() const { return !grounded && verticalVelocity > 0.0f; }
     bool isFalling() const { return !grounded && verticalVelocity <= 0.0f; }
+    bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
     bool isSprinting() const;
     bool isMovingForward() const { return moveForwardActive; }
     bool isMovingBackward() const { return moveBackwardActive; }
@@ -91,6 +92,9 @@ public:
     void setExternalMoving(bool moving) { externalMoving_ = moving; }
     void setFacingYaw(float yaw) { facingYaw = yaw; }  // For taxi/scripted movement
     void clearMovementInputs();
+
+    // Trigger mount jump (applies vertical velocity for physics hop)
+    void triggerMountJump();
 
     // For first-person player hiding
     void setCharacterRenderer(class CharacterRenderer* cr, uint32_t playerId) {
@@ -168,6 +172,16 @@ private:
     std::optional<float> cachedCamWmoFloor;
     bool hasCachedCamFloor = false;
 
+    // Cached floor height queries (update every 5 frames or 2 unit movement)
+    glm::vec3 lastFloorQueryPos = glm::vec3(0.0f);
+    std::optional<float> cachedFloorHeight;
+    int floorQueryFrameCounter = 0;
+    static constexpr float FLOOR_QUERY_DISTANCE_THRESHOLD = 2.0f;  // Increased from 1.0
+    static constexpr int FLOOR_QUERY_FRAME_INTERVAL = 5;  // Increased from 3
+
+    // Helper to get cached floor height (reduces expensive queries)
+    std::optional<float> getCachedFloorHeight(float x, float y, float z);
+
     // Swimming
     bool swimming = false;
     bool wasSwimming = false;
@@ -212,6 +226,13 @@ private:
     static constexpr float WOW_TURN_SPEED = 180.0f;  // Keyboard turn deg/sec
     static constexpr float WOW_GRAVITY = -19.29f;
     static constexpr float WOW_JUMP_VELOCITY = 7.96f;
+    static constexpr float MOUNT_GRAVITY = -18.0f;       // Snappy WoW-feel jump
+    static constexpr float MOUNT_JUMP_HEIGHT = 1.0f;    // Desired jump height in meters
+
+    // Computed jump velocity using vz = sqrt(2 * g * h)
+    static inline float getMountJumpVelocity() {
+        return std::sqrt(2.0f * std::abs(MOUNT_GRAVITY) * MOUNT_JUMP_HEIGHT);
+    }
 
     // Server-driven run speed override (0 = use default WOW_RUN_SPEED)
     float runSpeedOverride_ = 0.0f;
