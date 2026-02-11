@@ -717,6 +717,23 @@ void Renderer::setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float h
     mountAnims_.fidgets.clear();
     core::Logger::getInstance().info("Scanning for fidget animations in ", sequences.size(), " sequences");
 
+    // DEBUG: Log ALL non-looping, short, stationary animations to identify stamps/tosses
+    core::Logger::getInstance().info("=== ALL potential fidgets (no metadata filter) ===");
+    for (const auto& seq : sequences) {
+        bool isLoop = (seq.flags & 0x01) == 0;
+        bool isStationary = std::abs(seq.movingSpeed) < 0.05f;
+        bool reasonableDuration = seq.duration >= 400 && seq.duration <= 2500;
+
+        if (!isLoop && reasonableDuration && isStationary) {
+            core::Logger::getInstance().info("  ALL: id=", seq.id,
+                " dur=", seq.duration, "ms",
+                " freq=", seq.frequency,
+                " replay=", seq.replayMin, "-", seq.replayMax,
+                " flags=0x", std::hex, seq.flags, std::dec,
+                " next=", seq.nextAnimation);
+        }
+    }
+
     // Proper fidget discovery: frequency > 0 + replay timers indicate random idle animations
     for (const auto& seq : sequences) {
         bool isLoop = (seq.flags & 0x01) == 0;
