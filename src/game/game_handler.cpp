@@ -1794,7 +1794,7 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     movementInfo.x = canonical.x;
     movementInfo.y = canonical.y;
     movementInfo.z = canonical.z;
-    movementInfo.orientation = data.orientation;
+    movementInfo.orientation = core::coords::serverToCanonicalYaw(data.orientation);
     movementInfo.flags = 0;
     movementInfo.flags2 = 0;
     movementInfo.time = 0;
@@ -2322,23 +2322,20 @@ void GameHandler::sendMovement(Opcode opcode) {
         movementInfo.transportTime2 = movementInfo.time;
 
         // ONTRANSPORT expects local orientation (player yaw relative to transport yaw).
-        float transportYaw = 0.0f;
+        // Keep internal yaw canonical; convert to server yaw on the wire.
+        float transportYawCanonical = 0.0f;
         if (transportManager_) {
             if (auto* tr = transportManager_->getTransport(playerTransportGuid_); tr) {
                 if (tr->hasServerYaw) {
-                    transportYaw = tr->serverYaw;
+                    transportYawCanonical = tr->serverYaw;
                 } else {
-                    transportYaw = glm::eulerAngles(tr->rotation).z;
+                    transportYawCanonical = glm::eulerAngles(tr->rotation).z;
                 }
             }
         }
 
-        float localTransportO = movementInfo.orientation - transportYaw;
-        constexpr float kPi = 3.14159265359f;
-        constexpr float kTwoPi = 6.28318530718f;
-        while (localTransportO > kPi) localTransportO -= kTwoPi;
-        while (localTransportO < -kPi) localTransportO += kTwoPi;
-        movementInfo.transportO = localTransportO;
+        movementInfo.transportO =
+            core::coords::normalizeAngleRad(movementInfo.orientation - transportYawCanonical);
     } else {
         // Clear transport flag if not on transport
         movementInfo.flags &= ~static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
@@ -2357,6 +2354,9 @@ void GameHandler::sendMovement(Opcode opcode) {
     wireInfo.y = serverPos.y;
     wireInfo.z = serverPos.z;
 
+    // Convert canonical → server yaw for the wire
+    wireInfo.orientation = core::coords::canonicalToServerYaw(wireInfo.orientation);
+
     // Also convert transport local position to server coordinates if on transport
     if (isOnTransport()) {
         glm::vec3 serverTransportPos = core::coords::canonicalToServer(
@@ -2364,6 +2364,8 @@ void GameHandler::sendMovement(Opcode opcode) {
         wireInfo.transportX = serverTransportPos.x;
         wireInfo.transportY = serverTransportPos.y;
         wireInfo.transportZ = serverTransportPos.z;
+        // transportO is a local delta; server<->canonical swap negates delta yaw.
+        wireInfo.transportO = core::coords::normalizeAngleRad(-wireInfo.transportO);
     }
 
     // Build and send movement packet
@@ -2520,7 +2522,8 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                 // Set position from movement block (server → canonical)
                 if (block.hasMovement) {
                     glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
-                    entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
+                    float oCanonical = core::coords::serverToCanonicalYaw(block.orientation);
+                    entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
                     LOG_DEBUG("  Position: (", pos.x, ", ", pos.y, ", ", pos.z, ")");
                     if (block.guid == playerGuid && block.runSpeed > 0.1f && block.runSpeed < 100.0f) {
                         serverRunSpeed_ = block.runSpeed;
@@ -2534,7 +2537,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             playerTransportOffset_ = core::coords::serverToCanonical(serverOffset);
                             if (transportManager_ && transportManager_->getTransport(playerTransportGuid_)) {
                                 glm::vec3 composed = transportManager_->getPlayerWorldPosition(playerTransportGuid_, playerTransportOffset_);
-                                entity->setPosition(composed.x, composed.y, composed.z, block.orientation);
+                                entity->setPosition(composed.x, composed.y, composed.z, oCanonical);
                                 movementInfo.x = composed.x;
                                 movementInfo.y = composed.y;
                                 movementInfo.z = composed.z;
@@ -2556,8 +2559,9 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             glm::vec3 localOffset = core::coords::serverToCanonical(
                                 glm::vec3(block.transportX, block.transportY, block.transportZ));
                             const bool hasLocalOrientation = (block.updateFlags & 0x0020) != 0; // UPDATEFLAG_LIVING
+                            float localOriCanonical = core::coords::normalizeAngleRad(-block.transportO);
                             setTransportAttachment(block.guid, block.objectType, block.transportGuid,
-                                                   localOffset, hasLocalOrientation, block.transportO);
+                                                   localOffset, hasLocalOrientation, localOriCanonical);
                             if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
                                 glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
                                 entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
@@ -2870,7 +2874,8 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                 if (entity) {
                     if (block.hasMovement) {
                         glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
-                        entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
+                        float oCanonical = core::coords::serverToCanonicalYaw(block.orientation);
+                        entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
 
                         if (block.guid != playerGuid &&
                             (entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::GAMEOBJECT)) {
@@ -2878,8 +2883,9 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                 glm::vec3 localOffset = core::coords::serverToCanonical(
                                     glm::vec3(block.transportX, block.transportY, block.transportZ));
                                 const bool hasLocalOrientation = (block.updateFlags & 0x0020) != 0; // UPDATEFLAG_LIVING
+                                float localOriCanonical = core::coords::normalizeAngleRad(-block.transportO);
                                 setTransportAttachment(block.guid, entity->getType(), block.transportGuid,
-                                                       localOffset, hasLocalOrientation, block.transportO);
+                                                       localOffset, hasLocalOrientation, localOriCanonical);
                                 if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
                                     glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
                                     entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
@@ -3108,7 +3114,8 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                 auto entity = entityManager.getEntity(block.guid);
                 if (entity) {
                     glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
-                    entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
+                    float oCanonical = core::coords::serverToCanonicalYaw(block.orientation);
+                    entity->setPosition(pos.x, pos.y, pos.z, oCanonical);
                     LOG_DEBUG("Updated entity position: 0x", std::hex, block.guid, std::dec);
 
                     if (block.guid != playerGuid &&
@@ -3117,8 +3124,9 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             glm::vec3 localOffset = core::coords::serverToCanonical(
                                 glm::vec3(block.transportX, block.transportY, block.transportZ));
                             const bool hasLocalOrientation = (block.updateFlags & 0x0020) != 0; // UPDATEFLAG_LIVING
+                            float localOriCanonical = core::coords::normalizeAngleRad(-block.transportO);
                             setTransportAttachment(block.guid, entity->getType(), block.transportGuid,
-                                                   localOffset, hasLocalOrientation, block.transportO);
+                                                   localOffset, hasLocalOrientation, localOriCanonical);
                             if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
                                 glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
                                 entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
@@ -3129,7 +3137,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     }
 
                     if (block.guid == playerGuid) {
-                        movementInfo.orientation = block.orientation;
+                        movementInfo.orientation = oCanonical;
 
                         // Track player-on-transport state from MOVEMENT updates
                         if (block.onTransport) {
@@ -3139,7 +3147,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             playerTransportOffset_ = core::coords::serverToCanonical(serverOffset);
                             if (transportManager_ && transportManager_->getTransport(playerTransportGuid_)) {
                                 glm::vec3 composed = transportManager_->getPlayerWorldPosition(playerTransportGuid_, playerTransportOffset_);
-                                entity->setPosition(composed.x, composed.y, composed.z, block.orientation);
+                                entity->setPosition(composed.x, composed.y, composed.z, oCanonical);
                                 movementInfo.x = composed.x;
                                 movementInfo.y = composed.y;
                                 movementInfo.z = composed.z;
@@ -3163,7 +3171,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     // Fire transport move callback if this is a known transport
                     if (transportGuids_.count(block.guid) && transportMoveCallback_) {
                         serverUpdatedTransportGuids_.insert(block.guid);
-                        transportMoveCallback_(block.guid, pos.x, pos.y, pos.z, block.orientation);
+                        transportMoveCallback_(block.guid, pos.x, pos.y, pos.z, oCanonical);
                     }
                     // Fire move callback for non-transport gameobjects.
                     if (entity->getType() == ObjectType::GAMEOBJECT &&
@@ -5081,7 +5089,7 @@ void GameHandler::handleMonsterMove(network::Packet& packet) {
             float orientation = entity->getOrientation();
             if (data.moveType == 4) {
                 // FacingAngle - server specifies exact angle
-                orientation = data.facingAngle;
+                orientation = core::coords::serverToCanonicalYaw(data.facingAngle);
             } else if (data.moveType == 3) {
                 // FacingTarget - face toward the target entity
                 auto target = entityManager.getEntity(data.facingTarget);
@@ -5134,7 +5142,7 @@ void GameHandler::handleMonsterMoveTransport(network::Packet& packet) {
     uint8_t unk = packet.readUInt8();  // Unknown byte (usually 0)
     uint64_t transportGuid = packet.readUInt64();
 
-    // Transport-local coordinates
+    // Transport-local coordinates (server space)
     float localX = packet.readFloat();
     float localY = packet.readFloat();
     float localZ = packet.readFloat();
@@ -5152,9 +5160,9 @@ void GameHandler::handleMonsterMoveTransport(network::Packet& packet) {
 
     if (transportManager_) {
         // Use TransportManager to compose world position from local offset
-        glm::vec3 localPos(localX, localY, localZ);
-        setTransportAttachment(moverGuid, entity->getType(), transportGuid, localPos, false, 0.0f);
-        glm::vec3 worldPos = transportManager_->getPlayerWorldPosition(transportGuid, localPos);
+        glm::vec3 localPosCanonical = core::coords::serverToCanonical(glm::vec3(localX, localY, localZ));
+        setTransportAttachment(moverGuid, entity->getType(), transportGuid, localPosCanonical, false, 0.0f);
+        glm::vec3 worldPos = transportManager_->getPlayerWorldPosition(transportGuid, localPosCanonical);
 
         entity->setPosition(worldPos.x, worldPos.y, worldPos.z, entity->getOrientation());
 
@@ -6601,7 +6609,7 @@ void GameHandler::handleTeleportAck(network::Packet& packet) {
     movementInfo.x = canonical.x;
     movementInfo.y = canonical.y;
     movementInfo.z = canonical.z;
-    movementInfo.orientation = orientation;
+    movementInfo.orientation = core::coords::serverToCanonicalYaw(orientation);
     movementInfo.flags = 0;
 
     // Send the ack back to the server
@@ -6661,7 +6669,7 @@ void GameHandler::handleNewWorld(network::Packet& packet) {
     movementInfo.x = canonical.x;
     movementInfo.y = canonical.y;
     movementInfo.z = canonical.z;
-    movementInfo.orientation = orientation;
+    movementInfo.orientation = core::coords::serverToCanonicalYaw(orientation);
     movementInfo.flags = 0;
     movementInfo.flags2 = 0;
     resurrectPending_ = false;

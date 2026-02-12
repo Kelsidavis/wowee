@@ -9,6 +9,8 @@ namespace wowee::core::coords {
 
 inline constexpr float TILE_SIZE = 533.33333f;
 inline constexpr float ZEROPOINT = 32.0f * TILE_SIZE;
+inline constexpr float PI = 3.14159265358979323846f;
+inline constexpr float TWO_PI = 6.28318530717958647692f;
 
 // ---- Canonical WoW world coordinate system (per-map) ----
 //   +X = North,  +Y = West,  +Z = Up (height)
@@ -40,6 +42,28 @@ inline glm::vec3 serverToCanonical(const glm::vec3& server) {
 // Convert canonical WoW coordinates → server/wire coordinates.
 inline glm::vec3 canonicalToServer(const glm::vec3& canonical) {
     return glm::vec3(canonical.y, canonical.x, canonical.z);
+}
+
+// Normalize angle to [-PI, PI].
+inline float normalizeAngleRad(float a) {
+    while (a > PI) a -= TWO_PI;
+    while (a < -PI) a += TWO_PI;
+    return a;
+}
+
+// Convert server/wire yaw (radians) → canonical yaw (radians).
+//
+// Under server<->canonical X/Y swap:
+//   dir_s = (cos(s), sin(s))
+//   dir_c = swap(dir_s) = (sin(s), cos(s)) => c = PI/2 - s
+inline float serverToCanonicalYaw(float serverYaw) {
+    return normalizeAngleRad((PI * 0.5f) - serverYaw);
+}
+
+// Convert canonical yaw (radians) → server/wire yaw (radians).
+// This mapping is its own inverse.
+inline float canonicalToServerYaw(float canonicalYaw) {
+    return normalizeAngleRad((PI * 0.5f) - canonicalYaw);
 }
 
 // Convert between canonical WoW and engine rendering coordinates (just swap X/Y).

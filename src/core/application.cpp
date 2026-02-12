@@ -685,8 +685,12 @@ void Application::update(float deltaTime) {
 
                     // Sync orientation: camera yaw (degrees) → WoW orientation (radians)
                     float yawDeg = renderer->getCharacterYaw();
-                    float wowOrientation = glm::radians(yawDeg - 90.0f);
-                    gameHandler->setOrientation(wowOrientation);
+                    // Keep all game-side orientation in canonical space.
+                    // We historically sent serverYaw = radians(yawDeg - 90). With the new
+                    // canonical<->server mapping (serverYaw = PI/2 - canonicalYaw), the
+                    // equivalent canonical yaw is radians(180 - yawDeg).
+                    float canonicalYaw = core::coords::normalizeAngleRad(glm::radians(180.0f - yawDeg));
+                    gameHandler->setOrientation(canonicalYaw);
                 }
             }
 
