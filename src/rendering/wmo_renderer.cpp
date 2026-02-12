@@ -675,6 +675,11 @@ void WMORenderer::removeInstance(uint32_t instanceId) {
     auto it = std::find_if(instances.begin(), instances.end(),
                           [instanceId](const WMOInstance& inst) { return inst.id == instanceId; });
     if (it != instances.end()) {
+        if (m2Renderer_) {
+            for (const auto& doodad : it->doodads) {
+                m2Renderer_->removeInstance(doodad.m2InstanceId);
+            }
+        }
         instances.erase(it);
         rebuildSpatialIndex();
         core::Logger::getInstance().debug("Removed WMO instance ", instanceId);
@@ -687,6 +692,17 @@ void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
     }
 
     std::unordered_set<uint32_t> toRemove(instanceIds.begin(), instanceIds.end());
+    if (m2Renderer_) {
+        for (const auto& inst : instances) {
+            if (toRemove.find(inst.id) == toRemove.end()) {
+                continue;
+            }
+            for (const auto& doodad : inst.doodads) {
+                m2Renderer_->removeInstance(doodad.m2InstanceId);
+            }
+        }
+    }
+
     const size_t oldSize = instances.size();
     instances.erase(std::remove_if(instances.begin(), instances.end(),
                    [&toRemove](const WMOInstance& inst) {
@@ -702,6 +718,13 @@ void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
 }
 
 void WMORenderer::clearInstances() {
+    if (m2Renderer_) {
+        for (const auto& inst : instances) {
+            for (const auto& doodad : inst.doodads) {
+                m2Renderer_->removeInstance(doodad.m2InstanceId);
+            }
+        }
+    }
     instances.clear();
     spatialGrid.clear();
     instanceIndexById.clear();

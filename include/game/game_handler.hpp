@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <map>
+#include <optional>
 
 namespace wowee::game {
     class TransportManager;
@@ -468,6 +469,11 @@ public:
     using GameObjectSpawnCallback = std::function<void(uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation)>;
     void setGameObjectSpawnCallback(GameObjectSpawnCallback cb) { gameObjectSpawnCallback_ = std::move(cb); }
 
+    // GameObject move callback (online mode - triggered when gameobject position updates)
+    // Parameters: guid, x, y, z (canonical), orientation
+    using GameObjectMoveCallback = std::function<void(uint64_t guid, float x, float y, float z, float orientation)>;
+    void setGameObjectMoveCallback(GameObjectMoveCallback cb) { gameObjectMoveCallback_ = std::move(cb); }
+
     // GameObject despawn callback (online mode - triggered when gameobject leaves view)
     using GameObjectDespawnCallback = std::function<void(uint64_t guid)>;
     void setGameObjectDespawnCallback(GameObjectDespawnCallback cb) { gameObjectDespawnCallback_ = std::move(cb); }
@@ -504,6 +510,7 @@ public:
 
     // Check if a GUID is a known transport
     bool isTransportGuid(uint64_t guid) const { return transportGuids_.count(guid) > 0; }
+    bool hasServerTransportUpdate(uint64_t guid) const { return serverUpdatedTransportGuids_.count(guid) > 0; }
     glm::vec3 getComposedWorldPosition();  // Compose transport transform * local offset
     TransportManager* getTransportManager() { return transportManager_.get(); }
     void setPlayerOnTransport(uint64_t transportGuid, const glm::vec3& localOffset) {
@@ -886,6 +893,11 @@ private:
      * Fail connection with reason
      */
     void fail(const std::string& reason);
+    void updateAttachedTransportChildren(float deltaTime);
+    void setTransportAttachment(uint64_t childGuid, ObjectType type, uint64_t transportGuid,
+                                const glm::vec3& localOffset, bool hasLocalOrientation,
+                                float localOrientation);
+    void clearTransportAttachment(uint64_t childGuid);
 
     // Network
     std::unique_ptr<network::WorldSocket> socket;
@@ -1004,10 +1016,20 @@ private:
     TransportMoveCallback transportMoveCallback_;
     TransportSpawnCallback transportSpawnCallback_;
     GameObjectSpawnCallback gameObjectSpawnCallback_;
+    GameObjectMoveCallback gameObjectMoveCallback_;
     GameObjectDespawnCallback gameObjectDespawnCallback_;
 
     // Transport tracking
+    struct TransportAttachment {
+        ObjectType type = ObjectType::OBJECT;
+        uint64_t transportGuid = 0;
+        glm::vec3 localOffset{0.0f};
+        float localOrientation = 0.0f;
+        bool hasLocalOrientation = false;
+    };
+    std::unordered_map<uint64_t, TransportAttachment> transportAttachments_;
     std::unordered_set<uint64_t> transportGuids_;  // GUIDs of known transport GameObjects
+    std::unordered_set<uint64_t> serverUpdatedTransportGuids_;
     uint64_t playerTransportGuid_ = 0;             // Transport the player is riding (0 = none)
     glm::vec3 playerTransportOffset_ = glm::vec3(0.0f); // Player offset on transport
     std::unique_ptr<TransportManager> transportManager_;  // Transport movement manager

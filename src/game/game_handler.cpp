@@ -8,6 +8,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
+#include <glm/gtx/quaternion.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -114,6 +115,8 @@ void GameHandler::disconnect() {
     activeCharacterGuid_ = 0;
     playerNameCache.clear();
     pendingNameQueries.clear();
+    transportAttachments_.clear();
+    serverUpdatedTransportGuids_.clear();
     setState(WorldState::DISCONNECTED);
     LOG_INFO("Disconnected from world server");
 }
@@ -341,6 +344,7 @@ void GameHandler::update(float deltaTime) {
         // Update transport manager
         if (transportManager_) {
             transportManager_->update(deltaTime);
+            updateAttachedTransportChildren(deltaTime);
         }
 
         // Distance check timing
@@ -1829,6 +1833,14 @@ void GameHandler::sendMovement(Opcode opcode) {
 
     // Add transport data if player is on a transport
     if (isOnTransport()) {
+        // Keep authoritative world position synchronized to parent transport transform
+        // so heartbeats/corrections don't drag the passenger through geometry.
+        if (transportManager_) {
+            glm::vec3 composed = transportManager_->getPlayerWorldPosition(playerTransportGuid_, playerTransportOffset_);
+            movementInfo.x = composed.x;
+            movementInfo.y = composed.y;
+            movementInfo.z = composed.z;
+        }
         movementInfo.flags |= static_cast<uint32_t>(MovementFlags::ONTRANSPORT);
         movementInfo.transportGuid = playerTransportGuid_;
         movementInfo.transportX = playerTransportOffset_.x;
@@ -1841,8 +1853,12 @@ void GameHandler::sendMovement(Opcode opcode) {
         // ONTRANSPORT expects local orientation (player yaw relative to transport yaw).
         float transportYaw = 0.0f;
         if (transportManager_) {
-            if (auto* tr = transportManager_->getTransport(playerTransportGuid_); tr && tr->hasServerYaw) {
-                transportYaw = tr->serverYaw;
+            if (auto* tr = transportManager_->getTransport(playerTransportGuid_); tr) {
+                if (tr->hasServerYaw) {
+                    transportYaw = tr->serverYaw;
+                } else {
+                    transportYaw = glm::eulerAngles(tr->rotation).z;
+                }
             }
         }
 
@@ -1969,8 +1985,11 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
         if (entityManager.hasEntity(guid)) {
             const bool isKnownTransport = transportGuids_.count(guid) > 0;
             if (isKnownTransport) {
-                LOG_INFO("Ignoring out-of-range removal for transport: 0x", std::hex, guid, std::dec);
-                continue;
+                if (playerTransportGuid_ == guid) {
+                    LOG_INFO("Keeping transport in-range while player is aboard: 0x", std::hex, guid, std::dec);
+                    continue;
+                }
+                LOG_INFO("Processing out-of-range removal for transport: 0x", std::hex, guid, std::dec);
             }
 
             LOG_DEBUG("Entity went out of range: 0x", std::hex, guid, std::dec);
@@ -1984,6 +2003,8 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                 }
             }
             transportGuids_.erase(guid);
+            serverUpdatedTransportGuids_.erase(guid);
+            clearTransportAttachment(guid);
             if (playerTransportGuid_ == guid) {
                 playerTransportGuid_ = 0;
                 playerTransportOffset_ = glm::vec3(0.0f);
@@ -2034,6 +2055,13 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             // Convert transport offset from server → canonical coordinates
                             glm::vec3 serverOffset(block.transportX, block.transportY, block.transportZ);
                             playerTransportOffset_ = core::coords::serverToCanonical(serverOffset);
+                            if (transportManager_ && transportManager_->getTransport(playerTransportGuid_)) {
+                                glm::vec3 composed = transportManager_->getPlayerWorldPosition(playerTransportGuid_, playerTransportOffset_);
+                                entity->setPosition(composed.x, composed.y, composed.z, block.orientation);
+                                movementInfo.x = composed.x;
+                                movementInfo.y = composed.y;
+                                movementInfo.z = composed.z;
+                            }
                             LOG_INFO("Player on transport: 0x", std::hex, playerTransportGuid_, std::dec,
                                      " offset=(", playerTransportOffset_.x, ", ", playerTransportOffset_.y, ", ", playerTransportOffset_.z, ")");
                         } else {
@@ -2045,18 +2073,21 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                         }
                     }
 
-                    // GameObjects with UPDATEFLAG_POSITION carry a parent transport GUID and local offset.
-                    // Use that to drive parent transport motion and compose correct child world position.
-                    if (block.objectType == ObjectType::GAMEOBJECT &&
-                        (block.updateFlags & 0x0100) &&
-                        block.onTransport &&
-                        block.transportGuid != 0) {
-                        glm::vec3 localOffset = core::coords::serverToCanonical(
-                            glm::vec3(block.transportX, block.transportY, block.transportZ));
-
-                        if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
-                            glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
-                            entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
+                    // Track transport-relative children so they follow parent transport motion.
+                    if (block.guid != playerGuid &&
+                        (block.objectType == ObjectType::UNIT || block.objectType == ObjectType::GAMEOBJECT)) {
+                        if (block.onTransport && block.transportGuid != 0) {
+                            glm::vec3 localOffset = core::coords::serverToCanonical(
+                                glm::vec3(block.transportX, block.transportY, block.transportZ));
+                            const bool hasLocalOrientation = (block.updateFlags & 0x0020) != 0; // UPDATEFLAG_LIVING
+                            setTransportAttachment(block.guid, block.objectType, block.transportGuid,
+                                                   localOffset, hasLocalOrientation, block.transportO);
+                            if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
+                                glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
+                                entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
+                            }
+                        } else {
+                            clearTransportAttachment(block.guid);
                         }
                     }
                 }
@@ -2200,6 +2231,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     }
                     // Fire transport move callback for transports (position update on re-creation)
                     if (transportGuids_.count(block.guid) && transportMoveCallback_) {
+                        serverUpdatedTransportGuids_.insert(block.guid);
                         transportMoveCallback_(block.guid,
                             go->getX(), go->getY(), go->getZ(), go->getOrientation());
                     }
@@ -2360,6 +2392,28 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                 // Update existing entity fields
                 auto entity = entityManager.getEntity(block.guid);
                 if (entity) {
+                    if (block.hasMovement) {
+                        glm::vec3 pos = core::coords::serverToCanonical(glm::vec3(block.x, block.y, block.z));
+                        entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
+
+                        if (block.guid != playerGuid &&
+                            (entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::GAMEOBJECT)) {
+                            if (block.onTransport && block.transportGuid != 0) {
+                                glm::vec3 localOffset = core::coords::serverToCanonical(
+                                    glm::vec3(block.transportX, block.transportY, block.transportZ));
+                                const bool hasLocalOrientation = (block.updateFlags & 0x0020) != 0; // UPDATEFLAG_LIVING
+                                setTransportAttachment(block.guid, entity->getType(), block.transportGuid,
+                                                       localOffset, hasLocalOrientation, block.transportO);
+                                if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
+                                    glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
+                                    entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
+                                }
+                            } else {
+                                clearTransportAttachment(block.guid);
+                            }
+                        }
+                    }
+
                     for (const auto& field : block.fields) {
                         entity->setField(field.first, field.second);
                     }
@@ -2550,6 +2604,16 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                         }
                         rebuildOnlineInventory();
                     }
+                    if (block.hasMovement && entity->getType() == ObjectType::GAMEOBJECT) {
+                        if (transportGuids_.count(block.guid) && transportMoveCallback_) {
+                            serverUpdatedTransportGuids_.insert(block.guid);
+                            transportMoveCallback_(block.guid, entity->getX(), entity->getY(),
+                                                   entity->getZ(), entity->getOrientation());
+                        } else if (gameObjectMoveCallback_) {
+                            gameObjectMoveCallback_(block.guid, entity->getX(), entity->getY(),
+                                                    entity->getZ(), entity->getOrientation());
+                        }
+                    }
 
                     LOG_DEBUG("Updated entity fields: 0x", std::hex, block.guid, std::dec);
                 } else {
@@ -2571,25 +2635,24 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     entity->setPosition(pos.x, pos.y, pos.z, block.orientation);
                     LOG_DEBUG("Updated entity position: 0x", std::hex, block.guid, std::dec);
 
-                    // Some GameObject movement blocks are transport-relative: the packet carries
-                    // parent transport GUID + local child offset in UPDATEFLAG_POSITION.
-                    if (entity->getType() == ObjectType::GAMEOBJECT &&
-                        (block.updateFlags & 0x0100) &&
-                        block.onTransport &&
-                        block.transportGuid != 0) {
-                        glm::vec3 localOffset = core::coords::serverToCanonical(
-                            glm::vec3(block.transportX, block.transportY, block.transportZ));
-
-                        if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
-                            glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
-                            entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
+                    if (block.guid != playerGuid &&
+                        (entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::GAMEOBJECT)) {
+                        if (block.onTransport && block.transportGuid != 0) {
+                            glm::vec3 localOffset = core::coords::serverToCanonical(
+                                glm::vec3(block.transportX, block.transportY, block.transportZ));
+                            const bool hasLocalOrientation = (block.updateFlags & 0x0020) != 0; // UPDATEFLAG_LIVING
+                            setTransportAttachment(block.guid, entity->getType(), block.transportGuid,
+                                                   localOffset, hasLocalOrientation, block.transportO);
+                            if (transportManager_ && transportManager_->getTransport(block.transportGuid)) {
+                                glm::vec3 composed = transportManager_->getPlayerWorldPosition(block.transportGuid, localOffset);
+                                entity->setPosition(composed.x, composed.y, composed.z, entity->getOrientation());
+                            }
+                        } else {
+                            clearTransportAttachment(block.guid);
                         }
                     }
 
                     if (block.guid == playerGuid) {
-                        movementInfo.x = pos.x;
-                        movementInfo.y = pos.y;
-                        movementInfo.z = pos.z;
                         movementInfo.orientation = block.orientation;
 
                         // Track player-on-transport state from MOVEMENT updates
@@ -2598,8 +2661,22 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             // Convert transport offset from server → canonical coordinates
                             glm::vec3 serverOffset(block.transportX, block.transportY, block.transportZ);
                             playerTransportOffset_ = core::coords::serverToCanonical(serverOffset);
+                            if (transportManager_ && transportManager_->getTransport(playerTransportGuid_)) {
+                                glm::vec3 composed = transportManager_->getPlayerWorldPosition(playerTransportGuid_, playerTransportOffset_);
+                                entity->setPosition(composed.x, composed.y, composed.z, block.orientation);
+                                movementInfo.x = composed.x;
+                                movementInfo.y = composed.y;
+                                movementInfo.z = composed.z;
+                            } else {
+                                movementInfo.x = pos.x;
+                                movementInfo.y = pos.y;
+                                movementInfo.z = pos.z;
+                            }
                             LOG_INFO("Player on transport (MOVEMENT): 0x", std::hex, playerTransportGuid_, std::dec);
                         } else {
+                            movementInfo.x = pos.x;
+                            movementInfo.y = pos.y;
+                            movementInfo.z = pos.z;
                             if (playerTransportGuid_ != 0) {
                                 LOG_INFO("Player left transport (MOVEMENT)");
                                 playerTransportGuid_ = 0;
@@ -2610,7 +2687,15 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
 
                     // Fire transport move callback if this is a known transport
                     if (transportGuids_.count(block.guid) && transportMoveCallback_) {
+                        serverUpdatedTransportGuids_.insert(block.guid);
                         transportMoveCallback_(block.guid, pos.x, pos.y, pos.z, block.orientation);
+                    }
+                    // Fire move callback for non-transport gameobjects.
+                    if (entity->getType() == ObjectType::GAMEOBJECT &&
+                        transportGuids_.count(block.guid) == 0 &&
+                        gameObjectMoveCallback_) {
+                        gameObjectMoveCallback_(block.guid, entity->getX(), entity->getY(),
+                                                entity->getZ(), entity->getOrientation());
                     }
                 } else {
                     LOG_WARNING("MOVEMENT update for unknown entity: 0x", std::hex, block.guid, std::dec);
@@ -2687,6 +2772,7 @@ void GameHandler::handleDestroyObject(network::Packet& packet) {
     // Remove entity
     if (entityManager.hasEntity(data.guid)) {
         if (transportGuids_.count(data.guid) > 0) {
+            serverUpdatedTransportGuids_.erase(data.guid);
             LOG_INFO("Ignoring destroy for transport entity: 0x", std::hex, data.guid, std::dec);
             return;
         }
@@ -2699,6 +2785,7 @@ void GameHandler::handleDestroyObject(network::Packet& packet) {
                 gameObjectDespawnCallback_(data.guid);
             }
         }
+        clearTransportAttachment(data.guid);
         entityManager.removeEntity(data.guid);
         LOG_INFO("Destroyed entity: 0x", std::hex, data.guid, std::dec,
                  " (", (data.isDeath ? "death" : "despawn"), ")");
@@ -4576,11 +4663,16 @@ void GameHandler::handleMonsterMoveTransport(network::Packet& packet) {
     if (transportManager_) {
         // Use TransportManager to compose world position from local offset
         glm::vec3 localPos(localX, localY, localZ);
+        setTransportAttachment(moverGuid, entity->getType(), transportGuid, localPos, false, 0.0f);
         glm::vec3 worldPos = transportManager_->getPlayerWorldPosition(transportGuid, localPos);
 
         entity->setPosition(worldPos.x, worldPos.y, worldPos.z, entity->getOrientation());
 
         LOG_INFO("  Composed NPC world position: (", worldPos.x, ", ", worldPos.y, ", ", worldPos.z, ")");
+
+        if (entity->getType() == ObjectType::UNIT && creatureMoveCallback_) {
+            creatureMoveCallback_(moverGuid, worldPos.x, worldPos.y, worldPos.z, 0);
+        }
     } else {
         LOG_WARNING("  TransportManager not available for NPC position composition");
     }
@@ -7267,6 +7359,86 @@ void GameHandler::loadCharacterConfig() {
             actionBar[i].id = ids[i];
         }
         LOG_INFO("Character config loaded from ", path);
+    }
+}
+
+void GameHandler::setTransportAttachment(uint64_t childGuid, ObjectType type, uint64_t transportGuid,
+                                         const glm::vec3& localOffset, bool hasLocalOrientation,
+                                         float localOrientation) {
+    if (childGuid == 0 || transportGuid == 0) {
+        return;
+    }
+
+    TransportAttachment& attachment = transportAttachments_[childGuid];
+    attachment.type = type;
+    attachment.transportGuid = transportGuid;
+    attachment.localOffset = localOffset;
+    attachment.hasLocalOrientation = hasLocalOrientation;
+    attachment.localOrientation = localOrientation;
+}
+
+void GameHandler::clearTransportAttachment(uint64_t childGuid) {
+    if (childGuid == 0) {
+        return;
+    }
+    transportAttachments_.erase(childGuid);
+}
+
+void GameHandler::updateAttachedTransportChildren(float /*deltaTime*/) {
+    if (!transportManager_ || transportAttachments_.empty()) {
+        return;
+    }
+
+    constexpr float kPosEpsilonSq = 0.0001f;
+    constexpr float kOriEpsilon = 0.001f;
+    std::vector<uint64_t> stale;
+    stale.reserve(8);
+
+    for (const auto& [childGuid, attachment] : transportAttachments_) {
+        auto entity = entityManager.getEntity(childGuid);
+        if (!entity) {
+            stale.push_back(childGuid);
+            continue;
+        }
+
+        ActiveTransport* transport = transportManager_->getTransport(attachment.transportGuid);
+        if (!transport) {
+            continue;
+        }
+
+        glm::vec3 composed = transportManager_->getPlayerWorldPosition(
+            attachment.transportGuid, attachment.localOffset);
+
+        float composedOrientation = entity->getOrientation();
+        if (attachment.hasLocalOrientation) {
+            float baseYaw = transport->hasServerYaw ? transport->serverYaw : 0.0f;
+            composedOrientation = baseYaw + attachment.localOrientation;
+        }
+
+        glm::vec3 oldPos(entity->getX(), entity->getY(), entity->getZ());
+        float oldOrientation = entity->getOrientation();
+        glm::vec3 delta = composed - oldPos;
+        const bool positionChanged = glm::dot(delta, delta) > kPosEpsilonSq;
+        const bool orientationChanged = std::abs(composedOrientation - oldOrientation) > kOriEpsilon;
+        if (!positionChanged && !orientationChanged) {
+            continue;
+        }
+
+        entity->setPosition(composed.x, composed.y, composed.z, composedOrientation);
+
+        if (attachment.type == ObjectType::UNIT) {
+            if (creatureMoveCallback_) {
+                creatureMoveCallback_(childGuid, composed.x, composed.y, composed.z, 0);
+            }
+        } else if (attachment.type == ObjectType::GAMEOBJECT) {
+            if (gameObjectMoveCallback_) {
+                gameObjectMoveCallback_(childGuid, composed.x, composed.y, composed.z, composedOrientation);
+            }
+        }
+    }
+
+    for (uint64_t guid : stale) {
+        transportAttachments_.erase(guid);
     }
 }
 

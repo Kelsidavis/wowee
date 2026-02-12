@@ -430,6 +430,7 @@ private:
     // Animation update buffers (avoid per-frame allocation)
     std::vector<size_t> boneWorkIndices_;        // Reused each frame
     std::vector<std::future<void>> animFutures_; // Reused each frame
+    bool spatialIndexDirty_ = false;
 
     // Smoke particle system
     std::vector<SmokeParticle> smokeParticles;

@@ -1405,6 +1405,10 @@ static void computeBoneMatrices(const M2ModelGPU& model, M2Instance& instance) {
 }
 
 void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::mat4& viewProjection) {
+    if (spatialIndexDirty_) {
+        rebuildSpatialIndex();
+    }
+
     float dtMs = deltaTime * 1000.0f;
 
     // Cache camera state for frustum-culling bone computation
@@ -2485,7 +2489,7 @@ void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& posit
         getTightCollisionBounds(modelIt->second, localMin, localMax);
         transformAABB(inst.modelMatrix, localMin, localMax, inst.worldBoundsMin, inst.worldBoundsMax);
     }
-    rebuildSpatialIndex();
+    spatialIndexDirty_ = true;
 }
 
 void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
@@ -2507,7 +2511,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
         getTightCollisionBounds(modelIt->second, localMin, localMax);
         transformAABB(inst.modelMatrix, localMin, localMax, inst.worldBoundsMin, inst.worldBoundsMax);
     }
-    rebuildSpatialIndex();
+    spatialIndexDirty_ = true;
 }
 
 void M2Renderer::removeInstance(uint32_t instanceId) {
@@ -2595,6 +2599,7 @@ void M2Renderer::rebuildSpatialIndex() {
             }
         }
     }
+    spatialIndexDirty_ = false;
 }
 
 void M2Renderer::gatherCandidates(const glm::vec3& queryMin, const glm::vec3& queryMax,

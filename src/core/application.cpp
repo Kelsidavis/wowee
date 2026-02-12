@@ -498,13 +498,15 @@ void Application::update(float deltaTime) {
                           (gameHandler->isOnTaxiFlight() ||
                            gameHandler->isTaxiMountActive() ||
                            gameHandler->isTaxiActivationPending());
+            bool onTransportNow = gameHandler && gameHandler->isOnTransport();
             if (worldEntryMovementGraceTimer_ > 0.0f) {
                 worldEntryMovementGraceTimer_ -= deltaTime;
             }
             if (renderer && renderer->getCameraController()) {
-                renderer->getCameraController()->setExternalFollow(onTaxi);
-                renderer->getCameraController()->setExternalMoving(onTaxi);
-                if (onTaxi) {
+                const bool externallyDrivenMotion = onTaxi || onTransportNow;
+                renderer->getCameraController()->setExternalFollow(externallyDrivenMotion);
+                renderer->getCameraController()->setExternalMoving(externallyDrivenMotion);
+                if (externallyDrivenMotion) {
                     // Drop any stale local movement toggles while server drives taxi motion.
                     renderer->getCameraController()->clearMovementInputs();
                     taxiLandingClampTimer_ = 0.0f;
@@ -618,6 +620,8 @@ void Application::update(float deltaTime) {
                     glm::vec3 canonical = gameHandler->getComposedWorldPosition();
                     glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
                     renderer->getCharacterPosition() = renderPos;
+                    // Keep movementInfo in lockstep with composed transport world position.
+                    gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
                     // Update camera follow target
                     if (renderer->getCameraController()) {
                         glm::vec3* followTarget = renderer->getCameraController()->getFollowTargetMutable();
@@ -1117,6 +1121,30 @@ void Application::setupUICallbacks() {
         }
     });
 
+    gameHandler->setGameObjectMoveCallback([this](uint64_t guid, float x, float y, float z, float orientation) {
+        auto it = gameObjectInstances_.find(guid);
+        if (it == gameObjectInstances_.end() || !renderer) {
+            return;
+        }
+        glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
+        auto& info = it->second;
+        if (info.isWmo) {
+            if (auto* wr = renderer->getWMORenderer()) {
+                glm::mat4 transform(1.0f);
+                transform = glm::translate(transform, renderPos);
+                transform = glm::rotate(transform, orientation, glm::vec3(0, 0, 1));
+                wr->setInstanceTransform(info.instanceId, transform);
+            }
+        } else {
+            if (auto* mr = renderer->getM2Renderer()) {
+                glm::mat4 transform(1.0f);
+                transform = glm::translate(transform, renderPos);
+                transform = glm::rotate(transform, orientation, glm::vec3(0, 0, 1));
+                mr->setInstanceTransform(info.instanceId, transform);
+            }
+        }
+    });
+
     // Transport spawn callback (online mode) - register transports with TransportManager
     gameHandler->setTransportSpawnCallback([this](uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation) {
         auto* transportManager = gameHandler->getTransportManager();
@@ -1136,10 +1164,12 @@ void Application::setupUICallbacks() {
 
         // TransportAnimation.dbc is indexed by GameObject entry
         uint32_t pathId = entry;
+        const bool preferServerData = gameHandler && gameHandler->hasServerTransportUpdate(guid);
 
         bool clientAnim = transportManager->isClientSideAnimation();
         LOG_INFO("Transport spawn callback: clientAnimation=", clientAnim,
-                 " guid=0x", std::hex, guid, std::dec, " entry=", entry, " pathId=", pathId);
+                 " guid=0x", std::hex, guid, std::dec, " entry=", entry, " pathId=", pathId,
+                 " preferServer=", preferServerData);
 
         // Coordinates are already canonical (converted in game_handler.cpp when entity was created)
         glm::vec3 canonicalSpawnPos(x, y, z);
@@ -1156,7 +1186,25 @@ void Application::setupUICallbacks() {
             hasUsablePath = transportManager->hasUsableMovingPathForEntry(entry, 25.0f);
         }
 
-        if (!hasUsablePath) {
+        if (preferServerData) {
+            // Server-first mode: keep authoritative server snapshots, but still choose a
+            // deterministic DBC path (entry/remap) as fallback if updates go stale.
+            if (!hasUsablePath) {
+                uint32_t remappedPath = transportManager->pickFallbackMovingPath(entry, displayId);
+                if (remappedPath != 0) {
+                    pathId = remappedPath;
+                    LOG_INFO("Server-first transport registration: fallback path ", pathId,
+                             " for entry ", entry, " displayId=", displayId);
+                } else {
+                    std::vector<glm::vec3> path = { canonicalSpawnPos };
+                    transportManager->loadPathFromNodes(pathId, path, false, 0.0f);
+                    LOG_INFO("Server-first transport registration: stationary fallback for GUID 0x",
+                             std::hex, guid, std::dec, " entry=", entry);
+                }
+            } else {
+                LOG_INFO("Server-first transport registration: using entry DBC path for entry ", entry);
+            }
+        } else if (!hasUsablePath) {
             uint32_t inferredPath = transportManager->inferMovingPathForSpawn(canonicalSpawnPos);
             if (inferredPath != 0) {
                 pathId = inferredPath;
@@ -1220,6 +1268,7 @@ void Application::setupUICallbacks() {
 
                     // TransportAnimation.dbc is indexed by GameObject entry
                     uint32_t pathId = entry;
+                    const bool preferServerData = gameHandler && gameHandler->hasServerTransportUpdate(guid);
 
                     // Coordinates are already canonical (converted in game_handler.cpp)
                     glm::vec3 canonicalSpawnPos(x, y, z);
@@ -1234,7 +1283,25 @@ void Application::setupUICallbacks() {
                         hasUsablePath = transportManager->hasUsableMovingPathForEntry(entry, 25.0f);
                     }
 
-                    if (!hasUsablePath) {
+                    if (preferServerData) {
+                        if (!hasUsablePath) {
+                            uint32_t remappedPath = transportManager->pickFallbackMovingPath(entry, displayId);
+                            if (remappedPath != 0) {
+                                pathId = remappedPath;
+                                LOG_INFO("Auto-spawned transport in server-first mode with fallback path: entry=", entry,
+                                         " remappedPath=", pathId, " displayId=", displayId,
+                                         " wmoInstance=", wmoInstanceId);
+                            } else {
+                                std::vector<glm::vec3> path = { canonicalSpawnPos };
+                                transportManager->loadPathFromNodes(pathId, path, false, 0.0f);
+                                LOG_INFO("Auto-spawned transport in server-first mode (stationary fallback): entry=", entry,
+                                         " displayId=", displayId, " wmoInstance=", wmoInstanceId);
+                            }
+                        } else {
+                            LOG_INFO("Auto-spawned transport in server-first mode with entry DBC path: entry=", entry,
+                                     " displayId=", displayId, " wmoInstance=", wmoInstanceId);
+                        }
+                    } else if (!hasUsablePath) {
                         uint32_t inferredPath = transportManager->inferMovingPathForSpawn(canonicalSpawnPos);
                         if (inferredPath != 0) {
                             pathId = inferredPath;
@@ -3150,11 +3217,19 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t 
                  " pos=(", x, ", ", y, ", ", z, ")");
         if (renderer) {
             if (info.isWmo) {
-                if (auto* wr = renderer->getWMORenderer())
-                    wr->setInstancePosition(info.instanceId, renderPos);
+                if (auto* wr = renderer->getWMORenderer()) {
+                    glm::mat4 transform(1.0f);
+                    transform = glm::translate(transform, renderPos);
+                    transform = glm::rotate(transform, orientation, glm::vec3(0, 0, 1));
+                    wr->setInstanceTransform(info.instanceId, transform);
+                }
             } else {
-                if (auto* mr = renderer->getM2Renderer())
-                    mr->setInstancePosition(info.instanceId, renderPos);
+                if (auto* mr = renderer->getM2Renderer()) {
+                    glm::mat4 transform(1.0f);
+                    transform = glm::translate(transform, renderPos);
+                    transform = glm::rotate(transform, orientation, glm::vec3(0, 0, 1));
+                    mr->setInstanceTransform(info.instanceId, transform);
+                }
             }
         }
         return;
@@ -3170,9 +3245,9 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t 
         // DisplayIds 455, 462 = Elevators/Ships → try standard ship
         // DisplayIds 807, 808 = Zeppelins
         // DisplayIds 2454, 1587 = Special ships/icebreakers
-        if (displayId == 455 || displayId == 462 || displayId == 20808 || displayId == 176231 || displayId == 176310) {
+        if (displayId == 455 || displayId == 462 || entry == 20808 || entry == 176231 || entry == 176310) {
             modelPath = "World\\wmo\\transports\\transport_ship\\transportship.wmo";
-            LOG_INFO("Overriding transport displayId ", displayId, " → transportship.wmo");
+            LOG_INFO("Overriding transport entry/display ", entry, "/", displayId, " → transportship.wmo");
         } else if (displayId == 807 || displayId == 808 || displayId == 175080 || displayId == 176495 || displayId == 164871) {
             modelPath = "World\\wmo\\transports\\transport_zeppelin\\transport_zeppelin.wmo";
             LOG_INFO("Overriding transport displayId ", displayId, " → transport_zeppelin.wmo");
@@ -3286,9 +3361,7 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t 
             LOG_DEBUG("Spawned gameobject WMO: guid=0x", std::hex, guid, std::dec,
                      " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 
-            // Spawn WMO doodads (chairs, furniture, etc.) as child M2 instances
-            // TODO: Re-enable after implementing deferred/background loading
-            // Currently disabled - spawning 134 doodads synchronously causes massive slowdown
+            // Spawn transport WMO doodads (chairs, furniture, etc.) as child M2 instances
             bool isTransport = false;
             if (gameHandler) {
                 std::string lowerModelPath = modelPath;
@@ -3298,13 +3371,17 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t 
             }
 
             auto* m2Renderer = renderer->getM2Renderer();
-            if (false && m2Renderer && isTransport) {  // DISABLED - too slow
+            if (m2Renderer && isTransport) {
                 const auto* doodadTemplates = wmoRenderer->getDoodadTemplates(modelId);
                 if (doodadTemplates && !doodadTemplates->empty()) {
-                    LOG_INFO("Spawning ", doodadTemplates->size(), " doodads for transport WMO instance ", instanceId);
+                    constexpr size_t kMaxTransportDoodads = 192;
+                    const size_t doodadBudget = std::min(doodadTemplates->size(), kMaxTransportDoodads);
+                    LOG_INFO("Spawning ", doodadBudget, "/", doodadTemplates->size(),
+                             " doodads for transport WMO instance ", instanceId);
                     int spawnedDoodads = 0;
 
-                    for (const auto& doodadTemplate : *doodadTemplates) {
+                    for (size_t i = 0; i < doodadBudget; ++i) {
+                        const auto& doodadTemplate = (*doodadTemplates)[i];
                         // Load M2 model (may be cached)
                         uint32_t doodadModelId = static_cast<uint32_t>(std::hash<std::string>{}(doodadTemplate.m2Path));
                         auto m2Data = assetManager->readFile(doodadTemplate.m2Path);

@@ -255,11 +255,10 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
         pathTimeMs = transport.localClockMs % path.durationMs;
     } else {
         // Server-driven transport without clock sync:
-        // stay server-authoritative and never switch to DBC/client animation fallback.
-        // For short server update gaps, apply lightweight dead-reckoning only when we
-        // have measured velocity from at least one authoritative delta.
-        constexpr float kMaxExtrapolationSec = 8.0f;
+        // keep server-authoritative and dead-reckon from last known velocity.
         const float ageSec = elapsedTime_ - transport.lastServerUpdate;
+        constexpr float kMaxExtrapolationSec = 30.0f;
+
         if (transport.hasServerVelocity && ageSec > 0.0f && ageSec <= kMaxExtrapolationSec) {
             const float blend = glm::clamp(1.0f - (ageSec / kMaxExtrapolationSec), 0.0f, 1.0f);
             transport.position += transport.serverLinearVelocity * (deltaTime * blend);
@@ -576,6 +575,74 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
             transport->serverLinearVelocity = v;
             transport->serverAngularVelocity = 0.0f;
             transport->hasServerVelocity = true;
+        }
+    } else {
+        // Bootstrap velocity from mapped DBC path on first authoritative sample.
+        // This avoids "stalled at dock" when server sends sparse transport snapshots.
+        auto pathIt2 = paths_.find(transport->pathId);
+        if (pathIt2 != paths_.end()) {
+            const auto& path = pathIt2->second;
+            if (path.points.size() >= 2 && path.durationMs > 0) {
+                glm::vec3 local = position - transport->basePosition;
+                size_t bestIdx = 0;
+                float bestDistSq = std::numeric_limits<float>::max();
+                for (size_t i = 0; i < path.points.size(); ++i) {
+                    glm::vec3 d = path.points[i].pos - local;
+                    float distSq = glm::dot(d, d);
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        bestIdx = i;
+                    }
+                }
+
+                size_t n = path.points.size();
+                size_t nextIdx = (bestIdx + 1) % n;
+                uint32_t t0 = path.points[bestIdx].tMs;
+                uint32_t t1 = path.points[nextIdx].tMs;
+                if (nextIdx == 0 && t1 <= t0 && path.durationMs > 0) {
+                    t1 = path.durationMs;
+                }
+                if (t1 <= t0 && n > 2) {
+                    size_t prevIdx = (bestIdx + n - 1) % n;
+                    t0 = path.points[prevIdx].tMs;
+                    t1 = path.points[bestIdx].tMs;
+                    glm::vec3 seg = path.points[bestIdx].pos - path.points[prevIdx].pos;
+                    float dtSeg = static_cast<float>(t1 - t0) / 1000.0f;
+                    if (dtSeg > 0.001f) {
+                        glm::vec3 v = seg / dtSeg;
+                        float speed = glm::length(v);
+                        constexpr float kMaxSpeed = 60.0f;
+                        if (speed > kMaxSpeed) {
+                            v *= (kMaxSpeed / speed);
+                        }
+                        transport->serverLinearVelocity = v;
+                        transport->serverAngularVelocity = 0.0f;
+                        transport->hasServerVelocity = true;
+                    }
+                } else {
+                    glm::vec3 seg = path.points[nextIdx].pos - path.points[bestIdx].pos;
+                    float dtSeg = static_cast<float>(t1 - t0) / 1000.0f;
+                    if (dtSeg > 0.001f) {
+                        glm::vec3 v = seg / dtSeg;
+                        float speed = glm::length(v);
+                        constexpr float kMaxSpeed = 60.0f;
+                        if (speed > kMaxSpeed) {
+                            v *= (kMaxSpeed / speed);
+                        }
+                        transport->serverLinearVelocity = v;
+                        transport->serverAngularVelocity = 0.0f;
+                        transport->hasServerVelocity = true;
+                    }
+                }
+
+                if (transport->hasServerVelocity) {
+                    LOG_INFO("Transport 0x", std::hex, guid, std::dec,
+                             " bootstrapped velocity from DBC path ", transport->pathId,
+                             " v=(", transport->serverLinearVelocity.x, ", ",
+                             transport->serverLinearVelocity.y, ", ",
+                             transport->serverLinearVelocity.z, ")");
+                }
+            }
         }
     }
 

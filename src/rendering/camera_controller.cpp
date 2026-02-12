@@ -50,6 +50,19 @@ std::optional<float> selectHighestFloor(const std::optional<float>& a,
     return best;
 }
 
+std::optional<float> selectClosestFloor(const std::optional<float>& a,
+                                        const std::optional<float>& b,
+                                        float refZ) {
+    if (a && b) {
+        float da = std::abs(*a - refZ);
+        float db = std::abs(*b - refZ);
+        return (da <= db) ? a : b;
+    }
+    if (a) return a;
+    if (b) return b;
+    return std::nullopt;
+}
+
 } // namespace
 
 CameraController::CameraController(Camera* cam) : camera(cam) {
@@ -537,6 +550,20 @@ void CameraController::update(float deltaTime) {
             verticalVelocity = 0.0f;
         }
 
+        // Refresh inside-WMO state before collision/grounding so we don't use stale
+        // terrain-first caches while entering enclosed tunnel/building spaces.
+        if (wmoRenderer && !externalFollow_) {
+            bool prevInside = cachedInsideWMO;
+            bool prevInsideInterior = cachedInsideInteriorWMO;
+            cachedInsideWMO = wmoRenderer->isInsideWMO(targetPos.x, targetPos.y, targetPos.z + 1.0f, nullptr);
+            cachedInsideInteriorWMO = wmoRenderer->isInsideInteriorWMO(targetPos.x, targetPos.y, targetPos.z + 1.0f);
+            if (cachedInsideWMO != prevInside || cachedInsideInteriorWMO != prevInsideInterior) {
+                hasCachedFloor_ = false;
+                hasCachedCamFloor = false;
+                cachedPivotLift_ = 0.0f;
+            }
+        }
+
         // Sweep collisions in small steps to reduce tunneling through thin walls/floors.
         // Skip entirely when stationary to avoid wasting collision calls.
         // Use tighter steps when inside WMO for more precise collision.
@@ -587,15 +614,27 @@ void CameraController::update(float deltaTime) {
             // 1. Center-only sample for terrain/WMO floor selection.
             //    Using only the center prevents tunnel entrances from snapping
             //    to terrain when offset samples miss the WMO floor geometry.
-            // Slope limit: reject surfaces too steep to walk (prevent clipping)
-            constexpr float MIN_WALKABLE_NORMAL = 0.7f;  // ~45° max slope
+            // Slope limit: reject surfaces too steep to walk (prevent clipping).
+            // WMO tunnel/bridge ramps are often steeper than outdoor terrain ramps.
+            constexpr float MIN_WALKABLE_NORMAL_TERRAIN = 0.7f; // ~45°
+            constexpr float MIN_WALKABLE_NORMAL_WMO = 0.45f;    // allow tunnel ramps
 
             std::optional<float> groundH;
+            std::optional<float> centerTerrainH;
+            std::optional<float> centerWmoH;
             {
                 // Collision cache: skip expensive checks if barely moved (15cm threshold)
                 float distMoved = glm::length(glm::vec2(targetPos.x, targetPos.y) -
                                              glm::vec2(lastCollisionCheckPos_.x, lastCollisionCheckPos_.y));
                 bool useCached = hasCachedFloor_ && distMoved < COLLISION_CACHE_DISTANCE;
+                if (useCached) {
+                    // Never trust cached ground while actively descending or when
+                    // vertical drift from cached floor is meaningful.
+                    float dzCached = std::abs(targetPos.z - cachedFloorHeight_);
+                    if (verticalVelocity < -0.4f || dzCached > 0.35f) {
+                        useCached = false;
+                    }
+                }
 
                 if (useCached) {
                     groundH = cachedFloorHeight_;
@@ -613,11 +652,52 @@ void CameraController::update(float deltaTime) {
                     }
 
                     // Reject steep WMO slopes
-                    if (wmoH && wmoNormalZ < MIN_WALKABLE_NORMAL) {
+                    float minWalkableWmo = cachedInsideWMO ? MIN_WALKABLE_NORMAL_WMO : MIN_WALKABLE_NORMAL_TERRAIN;
+                    if (wmoH && wmoNormalZ < minWalkableWmo) {
                         wmoH = std::nullopt;  // Treat as unwalkable
                     }
+                    centerTerrainH = terrainH;
+                    centerWmoH = wmoH;
 
-                    groundH = selectReachableFloor(terrainH, wmoH, targetPos.z, stepUpBudget);
+                    // Guard against extremely bad WMO void ramps, but keep normal tunnel
+                    // transitions valid. Only reject when the WMO sample is implausibly far
+                    // below terrain and player is not already descending.
+                    if (terrainH && wmoH) {
+                        float terrainMinusWmo = *terrainH - *wmoH;
+                        if (terrainMinusWmo > 12.0f && verticalVelocity > -8.0f) {
+                            wmoH = std::nullopt;
+                            centerWmoH = std::nullopt;
+                        }
+                    }
+
+                    if (cachedInsideWMO && wmoH) {
+                        // Transition seam (e.g. tunnel mouths): if terrain is much higher than
+                        // nearby WMO walkable floor, prefer the WMO floor so we can enter.
+                        bool preferWmoAtSeam = false;
+                        if (terrainH) {
+                            float terrainAboveWmo = *terrainH - *wmoH;
+                            float wmoDropFromPlayer = targetPos.z - *wmoH;
+                            float playerVsTerrain = targetPos.z - *terrainH;
+                            bool descendingIntoTunnel = (verticalVelocity < -1.0f) || (playerVsTerrain < -0.35f);
+                            if (terrainAboveWmo > 1.2f && terrainAboveWmo < 8.0f &&
+                                wmoDropFromPlayer >= -0.4f && wmoDropFromPlayer < 1.8f &&
+                                *wmoH <= targetPos.z + stepUpBudget &&
+                                descendingIntoTunnel) {
+                                preferWmoAtSeam = true;
+                            }
+                        }
+                        if (preferWmoAtSeam) {
+                            groundH = wmoH;
+                        } else if (terrainH) {
+                            // At tunnel seams where both exist, pick the one closest to current feet Z
+                            // to avoid oscillating between top terrain and deep WMO floors.
+                            groundH = selectClosestFloor(terrainH, wmoH, targetPos.z);
+                        } else {
+                            groundH = selectReachableFloor(terrainH, wmoH, targetPos.z, stepUpBudget);
+                        }
+                    } else {
+                        groundH = selectReachableFloor(terrainH, wmoH, targetPos.z, stepUpBudget);
+                    }
 
                     // Update cache
                     lastCollisionCheckPos_ = targetPos;
@@ -626,6 +706,81 @@ void CameraController::update(float deltaTime) {
                         hasCachedFloor_ = true;
                     } else {
                         hasCachedFloor_ = false;
+                    }
+                }
+            }
+
+            // Transition safety: if no reachable floor was selected, choose the higher
+            // of terrain/WMO center surfaces when it is still near the player.
+            // This avoids dropping into void gaps at terrain<->WMO seams.
+            if (!groundH) {
+                auto highestCenter = selectHighestFloor(centerTerrainH, centerWmoH, std::nullopt);
+                if (highestCenter) {
+                    float dz = targetPos.z - *highestCenter;
+                    // Keep this fallback narrow: only for WMO seam cases, or very short
+                    // transient misses while still almost touching the last floor.
+                    bool allowFallback = cachedInsideWMO || (noGroundTimer_ < 0.10f && dz < 0.6f);
+                    if (allowFallback && dz >= -0.5f && dz < 2.0f) {
+                        groundH = highestCenter;
+                    }
+                }
+            }
+
+            // Continuity guard only for WMO seam overlap: avoid instantly switching to a
+            // much lower floor sample at tunnel mouths (bad WMO ramp chains into void).
+            if (groundH && hasRealGround_ && cachedInsideWMO && !cachedInsideInteriorWMO) {
+                float dropFromLast = lastGroundZ - *groundH;
+                if (dropFromLast > 1.5f) {
+                    if (centerTerrainH && *centerTerrainH > *groundH + 1.5f) {
+                        groundH = centerTerrainH;
+                    }
+                }
+            }
+
+            // Seam stability: while overlapping WMO shells, cap how fast floor height can
+            // step downward in a single frame to avoid following bad ramp samples into void.
+            if (groundH && cachedInsideWMO && !cachedInsideInteriorWMO && lastGroundZ > 1.0f) {
+                float maxDropPerFrame = (verticalVelocity < -8.0f) ? 2.0f : 0.60f;
+                float minAllowed = lastGroundZ - maxDropPerFrame;
+                // Extra seam guard: outside interior groups, avoid accepting floors that
+                // are far below nearby terrain. Keeps shark-mouth transitions from
+                // following erroneous WMO ramps into void.
+                if (centerTerrainH) {
+                    // Never let terrain-based seam guard push floor above current feet;
+                    // it should only prevent excessive downward drops.
+                    float terrainGuard = std::min(*centerTerrainH - 1.0f, targetPos.z - 0.15f);
+                    minAllowed = std::max(minAllowed, terrainGuard);
+                }
+                if (*groundH < minAllowed) {
+                    *groundH = minAllowed;
+                }
+            }
+
+            // 1b. Multi-sample WMO floors when in/near WMO space to avoid
+            // falling through narrow board/plank gaps where center ray misses.
+            if (wmoRenderer && cachedInsideWMO) {
+                constexpr float WMO_FOOTPRINT = 0.35f;
+                const glm::vec2 wmoOffsets[] = {
+                    {0.0f, 0.0f},
+                    { WMO_FOOTPRINT, 0.0f}, {-WMO_FOOTPRINT, 0.0f},
+                    {0.0f,  WMO_FOOTPRINT}, {0.0f, -WMO_FOOTPRINT}
+                };
+
+                float wmoProbeZ = std::max(targetPos.z, lastGroundZ) + stepUpBudget + 0.6f;
+                float minWalkableWmo = cachedInsideWMO ? MIN_WALKABLE_NORMAL_WMO : MIN_WALKABLE_NORMAL_TERRAIN;
+
+                for (const auto& o : wmoOffsets) {
+                    float nz = 1.0f;
+                    auto wh = wmoRenderer->getFloorHeight(targetPos.x + o.x, targetPos.y + o.y, wmoProbeZ, &nz);
+                    if (!wh) continue;
+                    if (nz < minWalkableWmo) continue;
+
+                    // Keep to nearby, walkable steps only.
+                    if (*wh > targetPos.z + stepUpBudget) continue;
+                    if (*wh < targetPos.z - 2.5f) continue;
+
+                    if (!groundH || *wh > *groundH) {
+                        groundH = wh;
                     }
                 }
             }
@@ -646,7 +801,7 @@ void CameraController::update(float deltaTime) {
                         targetPos.x + o.x, targetPos.y + o.y, m2ProbeZ, &m2NormalZ);
 
                     // Reject steep M2 slopes
-                    if (m2H && m2NormalZ < MIN_WALKABLE_NORMAL) {
+                    if (m2H && m2NormalZ < MIN_WALKABLE_NORMAL_TERRAIN) {
                         continue;  // Skip unwalkable M2 surface
                     }
 
@@ -676,7 +831,8 @@ void CameraController::update(float deltaTime) {
                 // 3. Was grounded + ground is close (grace for slopes)
                 bool nearGround = (dz >= 0.0f && dz <= stepUp);
                 bool airFalling = (!grounded && verticalVelocity < -5.0f);
-                bool slopeGrace = (grounded && dz >= -1.0f && dz <= stepUp * 2.0f);
+                bool slopeGrace = (grounded && verticalVelocity > -1.0f &&
+                                   dz >= -0.25f && dz <= stepUp * 1.5f);
 
                 if (dz >= -fallCatch && (nearGround || airFalling || slopeGrace)) {
                     targetPos.z = *groundH;
@@ -691,18 +847,13 @@ void CameraController::update(float deltaTime) {
                     hasRealGround_ = false;
                     noGroundTimer_ += deltaTime;
 
-                    if (noGroundTimer_ < NO_GROUND_GRACE) {
-                        // Grace should prevent instant falling at seams,
-                        // but should NEVER pull you down or cancel a jump.
-                        targetPos.z = std::max(targetPos.z, lastGroundZ);
-
-                        // Only zero velocity if we're not moving upward.
-                        if (verticalVelocity <= 0.0f) {
-                            verticalVelocity = 0.0f;
-                            grounded = true;
-                        } else {
-                            grounded = false; // jumping upward: don't "stick" to ghost ground
-                        }
+                    float dropFromLastGround = lastGroundZ - targetPos.z;
+                    bool seamSizedGap = dropFromLastGround <= 0.35f;
+                    if (noGroundTimer_ < NO_GROUND_GRACE && seamSizedGap) {
+                        // Micro-gap grace only: keep continuity for tiny seam misses,
+                        // but never convert air into persistent ground.
+                        targetPos.z = std::max(targetPos.z, lastGroundZ - 0.10f);
+                        grounded = false;
                     } else {
                         grounded = false;
                     }
@@ -738,7 +889,7 @@ void CameraController::update(float deltaTime) {
         // Pivot point at upper chest/neck.
         float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
         float pivotLift = 0.0f;
-        if (terrainManager && !externalFollow_) {
+        if (terrainManager && !externalFollow_ && !cachedInsideInteriorWMO) {
             float moved = glm::length(glm::vec2(targetPos.x - lastPivotLiftQueryPos_.x,
                                                 targetPos.y - lastPivotLiftQueryPos_.y));
             float distDelta = std::abs(currentDistance - lastPivotLiftDistance_);
@@ -772,6 +923,10 @@ void CameraController::update(float deltaTime) {
                 cachedPivotLift_ = desiredLift;
             }
             pivotLift = cachedPivotLift_;
+        } else if (cachedInsideInteriorWMO) {
+            // Inside WMO volumes (including tunnel/cave shells): terrain-above samples
+            // are not relevant for camera pivoting.
+            cachedPivotLift_ = 0.0f;
         }
         glm::vec3 pivot = targetPos + glm::vec3(0.0f, 0.0f, PIVOT_HEIGHT + mountedOffset + pivotLift);
 
@@ -787,26 +942,13 @@ void CameraController::update(float deltaTime) {
         if (wmoRenderer) {
             float distFromLastCheck = glm::length(targetPos - lastInsideWMOCheckPos);
             if (++insideWMOCheckCounter >= 10 || distFromLastCheck > 2.0f) {
-                cachedInsideWMO = wmoRenderer->isInsideWMO(targetPos.x, targetPos.y, targetPos.z + 1.0f, nullptr);
                 wmoRenderer->updateActiveGroup(targetPos.x, targetPos.y, targetPos.z + 1.0f);
                 insideWMOCheckCounter = 0;
                 lastInsideWMOCheckPos = targetPos;
             }
 
-            // Constrain zoom if there's a ceiling/upper floor above player
-            // Raycast upward from player to find ceiling, limit camera distance
-            glm::vec3 upRayOrigin = targetPos;
-            glm::vec3 upRayDir(0.0f, 0.0f, 1.0f);
-            float ceilingDist = wmoRenderer->raycastBoundingBoxes(upRayOrigin, upRayDir, 20.0f);
-            if (ceilingDist < 20.0f) {
-                // Found ceiling above — limit zoom to prevent camera from going through it
-                // Camera is behind player by currentDistance, at an angle
-                // Approximate: if ceiling is N units above, limit zoom to ~N units
-                float maxZoomForCeiling = std::max(1.5f, ceilingDist * 0.7f);
-                if (currentDistance > maxZoomForCeiling) {
-                    currentDistance = maxZoomForCeiling;
-                }
-            }
+            // Do not clamp zoom target by ceiling checks. First-person should always
+            // be reachable; occlusion handling below will resolve camera placement safely.
         }
 
         // ===== Camera collision (sphere sweep approximation) =====
@@ -866,8 +1008,11 @@ void CameraController::update(float deltaTime) {
         // ===== Final floor clearance check =====
         // Use WMO-aware floor so the camera doesn't pop above tunnels/caves.
         constexpr float MIN_FLOOR_CLEARANCE = 0.35f;
-        {
-            auto camTerrainH = getTerrainFloorAt(smoothedCamPos.x, smoothedCamPos.y);
+        if (!cachedInsideWMO) {
+            std::optional<float> camTerrainH;
+            if (!cachedInsideInteriorWMO) {
+                camTerrainH = getTerrainFloorAt(smoothedCamPos.x, smoothedCamPos.y);
+            }
             std::optional<float> camWmoH;
             if (wmoRenderer) {
                 // Skip expensive WMO floor query if camera barely moved
@@ -876,15 +1021,45 @@ void CameraController::update(float deltaTime) {
                 if (camDelta < 0.3f && hasCachedCamFloor) {
                     camWmoH = cachedCamWmoFloor;
                 } else {
+                    float camFloorProbeZ = smoothedCamPos.z;
+                    if (cachedInsideInteriorWMO) {
+                        // Inside tunnels/buildings, probe near player height so roof
+                        // triangles above the camera don't get treated as floor.
+                        camFloorProbeZ = std::min(smoothedCamPos.z, targetPos.z + 1.0f);
+                    }
                     camWmoH = wmoRenderer->getFloorHeight(
-                        smoothedCamPos.x, smoothedCamPos.y, smoothedCamPos.z);
+                        smoothedCamPos.x, smoothedCamPos.y, camFloorProbeZ);
+
+                    if (cachedInsideInteriorWMO && camWmoH) {
+                        // Never let camera floor clamp latch to tunnel ceilings / upper decks.
+                        float maxValidIndoorFloor = targetPos.z + 0.9f;
+                        if (*camWmoH > maxValidIndoorFloor) {
+                            camWmoH = std::nullopt;
+                        }
+                    }
                     cachedCamWmoFloor = camWmoH;
                     hasCachedCamFloor = true;
                     lastCamFloorQueryPos = smoothedCamPos;
                 }
             }
-            auto camFloorH = selectReachableFloor(
-                camTerrainH, camWmoH, smoothedCamPos.z, 0.5f);
+            // When camera/character are inside a WMO, force WMO floor usage for camera
+            // clearance to avoid snapping toward terrain above enclosed tunnels/caves.
+            std::optional<float> camFloorH;
+            if (cachedInsideWMO && camWmoH && camTerrainH) {
+                // Transition seam: avoid terrain-above clamp near tunnel entrances.
+                float camDropFromPlayer = targetPos.z - *camWmoH;
+                if ((*camTerrainH - *camWmoH) > 1.2f &&
+                    (*camTerrainH - *camWmoH) < 8.0f &&
+                    camDropFromPlayer >= -0.4f &&
+                    camDropFromPlayer < 1.8f) {
+                    camFloorH = camWmoH;
+                } else {
+                    camFloorH = selectClosestFloor(camTerrainH, camWmoH, smoothedCamPos.z);
+                }
+            } else {
+                camFloorH = selectReachableFloor(
+                    camTerrainH, camWmoH, smoothedCamPos.z, 0.5f);
+            }
             if (camFloorH && smoothedCamPos.z < *camFloorH + MIN_FLOOR_CLEARANCE) {
                 smoothedCamPos.z = *camFloorH + MIN_FLOOR_CLEARANCE;
             }
