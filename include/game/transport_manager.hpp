@@ -102,6 +102,12 @@ public:
     // Returns 0 when no suitable path match is found.
     uint32_t inferMovingPathForSpawn(const glm::vec3& spawnWorldPos, float maxDistance = 1200.0f) const;
 
+    // Infer a DBC path by spawn position, optionally including z-only elevator paths.
+    // Returns 0 when no suitable path match is found.
+    uint32_t inferDbcPathForSpawn(const glm::vec3& spawnWorldPos,
+                                  float maxDistance,
+                                  bool allowZOnly) const;
+
     // Choose a deterministic fallback moving DBC path for known server transport entries/displayIds.
     // Returns 0 when no suitable moving path is available.
     uint32_t pickFallbackMovingPath(uint32_t entry, uint32_t displayId) const;

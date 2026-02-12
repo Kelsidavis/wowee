@@ -1250,7 +1250,11 @@ void Application::setupUICallbacks() {
                 LOG_INFO("Server-first transport registration: using entry DBC path for entry ", entry);
             }
         } else if (!hasUsablePath) {
-            uint32_t inferredPath = transportManager->inferMovingPathForSpawn(canonicalSpawnPos);
+            // Remap/infer path by spawn position when entry doesn't map 1:1 to DBC ids.
+            // For elevators (TB lift platforms), we must allow z-only paths here.
+            bool allowZOnly = (displayId == 455 || displayId == 462);
+            uint32_t inferredPath = transportManager->inferDbcPathForSpawn(
+                canonicalSpawnPos, 1200.0f, allowZOnly);
             if (inferredPath != 0) {
                 pathId = inferredPath;
                 LOG_INFO("Using inferred transport path ", pathId, " for entry ", entry);
@@ -1359,7 +1363,9 @@ void Application::setupUICallbacks() {
                                      " displayId=", displayId, " wmoInstance=", wmoInstanceId);
                         }
                     } else if (!hasUsablePath) {
-                        uint32_t inferredPath = transportManager->inferMovingPathForSpawn(canonicalSpawnPos);
+                        bool allowZOnly = (displayId == 455 || displayId == 462);
+                        uint32_t inferredPath = transportManager->inferDbcPathForSpawn(
+                            canonicalSpawnPos, 1200.0f, allowZOnly);
                         if (inferredPath != 0) {
                             pathId = inferredPath;
                             LOG_INFO("Auto-spawned transport with inferred path: entry=", entry,

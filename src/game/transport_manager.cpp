@@ -891,15 +891,23 @@ bool TransportManager::loadTransportAnimationDBC(pipeline::AssetManager* assetMg
         float maxX = timedPoints[0].pos.x;
         float minY = timedPoints[0].pos.y;
         float maxY = timedPoints[0].pos.y;
+        float minZ = timedPoints[0].pos.z;
+        float maxZ = timedPoints[0].pos.z;
         for (const auto& pt : timedPoints) {
             minX = std::min(minX, pt.pos.x);
             maxX = std::max(maxX, pt.pos.x);
             minY = std::min(minY, pt.pos.y);
             maxY = std::max(maxY, pt.pos.y);
+            minZ = std::min(minZ, pt.pos.z);
+            maxZ = std::max(maxZ, pt.pos.z);
         }
         float rangeX = maxX - minX;
         float rangeY = maxY - minY;
-        bool isZOnly = (rangeX < 0.01f && rangeY < 0.01f);
+        float rangeZ = maxZ - minZ;
+        float rangeXY = std::max(rangeX, rangeY);
+        // Some elevator paths have tiny XY jitter. Treat them as z-only when horizontal travel
+        // is negligible compared to vertical motion.
+        bool isZOnly = (rangeXY < 0.01f) || (rangeXY < 1.0f && rangeZ > 2.0f);
 
         // Store path
         TransportPath path;
@@ -921,7 +929,8 @@ bool TransportManager::loadTransportAnimationDBC(pipeline::AssetManager* assetMg
         glm::vec3 lastOffset = timedPoints[timedPoints.size() - 2].pos;  // -2 to skip wrap duplicate
         LOG_INFO("  Transport ", transportEntry, ": ", timedPoints.size() - 1, " waypoints + wrap, ",
                  durationMs, "ms duration (wrap=", wrapMs, "ms, t0_normalized=", timedPoints[0].tMs, "ms)",
-                 " rangeXY=(", rangeX, ",", rangeY, ") ", (isZOnly ? "[Z-ONLY]" : "[XY-PATH]"),
+                 " rangeXY=(", rangeX, ",", rangeY, ") rangeZ=", rangeZ, " ",
+                 (isZOnly ? "[Z-ONLY]" : "[XY-PATH]"),
                  " firstOffset=(", firstOffset.x, ", ", firstOffset.y, ", ", firstOffset.z, ")",
                  " midOffset=(", midOffset.x, ", ", midOffset.y, ", ", midOffset.z, ")",
                  " lastOffset=(", lastOffset.x, ", ", lastOffset.y, ", ", lastOffset.z, ")");
@@ -960,12 +969,17 @@ bool TransportManager::hasUsableMovingPathForEntry(uint32_t entry, float minXYRa
     return rangeXY >= minXYRange;
 }
 
-uint32_t TransportManager::inferMovingPathForSpawn(const glm::vec3& spawnWorldPos, float maxDistance) const {
+uint32_t TransportManager::inferDbcPathForSpawn(const glm::vec3& spawnWorldPos,
+                                               float maxDistance,
+                                               bool allowZOnly) const {
     float bestD2 = maxDistance * maxDistance;
     uint32_t bestPathId = 0;
 
     for (const auto& [pathId, path] : paths_) {
-        if (!path.fromDBC || path.durationMs == 0 || path.zOnly || path.points.empty()) {
+        if (!path.fromDBC || path.durationMs == 0 || path.points.empty()) {
+            continue;
+        }
+        if (!allowZOnly && path.zOnly) {
             continue;
         }
 
@@ -981,12 +995,17 @@ uint32_t TransportManager::inferMovingPathForSpawn(const glm::vec3& spawnWorldPo
     }
 
     if (bestPathId != 0) {
-        LOG_INFO("TransportManager: Inferred moving DBC path ", bestPathId,
-                 " for spawn at (", spawnWorldPos.x, ", ", spawnWorldPos.y, ", ", spawnWorldPos.z,
+        LOG_INFO("TransportManager: Inferred DBC path ", bestPathId,
+                 " (allowZOnly=", allowZOnly ? "yes" : "no",
+                 ") for spawn at (", spawnWorldPos.x, ", ", spawnWorldPos.y, ", ", spawnWorldPos.z,
                  "), dist=", std::sqrt(bestD2));
     }
 
     return bestPathId;
+}
+
+uint32_t TransportManager::inferMovingPathForSpawn(const glm::vec3& spawnWorldPos, float maxDistance) const {
+    return inferDbcPathForSpawn(spawnWorldPos, maxDistance, /*allowZOnly=*/false);
 }
 
 uint32_t TransportManager::pickFallbackMovingPath(uint32_t entry, uint32_t displayId) const {

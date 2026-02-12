@@ -2701,6 +2701,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     if (block.updateFlags & 0x0002) {
                         transportGuids_.insert(block.guid);
                         LOG_INFO("Detected transport GameObject: 0x", std::hex, block.guid, std::dec,
+                                 " entry=", go->getEntry(),
                                  " displayId=", go->getDisplayId(),
                                  " pos=(", go->getX(), ", ", go->getY(), ", ", go->getZ(), ")");
                         // Note: TransportSpawnCallback will be invoked from Application after WMO instance is created
