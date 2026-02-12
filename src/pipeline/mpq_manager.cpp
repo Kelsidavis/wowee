@@ -2,6 +2,7 @@
 #include "core/logger.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -38,6 +39,15 @@ std::string normalizeVirtualFilenameForLookup(std::string value) {
         value.erase(value.begin());
     }
     return value;
+}
+
+bool envFlagEnabled(const char* name) {
+    const char* v = std::getenv(name);
+    if (!v || !*v) {
+        return false;
+    }
+    std::string s = toLowerCopy(v);
+    return s == "1" || s == "true" || s == "yes" || s == "on";
 }
 }
 
@@ -378,6 +388,16 @@ bool MPQManager::loadPatchArchives() {
     return false;
 #endif
 
+    const bool disableLetterPatches = envFlagEnabled("WOWEE_DISABLE_LETTER_PATCHES");
+    const bool disableNumericPatches = envFlagEnabled("WOWEE_DISABLE_NUMERIC_PATCHES");
+
+    if (disableLetterPatches) {
+        LOG_WARNING("MPQ letter patches disabled via WOWEE_DISABLE_LETTER_PATCHES=1");
+    }
+    if (disableNumericPatches) {
+        LOG_WARNING("MPQ numeric patches disabled via WOWEE_DISABLE_NUMERIC_PATCHES=1");
+    }
+
     // WoW 3.3.5a patch archives (in order of priority, highest first)
     std::vector<std::pair<std::string, int>> patchArchives = {
         // Lettered patch MPQs are used by some clients/distributions (e.g. Patch-A.mpq..Patch-E.mpq).
@@ -408,6 +428,17 @@ bool MPQManager::loadPatchArchives() {
 
     int loadedPatches = 0;
     for (const auto& [archive, priority] : patchArchives) {
+        const bool isLetterPatch =
+            (archive.size() >= 10) &&
+            (toLowerCopy(archive).rfind("patch-", 0) != 0) && // not patch-*.MPQ
+            (toLowerCopy(archive).rfind("patch.", 0) != 0);  // not patch.MPQ
+        if (isLetterPatch && disableLetterPatches) {
+            continue;
+        }
+        if (!isLetterPatch && disableNumericPatches) {
+            continue;
+        }
+
         std::string fullPath = dataPath + "/" + archive;
         if (std::filesystem::exists(fullPath)) {
             if (loadArchive(fullPath, priority)) {
