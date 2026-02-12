@@ -321,6 +321,25 @@ bool MPQManager::loadPatchArchives() {
 
     // WoW 3.3.5a patch archives (in order of priority, highest first)
     std::vector<std::pair<std::string, int>> patchArchives = {
+        // Lettered patch MPQs are used by some clients/distributions (e.g. Patch-A.mpq..Patch-E.mpq).
+        // Treat them as higher priority than numeric patch MPQs.
+        // Keep priorities well above numeric patch-*.MPQ so lettered patches always win when both exist.
+        {"Patch-Z.mpq", 925}, {"Patch-Y.mpq", 924}, {"Patch-X.mpq", 923}, {"Patch-W.mpq", 922},
+        {"Patch-V.mpq", 921}, {"Patch-U.mpq", 920}, {"Patch-T.mpq", 919}, {"Patch-S.mpq", 918},
+        {"Patch-R.mpq", 917}, {"Patch-Q.mpq", 916}, {"Patch-P.mpq", 915}, {"Patch-O.mpq", 914},
+        {"Patch-N.mpq", 913}, {"Patch-M.mpq", 912}, {"Patch-L.mpq", 911}, {"Patch-K.mpq", 910},
+        {"Patch-J.mpq", 909}, {"Patch-I.mpq", 908}, {"Patch-H.mpq", 907}, {"Patch-G.mpq", 906},
+        {"Patch-F.mpq", 905}, {"Patch-E.mpq", 904}, {"Patch-D.mpq", 903}, {"Patch-C.mpq", 902},
+        {"Patch-B.mpq", 901}, {"Patch-A.mpq", 900},
+        // Lowercase variants (Linux case-sensitive filesystems).
+        {"patch-z.mpq", 825}, {"patch-y.mpq", 824}, {"patch-x.mpq", 823}, {"patch-w.mpq", 822},
+        {"patch-v.mpq", 821}, {"patch-u.mpq", 820}, {"patch-t.mpq", 819}, {"patch-s.mpq", 818},
+        {"patch-r.mpq", 817}, {"patch-q.mpq", 816}, {"patch-p.mpq", 815}, {"patch-o.mpq", 814},
+        {"patch-n.mpq", 813}, {"patch-m.mpq", 812}, {"patch-l.mpq", 811}, {"patch-k.mpq", 810},
+        {"patch-j.mpq", 809}, {"patch-i.mpq", 808}, {"patch-h.mpq", 807}, {"patch-g.mpq", 806},
+        {"patch-f.mpq", 805}, {"patch-e.mpq", 804}, {"patch-d.mpq", 803}, {"patch-c.mpq", 802},
+        {"patch-b.mpq", 801}, {"patch-a.mpq", 800},
+
         {"patch-5.MPQ", 500},
         {"patch-4.MPQ", 400},
         {"patch-3.MPQ", 300},
