@@ -75,8 +75,10 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
     transport.localClockMs = 0;
     transport.hasServerClock = false;
     transport.serverClockOffsetMs = 0;
-    // Server-authoritative movement only - no client-side animation
-    transport.useClientAnimation = false;
+    // Default is server-authoritative movement.
+    // Exception: elevator-style transports (z-only DBC paths) often do not stream continuous
+    // movement updates from the server, but the client is expected to animate them.
+    transport.useClientAnimation = (path.fromDBC && path.zOnly && path.durationMs > 0);
     transport.clientAnimationReverse = false;
     transport.serverYaw = 0.0f;
     transport.hasServerYaw = false;
@@ -87,6 +89,14 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
     transport.serverLinearVelocity = glm::vec3(0.0f);
     transport.serverAngularVelocity = 0.0f;
     transport.hasServerVelocity = false;
+
+    if (transport.useClientAnimation && path.durationMs > 0) {
+        // Seed to a stable phase based on our local clock so elevators don't all start at t=0.
+        transport.localClockMs = static_cast<uint32_t>(elapsedTime_ * 1000.0f) % path.durationMs;
+        LOG_INFO("TransportManager: Enabled client animation for z-only transport 0x",
+                 std::hex, guid, std::dec, " path=", pathId,
+                 " durationMs=", path.durationMs, " seedMs=", transport.localClockMs);
+    }
 
     updateTransformMatrices(transport);
 
@@ -529,14 +539,23 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
     const float prevUpdateTime = transport->lastServerUpdate;
     const glm::vec3 prevPos = transport->position;
 
+    auto pathIt = paths_.find(transport->pathId);
+    const bool hasPath = (pathIt != paths_.end());
+    const bool isZOnlyPath = (hasPath && pathIt->second.fromDBC && pathIt->second.zOnly && pathIt->second.durationMs > 0);
+
     // Track server updates
     transport->serverUpdateCount++;
     transport->lastServerUpdate = elapsedTime_;
-    transport->useClientAnimation = false;  // Server updates take precedence
+    // Server updates take precedence for moving XY transports, but z-only elevators should
+    // remain client-animated (server may only send sparse state updates).
+    if (!isZOnlyPath) {
+        transport->useClientAnimation = false;
+    } else {
+        transport->useClientAnimation = true;
+    }
     transport->clientAnimationReverse = false;
 
-    auto pathIt = paths_.find(transport->pathId);
-    if (pathIt == paths_.end() || pathIt->second.durationMs == 0) {
+    if (!hasPath || pathIt->second.durationMs == 0) {
         // No path or stationary - just set position directly
         transport->basePosition = position;
         transport->position = position;
@@ -552,10 +571,12 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
     // Trust explicit server world position/orientation directly for all moving transports.
     // This avoids wrong-route and direction errors when local DBC path mapping differs from server route IDs.
     transport->hasServerClock = false;
-    transport->useClientAnimation = false;
     if (transport->serverUpdateCount == 1) {
         // Seed once from first authoritative update; keep stable base for fallback phase estimation.
-        transport->basePosition = position;
+        // For z-only elevator paths, keep the spawn-derived basePosition (the DBC path is local offsets).
+        if (!isZOnlyPath) {
+            transport->basePosition = position;
+        }
     }
     transport->position = position;
     transport->serverYaw = orientation;
