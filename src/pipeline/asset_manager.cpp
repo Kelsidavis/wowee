@@ -214,6 +214,18 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     return data;
 }
 
+std::vector<uint8_t> AssetManager::readFileOptional(const std::string& path) const {
+    if (!initialized) {
+        return std::vector<uint8_t>();
+    }
+
+    // Avoid MPQManager missing-file warnings for expected probe misses.
+    if (!fileExists(path)) {
+        return std::vector<uint8_t>();
+    }
+    return readFile(path);
+}
+
 void AssetManager::clearCache() {
     std::scoped_lock lock(readMutex, cacheMutex);
     dbcCache.clear();

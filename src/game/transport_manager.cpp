@@ -5,6 +5,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manager.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <cmath>
 #include <iostream>
@@ -43,7 +44,7 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
     transport.guid = guid;
     transport.wmoInstanceId = wmoInstanceId;
     transport.pathId = pathId;
-    transport.allowBootstrapVelocity = true;
+    transport.allowBootstrapVelocity = false;
 
     // CRITICAL: Set basePosition from spawn position and t=0 offset
     // For stationary paths (1 waypoint), just use spawn position directly
@@ -79,6 +80,8 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
     transport.clientAnimationReverse = false;
     transport.serverYaw = 0.0f;
     transport.hasServerYaw = false;
+    transport.serverYawFlipped180 = false;
+    transport.serverYawAlignmentScore = 0;
     transport.lastServerUpdate = 0.0f;
     transport.serverUpdateCount = 0;
     transport.serverLinearVelocity = glm::vec3(0.0f);
@@ -254,16 +257,7 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
         }
         pathTimeMs = transport.localClockMs % path.durationMs;
     } else {
-        // Server-driven transport without clock sync:
-        // keep server-authoritative and dead-reckon from last known velocity.
-        const float ageSec = elapsedTime_ - transport.lastServerUpdate;
-        constexpr float kMaxExtrapolationSec = 30.0f;
-
-        if (transport.hasServerVelocity && ageSec > 0.0f && ageSec <= kMaxExtrapolationSec) {
-            const float blend = glm::clamp(1.0f - (ageSec / kMaxExtrapolationSec), 0.0f, 1.0f);
-            transport.position += transport.serverLinearVelocity * (deltaTime * blend);
-        }
-
+        // Strict server-authoritative mode: do not guess movement between server snapshots.
         updateTransformMatrices(transport);
         if (wmoRenderer_) {
             wmoRenderer_->setInstanceTransform(transport.wmoInstanceId, transport.transform);
@@ -279,11 +273,17 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
         constexpr float kMinFallbackZOffset = -2.0f;
         pathOffset.z = glm::max(pathOffset.z, kMinFallbackZOffset);
     }
+    if (!transport.useClientAnimation && !transport.hasServerClock) {
+        constexpr float kMinFallbackZOffset = -2.0f;
+        constexpr float kMaxFallbackZOffset = 8.0f;
+        pathOffset.z = glm::clamp(pathOffset.z, kMinFallbackZOffset, kMaxFallbackZOffset);
+    }
     transport.position = transport.basePosition + pathOffset;
 
     // Use server yaw if available (authoritative), otherwise compute from tangent
     if (transport.hasServerYaw) {
-        transport.rotation = glm::angleAxis(transport.serverYaw, glm::vec3(0.0f, 0.0f, 1.0f));
+        float effectiveYaw = transport.serverYaw + (transport.serverYawFlipped180 ? glm::pi<float>() : 0.0f);
+        transport.rotation = glm::angleAxis(effectiveYaw, glm::vec3(0.0f, 0.0f, 1.0f));
     } else {
         transport.rotation = orientationFromTangent(path, pathTimeMs);
     }
@@ -560,7 +560,8 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
     transport->position = position;
     transport->serverYaw = orientation;
     transport->hasServerYaw = true;
-    transport->rotation = glm::angleAxis(transport->serverYaw, glm::vec3(0.0f, 0.0f, 1.0f));
+    float effectiveYaw = transport->serverYaw + (transport->serverYawFlipped180 ? glm::pi<float>() : 0.0f);
+    transport->rotation = glm::angleAxis(effectiveYaw, glm::vec3(0.0f, 0.0f, 1.0f));
 
     if (hadPrevUpdate) {
         const float dt = elapsedTime_ - prevUpdateTime;
@@ -570,6 +571,35 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
             constexpr float kMinAuthoritativeSpeed = 0.15f;
             constexpr float kMaxSpeed = 60.0f;
             if (speed >= kMinAuthoritativeSpeed) {
+                // Auto-detect 180-degree yaw mismatch by comparing heading to movement direction.
+                // Some transports appear to report yaw opposite their actual travel direction.
+                glm::vec2 horizontalV(v.x, v.y);
+                float hLen = glm::length(horizontalV);
+                if (hLen > 0.2f) {
+                    horizontalV /= hLen;
+                    glm::vec2 heading(std::cos(transport->serverYaw), std::sin(transport->serverYaw));
+                    float alignDot = glm::dot(heading, horizontalV);
+
+                    if (alignDot < -0.35f) {
+                        transport->serverYawAlignmentScore = std::max(transport->serverYawAlignmentScore - 1, -12);
+                    } else if (alignDot > 0.35f) {
+                        transport->serverYawAlignmentScore = std::min(transport->serverYawAlignmentScore + 1, 12);
+                    }
+
+                    if (!transport->serverYawFlipped180 && transport->serverYawAlignmentScore <= -4) {
+                        transport->serverYawFlipped180 = true;
+                        LOG_INFO("Transport 0x", std::hex, guid, std::dec,
+                                 " enabled 180-degree yaw correction (alignScore=",
+                                 transport->serverYawAlignmentScore, ")");
+                    } else if (transport->serverYawFlipped180 &&
+                               transport->serverYawAlignmentScore >= 4) {
+                        transport->serverYawFlipped180 = false;
+                        LOG_INFO("Transport 0x", std::hex, guid, std::dec,
+                                 " disabled 180-degree yaw correction (alignScore=",
+                                 transport->serverYawAlignmentScore, ")");
+                    }
+                }
+
                 if (speed > kMaxSpeed) {
                     v *= (kMaxSpeed / speed);
                 }
@@ -577,12 +607,36 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
                 transport->serverLinearVelocity = v;
                 transport->serverAngularVelocity = 0.0f;
                 transport->hasServerVelocity = true;
+
+                // Re-apply potentially corrected yaw this frame after alignment check.
+                effectiveYaw = transport->serverYaw + (transport->serverYawFlipped180 ? glm::pi<float>() : 0.0f);
+                transport->rotation = glm::angleAxis(effectiveYaw, glm::vec3(0.0f, 0.0f, 1.0f));
             }
         }
     } else {
+        // Seed fallback path phase from nearest waypoint to the first authoritative sample.
+        auto pathIt2 = paths_.find(transport->pathId);
+        if (pathIt2 != paths_.end()) {
+            const auto& path = pathIt2->second;
+            if (!path.points.empty() && path.durationMs > 0) {
+                glm::vec3 local = position - transport->basePosition;
+                size_t bestIdx = 0;
+                float bestDistSq = std::numeric_limits<float>::max();
+                for (size_t i = 0; i < path.points.size(); ++i) {
+                    glm::vec3 d = path.points[i].pos - local;
+                    float distSq = glm::dot(d, d);
+                    if (distSq < bestDistSq) {
+                        bestDistSq = distSq;
+                        bestIdx = i;
+                    }
+                }
+                transport->localClockMs = path.points[bestIdx].tMs % path.durationMs;
+            }
+        }
+
         // Bootstrap velocity from mapped DBC path on first authoritative sample.
         // This avoids "stalled at dock" when server sends sparse transport snapshots.
-        auto pathIt2 = paths_.find(transport->pathId);
+        pathIt2 = paths_.find(transport->pathId);
         if (transport->allowBootstrapVelocity && pathIt2 != paths_.end()) {
             const auto& path = pathIt2->second;
             if (path.points.size() >= 2 && path.durationMs > 0) {

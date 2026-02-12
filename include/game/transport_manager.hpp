@@ -58,6 +58,8 @@ struct ActiveTransport {
     bool clientAnimationReverse;    // Run client animation in reverse along the selected path
     float serverYaw;                // Server-authoritative yaw (radians)
     bool hasServerYaw;              // Whether we've received server yaw
+    bool serverYawFlipped180;       // Auto-correction when server yaw is consistently opposite movement
+    int serverYawAlignmentScore;    // Hysteresis score for yaw flip detection
 
     float lastServerUpdate;         // Time of last server movement update
     int serverUpdateCount;          // Number of server updates received

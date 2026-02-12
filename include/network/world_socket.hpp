@@ -18,10 +18,10 @@ namespace network {
  *
  * Key Differences from Auth Server:
  * - Outgoing: 6-byte header (2 bytes size + 4 bytes opcode, big-endian)
- * - Incoming: 4-byte header (2 bytes size + 2 bytes opcode, big-endian)
+ * - Incoming: 4-byte header (2 bytes size + 2 bytes opcode)
  * - Headers are RC4-encrypted after CMSG_AUTH_SESSION
  * - Packet bodies remain unencrypted
- * - Size field is payload size only (does NOT include header)
+ * - Size field includes opcode bytes (payloadLen = size - 2)
  */
 class WorldSocket : public Socket {
 public:
@@ -88,6 +88,9 @@ private:
     // Track how many header bytes have been decrypted (0-4)
     // This prevents re-decrypting the same header when waiting for more data
     size_t headerBytesDecrypted = 0;
+
+    // Debug-only tracing window for post-auth packet framing verification.
+    int headerTracePacketsLeft = 0;
 
     // Packet callback
     std::function<void(const Packet&)> packetCallback;

@@ -1209,20 +1209,12 @@ void Application::setupUICallbacks() {
         }
 
         if (preferServerData) {
-            // Server-first mode: keep authoritative server snapshots, but still choose a
-            // deterministic DBC path (entry/remap) as fallback if updates go stale.
+            // Strict server-authoritative mode: do not infer/remap fallback routes.
             if (!hasUsablePath) {
-                uint32_t remappedPath = transportManager->pickFallbackMovingPath(entry, displayId);
-                if (remappedPath != 0) {
-                    pathId = remappedPath;
-                    LOG_INFO("Server-first transport registration: fallback path ", pathId,
-                             " for entry ", entry, " displayId=", displayId);
-                } else {
-                    std::vector<glm::vec3> path = { canonicalSpawnPos };
-                    transportManager->loadPathFromNodes(pathId, path, false, 0.0f);
-                    LOG_INFO("Server-first transport registration: stationary fallback for GUID 0x",
-                             std::hex, guid, std::dec, " entry=", entry);
-                }
+                std::vector<glm::vec3> path = { canonicalSpawnPos };
+                transportManager->loadPathFromNodes(pathId, path, false, 0.0f);
+                LOG_INFO("Server-first strict registration: stationary fallback for GUID 0x",
+                         std::hex, guid, std::dec, " entry=", entry);
             } else {
                 LOG_INFO("Server-first transport registration: using entry DBC path for entry ", entry);
             }
@@ -1316,19 +1308,12 @@ void Application::setupUICallbacks() {
                     }
 
                     if (preferServerData) {
+                        // Strict server-authoritative mode: no inferred/remapped fallback routes.
                         if (!hasUsablePath) {
-                            uint32_t remappedPath = transportManager->pickFallbackMovingPath(entry, displayId);
-                            if (remappedPath != 0) {
-                                pathId = remappedPath;
-                                LOG_INFO("Auto-spawned transport in server-first mode with fallback path: entry=", entry,
-                                         " remappedPath=", pathId, " displayId=", displayId,
-                                         " wmoInstance=", wmoInstanceId);
-                            } else {
-                                std::vector<glm::vec3> path = { canonicalSpawnPos };
-                                transportManager->loadPathFromNodes(pathId, path, false, 0.0f);
-                                LOG_INFO("Auto-spawned transport in server-first mode (stationary fallback): entry=", entry,
-                                         " displayId=", displayId, " wmoInstance=", wmoInstanceId);
-                            }
+                            std::vector<glm::vec3> path = { canonicalSpawnPos };
+                            transportManager->loadPathFromNodes(pathId, path, false, 0.0f);
+                            LOG_INFO("Auto-spawned transport in strict server-first mode (stationary fallback): entry=", entry,
+                                     " displayId=", displayId, " wmoInstance=", wmoInstanceId);
                         } else {
                             LOG_INFO("Auto-spawned transport in server-first mode with entry DBC path: entry=", entry,
                                      " displayId=", displayId, " wmoInstance=", wmoInstanceId);
@@ -1711,7 +1696,7 @@ void Application::spawnPlayerCharacter() {
                             baseName.c_str(),
                             model.sequences[si].id,
                             model.sequences[si].variationIndex);
-                        auto animFileData = assetManager->readFile(animFileName);
+                        auto animFileData = assetManager->readFileOptional(animFileName);
                         if (!animFileData.empty()) {
                             pipeline::M2Loader::loadAnimFile(m2Data, animFileData, si, model);
                         }
@@ -2749,7 +2734,7 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                 char animFileName[256];
                 snprintf(animFileName, sizeof(animFileName), "%s%04u-%02u.anim",
                     basePath.c_str(), model.sequences[si].id, model.sequences[si].variationIndex);
-                auto animData = assetManager->readFile(animFileName);
+                auto animData = assetManager->readFileOptional(animFileName);
                 if (!animData.empty()) {
                     pipeline::M2Loader::loadAnimFile(m2Data, animData, si, model);
                 }
@@ -3639,7 +3624,7 @@ void Application::processPendingMount() {
                 char animFileName[256];
                 snprintf(animFileName, sizeof(animFileName), "%s%04u-%02u.anim",
                     basePath.c_str(), animId, model.sequences[si].variationIndex);
-                auto animData = assetManager->readFile(animFileName);
+                auto animData = assetManager->readFileOptional(animFileName);
                 if (!animData.empty()) {
                     pipeline::M2Loader::loadAnimFile(m2Data, animData, si, model);
                 }

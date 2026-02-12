@@ -5,6 +5,40 @@
 #include "core/logger.hpp"
 #include <iomanip>
 #include <sstream>
+#include <cstdio>
+
+namespace {
+constexpr size_t kMaxReceiveBufferBytes = 8 * 1024 * 1024;
+
+inline bool isLoginPipelineSmsg(uint16_t opcode) {
+    switch (opcode) {
+        case 0x1EC: // SMSG_AUTH_CHALLENGE
+        case 0x1EE: // SMSG_AUTH_RESPONSE
+        case 0x03B: // SMSG_CHAR_ENUM
+        case 0x03A: // SMSG_CHAR_CREATE
+        case 0x03C: // SMSG_CHAR_DELETE
+        case 0x4AB: // SMSG_CLIENTCACHE_VERSION
+        case 0x0FD: // SMSG_TUTORIAL_FLAGS
+        case 0x2E6: // SMSG_WARDEN_DATA
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool isLoginPipelineCmsg(uint16_t opcode) {
+    switch (opcode) {
+        case 0x1ED: // CMSG_AUTH_SESSION
+        case 0x037: // CMSG_CHAR_ENUM
+        case 0x036: // CMSG_CHAR_CREATE
+        case 0x038: // CMSG_CHAR_DELETE
+        case 0x03D: // CMSG_PLAYER_LOGIN
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace
 
 namespace wowee {
 namespace network {
@@ -127,23 +161,6 @@ void WorldSocket::send(const Packet& packet) {
     // Add payload (unencrypted)
     sendData.insert(sendData.end(), data.begin(), data.end());
 
-
-    // Debug: dump first few movement packets
-    {
-        static int moveDump = 3;
-        bool isMove = (opcode >= 0xB5 && opcode <= 0xBE) || opcode == 0xC9 || opcode == 0xDA || opcode == 0xEE;
-        if (isMove && moveDump-- > 0) {
-            std::string hex = "MOVE PKT dump opcode=0x";
-            char buf[8]; snprintf(buf, sizeof(buf), "%03x", opcode); hex += buf;
-            hex += " payload=" + std::to_string(payloadLen) + " bytes: ";
-            for (size_t i = 6; i < sendData.size() && i < 6 + 48; i++) {
-                char b[4]; snprintf(b, sizeof(b), "%02x ", sendData[i]);
-                hex += b;
-            }
-            LOG_INFO(hex);
-        }
-    }
-
     // Debug: dump packet bytes for AUTH_SESSION
     if (opcode == 0x1ED) {
         std::string hexDump = "AUTH_SESSION raw bytes: ";
@@ -154,6 +171,10 @@ void WorldSocket::send(const Packet& packet) {
             if ((i + 1) % 32 == 0) hexDump += "\n";
         }
         LOG_DEBUG(hexDump);
+    }
+    if (isLoginPipelineCmsg(opcode)) {
+        LOG_INFO("WS TX LOGIN opcode=0x", std::hex, opcode, std::dec,
+                 " payload=", payloadLen, " enc=", encryptionEnabled ? "yes" : "no");
     }
 
     // Send complete packet
@@ -170,26 +191,48 @@ void WorldSocket::send(const Packet& packet) {
 void WorldSocket::update() {
     if (!connected) return;
 
-    // Receive data into buffer
-    uint8_t buffer[4096];
-    ssize_t received = net::portableRecv(sockfd, buffer, sizeof(buffer));
+    size_t bytesReadThisTick = 0;
+    int readOps = 0;
+    while (connected) {
+        uint8_t buffer[4096];
+        ssize_t received = net::portableRecv(sockfd, buffer, sizeof(buffer));
 
-    if (received > 0) {
-        LOG_DEBUG("Received ", received, " bytes from world server");
-        receiveBuffer.insert(receiveBuffer.end(), buffer, buffer + received);
+        if (received > 0) {
+            ++readOps;
+            bytesReadThisTick += static_cast<size_t>(received);
+            receiveBuffer.insert(receiveBuffer.end(), buffer, buffer + received);
+            if (receiveBuffer.size() > kMaxReceiveBufferBytes) {
+                LOG_ERROR("World socket receive buffer overflow (", receiveBuffer.size(),
+                          " bytes). Disconnecting to recover framing.");
+                disconnect();
+                return;
+            }
+            continue;
+        }
 
-        // Try to parse complete packets from buffer
-        tryParsePackets();
-    }
-    else if (received == 0) {
-        LOG_INFO("World server connection closed");
-        disconnect();
-    }
-    else {
-        int err = net::lastError();
-        if (!net::isWouldBlock(err)) {
-            LOG_ERROR("Receive failed: ", net::errorString(err));
+        if (received == 0) {
+            LOG_INFO("World server connection closed");
             disconnect();
+            return;
+        }
+
+        int err = net::lastError();
+        if (net::isWouldBlock(err)) {
+            break;
+        }
+
+        LOG_ERROR("Receive failed: ", net::errorString(err));
+        disconnect();
+        return;
+    }
+
+    if (bytesReadThisTick > 0) {
+        LOG_DEBUG("World socket read ", bytesReadThisTick, " bytes in ", readOps,
+                  " recv call(s), buffered=", receiveBuffer.size());
+        tryParsePackets();
+        if (connected && !receiveBuffer.empty()) {
+            LOG_DEBUG("World socket parse left ", receiveBuffer.size(),
+                      " bytes buffered (awaiting complete packet)");
         }
     }
 }
@@ -197,6 +240,9 @@ void WorldSocket::update() {
 void WorldSocket::tryParsePackets() {
     // World server packets have 4-byte incoming header: size(2) + opcode(2)
     while (receiveBuffer.size() >= 4) {
+        uint8_t rawHeader[4] = {0, 0, 0, 0};
+        std::memcpy(rawHeader, receiveBuffer.data(), 4);
+
         // Decrypt header bytes in-place if encryption is enabled
         // Only decrypt bytes we haven't already decrypted
         if (encryptionEnabled && headerBytesDecrypted < 4) {
@@ -205,48 +251,62 @@ void WorldSocket::tryParsePackets() {
             headerBytesDecrypted = 4;
         }
 
-        // Parse header (now decrypted in-place)
-        // Size: 2 bytes big-endian (includes opcode, so payload = size - 2)
+        // Parse header (now decrypted in-place).
+        // Size: 2 bytes big-endian. For world packets, this includes opcode bytes.
         uint16_t size = (receiveBuffer[0] << 8) | receiveBuffer[1];
-        // Opcode: 2 bytes little-endian
+        // Opcode: 2 bytes little-endian.
         uint16_t opcode = receiveBuffer[2] | (receiveBuffer[3] << 8);
+        if (size < 2) {
+            LOG_ERROR("World packet framing desync: invalid size=", size,
+                      " rawHdr=", std::hex,
+                      static_cast<int>(rawHeader[0]), " ",
+                      static_cast<int>(rawHeader[1]), " ",
+                      static_cast<int>(rawHeader[2]), " ",
+                      static_cast<int>(rawHeader[3]), std::dec,
+                      " enc=", encryptionEnabled, ". Disconnecting to recover stream.");
+            disconnect();
+            return;
+        }
+        constexpr uint16_t kMaxWorldPacketSize = 0x4000;
+        if (size > kMaxWorldPacketSize) {
+            LOG_ERROR("World packet framing desync: oversized packet size=", size,
+                      " rawHdr=", std::hex,
+                      static_cast<int>(rawHeader[0]), " ",
+                      static_cast<int>(rawHeader[1]), " ",
+                      static_cast<int>(rawHeader[2]), " ",
+                      static_cast<int>(rawHeader[3]), std::dec,
+                      " enc=", encryptionEnabled, ". Disconnecting to recover stream.");
+            disconnect();
+            return;
+        }
 
-        // Total packet size: size field (2) + size value (which includes opcode + payload)
-        size_t totalSize = 2 + size;
+        const uint16_t payloadLen = size - 2;
+        const size_t totalSize = 4 + payloadLen;
 
-        // DEBUG: Log packet boundary details for quest-related opcodes
-        if (opcode == 0x18F || opcode == 0x18D || opcode == 0x188 || opcode == 0x186) {
-            char hexBuf[256];
-            snprintf(hexBuf, sizeof(hexBuf),
-                     "PACKET BOUNDARY: opcode=0x%04X size=%u totalSize=%zu bufferSize=%zu",
-                     opcode, size, totalSize, receiveBuffer.size());
-            core::Logger::getInstance().info(hexBuf);
-
-            // Dump header bytes
-            snprintf(hexBuf, sizeof(hexBuf),
-                     "  Header: %02x %02x %02x %02x",
-                     receiveBuffer[0], receiveBuffer[1], receiveBuffer[2], receiveBuffer[3]);
-            core::Logger::getInstance().info(hexBuf);
-
-            // Dump first 16 bytes of payload (if available)
-            if (totalSize <= receiveBuffer.size()) {
-                std::string payloadHex = "  Payload: ";
-                for (size_t i = 4; i < std::min(totalSize, size_t(20)); ++i) {
-                    char buf[4];
-                    snprintf(buf, sizeof(buf), "%02x ", receiveBuffer[i]);
-                    payloadHex += buf;
-                }
-                core::Logger::getInstance().info(payloadHex);
-            }
-
-            // Dump what comes after this packet (next header preview)
-            if (receiveBuffer.size() > totalSize && receiveBuffer.size() >= totalSize + 4) {
-                snprintf(hexBuf, sizeof(hexBuf),
-                         "  Next header: %02x %02x %02x %02x",
-                         receiveBuffer[totalSize], receiveBuffer[totalSize+1],
-                         receiveBuffer[totalSize+2], receiveBuffer[totalSize+3]);
-                core::Logger::getInstance().info(hexBuf);
-            }
+        if (headerTracePacketsLeft > 0) {
+            LOG_INFO("WS HDR TRACE raw=",
+                     std::hex,
+                     static_cast<int>(rawHeader[0]), " ",
+                     static_cast<int>(rawHeader[1]), " ",
+                     static_cast<int>(rawHeader[2]), " ",
+                     static_cast<int>(rawHeader[3]),
+                     " dec=",
+                     static_cast<int>(receiveBuffer[0]), " ",
+                     static_cast<int>(receiveBuffer[1]), " ",
+                     static_cast<int>(receiveBuffer[2]), " ",
+                     static_cast<int>(receiveBuffer[3]),
+                     std::dec,
+                     " size=", size,
+                     " payload=", payloadLen,
+                     " opcode=0x", std::hex, opcode, std::dec,
+                     " buffered=", receiveBuffer.size());
+            --headerTracePacketsLeft;
+        }
+        if (isLoginPipelineSmsg(opcode)) {
+            LOG_INFO("WS RX LOGIN opcode=0x", std::hex, opcode, std::dec,
+                     " size=", size, " payload=", payloadLen,
+                     " buffered=", receiveBuffer.size(),
+                     " enc=", encryptionEnabled ? "yes" : "no");
         }
 
         if (receiveBuffer.size() < totalSize) {
@@ -260,29 +320,6 @@ void WorldSocket::tryParsePackets() {
 
         // Create packet with opcode and payload
         Packet packet(opcode, packetData);
-
-        // Log raw SMSG_TALENTS_INFO packets at network boundary
-        if (opcode == 0x4C0) {  // SMSG_TALENTS_INFO
-            std::stringstream headerHex, payloadHex;
-            headerHex << std::hex << std::setfill('0');
-            payloadHex << std::hex << std::setfill('0');
-
-            // Header (4 bytes from receiveBuffer before packetData extraction)
-            // Note: receiveBuffer still has the full packet at this point
-            for (size_t i = 0; i < 4 && i < receiveBuffer.size(); ++i) {
-                headerHex << std::setw(2) << (int)(uint8_t)receiveBuffer[i] << " ";
-            }
-
-            // Payload (ALL bytes)
-            for (size_t i = 0; i < packetData.size(); ++i) {
-                payloadHex << std::setw(2) << (int)(uint8_t)packetData[i] << " ";
-            }
-
-            LOG_INFO("=== SMSG_TALENTS_INFO RAW PACKET ===");
-            LOG_INFO("Header: ", headerHex.str());
-            LOG_INFO("Payload: ", payloadHex.str());
-            LOG_INFO("Total payload size: ", packetData.size(), " bytes");
-        }
 
         // Remove parsed data from buffer and reset header decryption counter
         receiveBuffer.erase(receiveBuffer.begin(), receiveBuffer.begin() + totalSize);
@@ -324,6 +361,7 @@ void WorldSocket::initEncryption(const std::vector<uint8_t>& sessionKey) {
     decryptCipher.drop(1024);
 
     encryptionEnabled = true;
+    headerTracePacketsLeft = 24;
     LOG_INFO("World server encryption initialized successfully");
 }
 

@@ -74,6 +74,14 @@ public:
     std::vector<uint8_t> readFile(const std::string& path) const;
 
     /**
+     * Read optional file data from MPQ archives without warning spam.
+     * Intended for probe-style lookups (e.g. external .anim variants).
+     * @param path Virtual file path
+     * @return File contents (empty if not found)
+     */
+    std::vector<uint8_t> readFileOptional(const std::string& path) const;
+
+    /**
      * Get MPQ manager for direct access
      */
     MPQManager& getMPQManager() { return mpqManager; }

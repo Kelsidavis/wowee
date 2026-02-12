@@ -29,6 +29,42 @@
 namespace wowee {
 namespace game {
 
+namespace {
+const char* worldStateName(WorldState state) {
+    switch (state) {
+        case WorldState::DISCONNECTED: return "DISCONNECTED";
+        case WorldState::CONNECTING: return "CONNECTING";
+        case WorldState::CONNECTED: return "CONNECTED";
+        case WorldState::CHALLENGE_RECEIVED: return "CHALLENGE_RECEIVED";
+        case WorldState::AUTH_SENT: return "AUTH_SENT";
+        case WorldState::AUTHENTICATED: return "AUTHENTICATED";
+        case WorldState::READY: return "READY";
+        case WorldState::CHAR_LIST_REQUESTED: return "CHAR_LIST_REQUESTED";
+        case WorldState::CHAR_LIST_RECEIVED: return "CHAR_LIST_RECEIVED";
+        case WorldState::ENTERING_WORLD: return "ENTERING_WORLD";
+        case WorldState::IN_WORLD: return "IN_WORLD";
+        case WorldState::FAILED: return "FAILED";
+    }
+    return "UNKNOWN";
+}
+
+bool isAuthCharPipelineOpcode(uint16_t opcode) {
+    switch (opcode) {
+        case static_cast<uint16_t>(Opcode::SMSG_AUTH_CHALLENGE):
+        case static_cast<uint16_t>(Opcode::SMSG_AUTH_RESPONSE):
+        case static_cast<uint16_t>(Opcode::SMSG_CLIENTCACHE_VERSION):
+        case static_cast<uint16_t>(Opcode::SMSG_TUTORIAL_FLAGS):
+        case static_cast<uint16_t>(Opcode::SMSG_WARDEN_DATA):
+        case static_cast<uint16_t>(Opcode::SMSG_CHAR_ENUM):
+        case static_cast<uint16_t>(Opcode::SMSG_CHAR_CREATE):
+        case static_cast<uint16_t>(Opcode::SMSG_CHAR_DELETE):
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace
+
 
 GameHandler::GameHandler() {
     LOG_DEBUG("GameHandler created");
@@ -171,7 +207,7 @@ void GameHandler::update(float deltaTime) {
     socketTime += std::chrono::duration<float, std::milli>(socketEnd - socketStart).count();
 
     // Post-gate visibility: determine whether server goes silent or closes after Warden requirement.
-    if (wardenGateSeen_ && socket) {
+    if (wardenGateSeen_ && socket && socket->isConnected()) {
         wardenGateElapsed_ += deltaTime;
         if (wardenGateElapsed_ >= wardenGateNextStatusLog_) {
             LOG_INFO("Warden gate status: elapsed=", wardenGateElapsed_,
@@ -504,6 +540,11 @@ void GameHandler::handlePacket(network::Packet& packet) {
     if (wardenGateSeen_ && opcode != static_cast<uint16_t>(Opcode::SMSG_WARDEN_DATA)) {
         ++wardenPacketsAfterGate_;
     }
+    if (isAuthCharPipelineOpcode(opcode)) {
+        LOG_INFO("AUTH/CHAR RX opcode=0x", std::hex, opcode, std::dec,
+                 " state=", worldStateName(state),
+                 " size=", packet.getSize());
+    }
 
     LOG_DEBUG("Received world packet: opcode=0x", std::hex, opcode, std::dec,
               " size=", packet.getSize(), " bytes");
@@ -516,7 +557,7 @@ void GameHandler::handlePacket(network::Packet& packet) {
             if (state == WorldState::CONNECTED) {
                 handleAuthChallenge(packet);
             } else {
-                LOG_WARNING("Unexpected SMSG_AUTH_CHALLENGE in state: ", (int)state);
+                LOG_WARNING("Unexpected SMSG_AUTH_CHALLENGE in state: ", worldStateName(state));
             }
             break;
 
@@ -524,7 +565,7 @@ void GameHandler::handlePacket(network::Packet& packet) {
             if (state == WorldState::AUTH_SENT) {
                 handleAuthResponse(packet);
             } else {
-                LOG_WARNING("Unexpected SMSG_AUTH_RESPONSE in state: ", (int)state);
+                LOG_WARNING("Unexpected SMSG_AUTH_RESPONSE in state: ", worldStateName(state));
             }
             break;
 
@@ -546,7 +587,7 @@ void GameHandler::handlePacket(network::Packet& packet) {
             if (state == WorldState::CHAR_LIST_REQUESTED) {
                 handleCharEnum(packet);
             } else {
-                LOG_WARNING("Unexpected SMSG_CHAR_ENUM in state: ", (int)state);
+                LOG_WARNING("Unexpected SMSG_CHAR_ENUM in state: ", worldStateName(state));
             }
             break;
 
@@ -554,7 +595,7 @@ void GameHandler::handlePacket(network::Packet& packet) {
             if (state == WorldState::ENTERING_WORLD || state == WorldState::IN_WORLD) {
                 handleLoginVerifyWorld(packet);
             } else {
-                LOG_WARNING("Unexpected SMSG_LOGIN_VERIFY_WORLD in state: ", (int)state);
+                LOG_WARNING("Unexpected SMSG_LOGIN_VERIFY_WORLD in state: ", worldStateName(state));
             }
             break;
 
@@ -1433,7 +1474,7 @@ void GameHandler::requestCharacterList() {
 
     if (state != WorldState::READY && state != WorldState::AUTHENTICATED &&
         state != WorldState::CHAR_LIST_RECEIVED) {
-        LOG_WARNING("Cannot request character list in state: ", (int)state);
+        LOG_WARNING("Cannot request character list in state: ", worldStateName(state));
         return;
     }
 
@@ -1507,7 +1548,7 @@ void GameHandler::createCharacter(const CharCreateData& data) {
 
     if (state != WorldState::CHAR_LIST_RECEIVED) {
         std::string msg = "Character list not ready yet. Wait for SMSG_CHAR_ENUM.";
-        LOG_WARNING("Blocking CMSG_CHAR_CREATE in state=", static_cast<int>(state),
+        LOG_WARNING("Blocking CMSG_CHAR_CREATE in state=", worldStateName(state),
                     " (awaiting CHAR_LIST_RECEIVED)");
         if (charCreateCallback_) {
             charCreateCallback_(false, msg);

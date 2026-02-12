@@ -234,7 +234,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
                 baseName.c_str(),
                 model.sequences[si].id,
                 model.sequences[si].variationIndex);
-            auto animFileData = assetManager_->readFile(animFileName);
+            auto animFileData = assetManager_->readFileOptional(animFileName);
             if (!animFileData.empty()) {
                 pipeline::M2Loader::loadAnimFile(m2Data, animFileData, si, model);
             }
