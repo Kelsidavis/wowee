@@ -1548,25 +1548,23 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
             }
         }
 
-        // Frustum + distance cull: skip expensive bone computation for off-screen instances
-        // Aggressive culling for performance (double frame rate target)
+        // Frustum + distance cull: skip expensive bone computation for off-screen instances.
+        // Keep thresholds aligned with render culling so visible distant ambient actors
+        // (fish/seagulls/etc.) continue animating instead of freezing in idle poses.
         float worldRadius = model.boundRadius * instance.scale;
         float cullRadius = worldRadius;
+        if (model.disableAnimation) {
+            cullRadius = std::max(cullRadius, 3.0f);
+        }
         glm::vec3 toCam = instance.position - cachedCamPos_;
         float distSq = glm::dot(toCam, toCam);
         float effectiveMaxDistSq = cachedMaxRenderDistSq_ * std::max(1.0f, cullRadius / 12.0f);
-        if (!model.disableAnimation) {
-            // Ultra-aggressive animation culling for 60fps target
-            if (worldRadius < 0.8f) {
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 25.0f * 25.0f);  // Ultra tight for small
-            } else if (worldRadius < 1.5f) {
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 50.0f * 50.0f);  // Very tight for medium
-            } else if (worldRadius < 3.0f) {
-                effectiveMaxDistSq = std::min(effectiveMaxDistSq, 80.0f * 80.0f);  // Tight for large
-            }
+        if (model.disableAnimation) {
+            effectiveMaxDistSq *= 2.6f;
         }
         if (distSq > effectiveMaxDistSq) continue;
-        if (cullRadius > 0.0f && !updateFrustum.intersectsSphere(instance.position, cullRadius)) continue;
+        float paddedRadius = std::max(cullRadius * 1.5f, cullRadius + 3.0f);
+        if (cullRadius > 0.0f && !updateFrustum.intersectsSphere(instance.position, paddedRadius)) continue;
 
         boneWorkIndices_.push_back(idx);
     }
@@ -2333,6 +2331,15 @@ void M2Renderer::renderM2Particles(const glm::mat4& view, const glm::mat4& proj)
             glm::vec3 color = interpFBlockVec3(em.particleColor, lifeRatio);
             float alpha = interpFBlockFloat(em.particleAlpha, lifeRatio);
             float scale = interpFBlockFloat(em.particleScale, lifeRatio);
+
+            // Some waterfall/spray emitters become overly dark after channel-correct decoding.
+            // Apply a small correction only for strongly blue-dominant particle colors.
+            if (color.b > color.r * 1.4f && color.b > color.g * 1.15f) {
+                float luma = color.r * 0.2126f + color.g * 0.7152f + color.b * 0.0722f;
+                color = glm::mix(color, glm::vec3(luma), 0.35f);
+                color *= 1.35f;
+                color = glm::clamp(color, glm::vec3(0.28f, 0.35f, 0.45f), glm::vec3(1.0f));
+            }
 
             GLuint tex = whiteTexture;
             if (p.emitterIndex < static_cast<int>(gpu.particleTextures.size())) {

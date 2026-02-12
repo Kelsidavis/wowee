@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <map>
 #include <optional>
+#include <algorithm>
 
 namespace wowee::game {
     class TransportManager;
@@ -516,10 +517,18 @@ public:
     void setPlayerOnTransport(uint64_t transportGuid, const glm::vec3& localOffset) {
         playerTransportGuid_ = transportGuid;
         playerTransportOffset_ = localOffset;
+        playerTransportStickyGuid_ = transportGuid;
+        playerTransportStickyTimer_ = 8.0f;
+        movementInfo.transportGuid = transportGuid;
     }
     void clearPlayerTransport() {
+        if (playerTransportGuid_ != 0) {
+            playerTransportStickyGuid_ = playerTransportGuid_;
+            playerTransportStickyTimer_ = std::max(playerTransportStickyTimer_, 1.5f);
+        }
         playerTransportGuid_ = 0;
         playerTransportOffset_ = glm::vec3(0.0f);
+        movementInfo.transportGuid = 0;
     }
 
     // Cooldowns
@@ -1032,6 +1041,8 @@ private:
     std::unordered_set<uint64_t> serverUpdatedTransportGuids_;
     uint64_t playerTransportGuid_ = 0;             // Transport the player is riding (0 = none)
     glm::vec3 playerTransportOffset_ = glm::vec3(0.0f); // Player offset on transport
+    uint64_t playerTransportStickyGuid_ = 0;       // Last transport player was on (temporary retention)
+    float playerTransportStickyTimer_ = 0.0f;      // Seconds to keep sticky transport alive after transient clears
     std::unique_ptr<TransportManager> transportManager_;  // Transport movement manager
     std::vector<uint32_t> knownSpells;
     std::unordered_map<uint32_t, float> spellCooldowns;    // spellId -> remaining seconds

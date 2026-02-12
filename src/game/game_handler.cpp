@@ -217,6 +217,13 @@ void GameHandler::update(float deltaTime) {
         if (taxiStartGrace_ > 0.0f) {
             taxiStartGrace_ -= deltaTime;
         }
+        if (playerTransportStickyTimer_ > 0.0f) {
+            playerTransportStickyTimer_ -= deltaTime;
+            if (playerTransportStickyTimer_ <= 0.0f) {
+                playerTransportStickyTimer_ = 0.0f;
+                playerTransportStickyGuid_ = 0;
+            }
+        }
 
         // Taxi logic timing
         auto taxiStart = std::chrono::high_resolution_clock::now();
@@ -1985,11 +1992,18 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
         if (entityManager.hasEntity(guid)) {
             const bool isKnownTransport = transportGuids_.count(guid) > 0;
             if (isKnownTransport) {
-                if (playerTransportGuid_ == guid) {
-                    LOG_INFO("Keeping transport in-range while player is aboard: 0x", std::hex, guid, std::dec);
-                    continue;
-                }
-                LOG_INFO("Processing out-of-range removal for transport: 0x", std::hex, guid, std::dec);
+                // Keep transports alive across out-of-range flapping.
+                // Boats/zeppelins are global movers and removing them here can make
+                // them disappear until a later movement snapshot happens to recreate them.
+                const bool playerAboardNow = (playerTransportGuid_ == guid);
+                const bool stickyAboard = (playerTransportStickyGuid_ == guid && playerTransportStickyTimer_ > 0.0f);
+                const bool movementSaysAboard = (movementInfo.transportGuid == guid);
+                LOG_INFO("Preserving transport on out-of-range: 0x",
+                         std::hex, guid, std::dec,
+                         " now=", playerAboardNow,
+                         " sticky=", stickyAboard,
+                         " movement=", movementSaysAboard);
+                continue;
             }
 
             LOG_DEBUG("Entity went out of range: 0x", std::hex, guid, std::dec);
@@ -2006,8 +2020,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
             serverUpdatedTransportGuids_.erase(guid);
             clearTransportAttachment(guid);
             if (playerTransportGuid_ == guid) {
-                playerTransportGuid_ = 0;
-                playerTransportOffset_ = glm::vec3(0.0f);
+                clearPlayerTransport();
             }
             entityManager.removeEntity(guid);
         }
@@ -2051,7 +2064,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     // Track player-on-transport state
                     if (block.guid == playerGuid) {
                         if (block.onTransport) {
-                            playerTransportGuid_ = block.transportGuid;
+                            setPlayerOnTransport(block.transportGuid, glm::vec3(0.0f));
                             // Convert transport offset from server → canonical coordinates
                             glm::vec3 serverOffset(block.transportX, block.transportY, block.transportZ);
                             playerTransportOffset_ = core::coords::serverToCanonical(serverOffset);
@@ -2063,13 +2076,12 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                 movementInfo.z = composed.z;
                             }
                             LOG_INFO("Player on transport: 0x", std::hex, playerTransportGuid_, std::dec,
-                                     " offset=(", playerTransportOffset_.x, ", ", playerTransportOffset_.y, ", ", playerTransportOffset_.z, ")");
+                                    " offset=(", playerTransportOffset_.x, ", ", playerTransportOffset_.y, ", ", playerTransportOffset_.z, ")");
                         } else {
                             if (playerTransportGuid_ != 0) {
                                 LOG_INFO("Player left transport");
                             }
-                            playerTransportGuid_ = 0;
-                            playerTransportOffset_ = glm::vec3(0.0f);
+                            clearPlayerTransport();
                         }
                     }
 
@@ -2657,7 +2669,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
 
                         // Track player-on-transport state from MOVEMENT updates
                         if (block.onTransport) {
-                            playerTransportGuid_ = block.transportGuid;
+                            setPlayerOnTransport(block.transportGuid, glm::vec3(0.0f));
                             // Convert transport offset from server → canonical coordinates
                             glm::vec3 serverOffset(block.transportX, block.transportY, block.transportZ);
                             playerTransportOffset_ = core::coords::serverToCanonical(serverOffset);
@@ -2679,8 +2691,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             movementInfo.z = pos.z;
                             if (playerTransportGuid_ != 0) {
                                 LOG_INFO("Player left transport (MOVEMENT)");
-                                playerTransportGuid_ = 0;
-                                playerTransportOffset_ = glm::vec3(0.0f);
+                                clearPlayerTransport();
                             }
                         }
                     }
@@ -2772,9 +2783,17 @@ void GameHandler::handleDestroyObject(network::Packet& packet) {
     // Remove entity
     if (entityManager.hasEntity(data.guid)) {
         if (transportGuids_.count(data.guid) > 0) {
-            serverUpdatedTransportGuids_.erase(data.guid);
-            LOG_INFO("Ignoring destroy for transport entity: 0x", std::hex, data.guid, std::dec);
-            return;
+            const bool playerAboardNow = (playerTransportGuid_ == data.guid);
+            const bool stickyAboard = (playerTransportStickyGuid_ == data.guid && playerTransportStickyTimer_ > 0.0f);
+            const bool movementSaysAboard = (movementInfo.transportGuid == data.guid);
+            if (playerAboardNow || stickyAboard || movementSaysAboard) {
+                serverUpdatedTransportGuids_.erase(data.guid);
+                LOG_INFO("Preserving in-use transport on destroy: 0x", std::hex, data.guid, std::dec,
+                         " now=", playerAboardNow,
+                         " sticky=", stickyAboard,
+                         " movement=", movementSaysAboard);
+                return;
+            }
         }
         // Mirror out-of-range handling: invoke render-layer despawn callbacks before entity removal.
         auto entity = entityManager.getEntity(data.guid);
@@ -2783,6 +2802,13 @@ void GameHandler::handleDestroyObject(network::Packet& packet) {
                 creatureDespawnCallback_(data.guid);
             } else if (entity->getType() == ObjectType::GAMEOBJECT && gameObjectDespawnCallback_) {
                 gameObjectDespawnCallback_(data.guid);
+            }
+        }
+        if (transportGuids_.count(data.guid) > 0) {
+            transportGuids_.erase(data.guid);
+            serverUpdatedTransportGuids_.erase(data.guid);
+            if (playerTransportGuid_ == data.guid) {
+                clearPlayerTransport();
             }
         }
         clearTransportAttachment(data.guid);

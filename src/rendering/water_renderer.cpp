@@ -506,6 +506,17 @@ void WaterRenderer::render(const Camera& camera, float time) {
         glm::vec4 color = getLiquidColor(surface.liquidType);
         float alpha = getLiquidAlpha(surface.liquidType);
 
+        // WMO liquid material IDs are not always 1:1 with terrain LiquidType.dbc semantics.
+        // Avoid accidental magma/slime tint (red/green waterfalls) by forcing WMO liquids
+        // to water-like shading unless they're explicitly ocean.
+        if (surface.wmoId != 0) {
+            const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
+            if (basicType == 2 || basicType == 3) {
+                color = glm::vec4(0.2f, 0.4f, 0.6f, 1.0f);
+                alpha = 0.45f;
+            }
+        }
+
         // City/canal liquid profile: clearer water + stronger ripples/sun shimmer.
         // Stormwind canals typically use LiquidType 5 in this data set.
         bool canalProfile = (surface.wmoId != 0) || (surface.liquidType == 5);
