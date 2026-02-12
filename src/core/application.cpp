@@ -1290,7 +1290,16 @@ void Application::setupUICallbacks() {
                      " pos=(", pending.x, ", ", pending.y, ", ", pending.z, ") orientation=", pending.orientation);
             pendingTransportMoves_.erase(pendingIt);
         }
-        LOG_INFO("Transport registered - server-authoritative movement");
+        if (auto* tr = transportManager->getTransport(guid); tr) {
+            LOG_INFO("Transport registered: guid=0x", std::hex, guid, std::dec,
+                     " entry=", entry, " displayId=", displayId,
+                     " pathId=", tr->pathId,
+                     " mode=", (tr->useClientAnimation ? "client" : "server"),
+                     " serverUpdates=", tr->serverUpdateCount);
+        } else {
+            LOG_INFO("Transport registered: guid=0x", std::hex, guid, std::dec,
+                     " entry=", entry, " displayId=", displayId, " (TransportManager instance missing)");
+        }
     });
 
     // Transport move callback (online mode) - update transport gameobject positions
