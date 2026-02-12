@@ -43,6 +43,7 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
     transport.guid = guid;
     transport.wmoInstanceId = wmoInstanceId;
     transport.pathId = pathId;
+    transport.allowBootstrapVelocity = true;
 
     // CRITICAL: Set basePosition from spawn position and t=0 offset
     // For stationary paths (1 waypoint), just use spawn position directly
@@ -59,11 +60,19 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
         // Sanity check: firstWaypoint should match spawnWorldPos
         glm::vec3 firstWaypoint = path.points[0].pos;
         glm::vec3 waypointDiff = spawnWorldPos - firstWaypoint;
-        if (glm::length(waypointDiff) > 1.0f) {
+        const float mismatchDist = glm::length(waypointDiff);
+        if (mismatchDist > 1.0f) {
             LOG_WARNING("Transport 0x", std::hex, guid, std::dec, " path ", pathId,
                        ": firstWaypoint mismatch! spawnPos=(", spawnWorldPos.x, ",", spawnWorldPos.y, ",", spawnWorldPos.z, ")",
                        " firstWaypoint=(", firstWaypoint.x, ",", firstWaypoint.y, ",", firstWaypoint.z, ")",
                        " diff=(", waypointDiff.x, ",", waypointDiff.y, ",", waypointDiff.z, ")");
+        }
+        const bool firstWaypointIsOrigin = glm::dot(firstWaypoint, firstWaypoint) < 0.0001f;
+        if (mismatchDist > 500.0f || (firstWaypointIsOrigin && mismatchDist > 50.0f)) {
+            transport.allowBootstrapVelocity = false;
+            LOG_WARNING("Transport 0x", std::hex, guid, std::dec,
+                        " disabling DBC bootstrap velocity due to large spawn/path mismatch (dist=",
+                        mismatchDist, ", firstIsOrigin=", firstWaypointIsOrigin, ")");
         }
     }
 
@@ -580,7 +589,7 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
         // Bootstrap velocity from mapped DBC path on first authoritative sample.
         // This avoids "stalled at dock" when server sends sparse transport snapshots.
         auto pathIt2 = paths_.find(transport->pathId);
-        if (pathIt2 != paths_.end()) {
+        if (transport->allowBootstrapVelocity && pathIt2 != paths_.end()) {
             const auto& path = pathIt2->second;
             if (path.points.size() >= 2 && path.durationMs > 0) {
                 glm::vec3 local = position - transport->basePosition;
@@ -595,54 +604,79 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
                     }
                 }
 
-                size_t n = path.points.size();
-                size_t nextIdx = (bestIdx + 1) % n;
-                uint32_t t0 = path.points[bestIdx].tMs;
-                uint32_t t1 = path.points[nextIdx].tMs;
-                if (nextIdx == 0 && t1 <= t0 && path.durationMs > 0) {
-                    t1 = path.durationMs;
-                }
-                if (t1 <= t0 && n > 2) {
-                    size_t prevIdx = (bestIdx + n - 1) % n;
-                    t0 = path.points[prevIdx].tMs;
-                    t1 = path.points[bestIdx].tMs;
-                    glm::vec3 seg = path.points[bestIdx].pos - path.points[prevIdx].pos;
-                    float dtSeg = static_cast<float>(t1 - t0) / 1000.0f;
-                    if (dtSeg > 0.001f) {
-                        glm::vec3 v = seg / dtSeg;
-                        float speed = glm::length(v);
-                        constexpr float kMaxSpeed = 60.0f;
-                        if (speed > kMaxSpeed) {
-                            v *= (kMaxSpeed / speed);
-                        }
-                        transport->serverLinearVelocity = v;
-                        transport->serverAngularVelocity = 0.0f;
-                        transport->hasServerVelocity = true;
-                    }
+                constexpr float kMaxBootstrapNearestDist = 80.0f;
+                if (bestDistSq > (kMaxBootstrapNearestDist * kMaxBootstrapNearestDist)) {
+                    LOG_WARNING("Transport 0x", std::hex, guid, std::dec,
+                                " skipping DBC bootstrap velocity: nearest path point too far (dist=",
+                                std::sqrt(bestDistSq), ", path=", transport->pathId, ")");
                 } else {
-                    glm::vec3 seg = path.points[nextIdx].pos - path.points[bestIdx].pos;
-                    float dtSeg = static_cast<float>(t1 - t0) / 1000.0f;
-                    if (dtSeg > 0.001f) {
-                        glm::vec3 v = seg / dtSeg;
-                        float speed = glm::length(v);
-                        constexpr float kMaxSpeed = 60.0f;
-                        if (speed > kMaxSpeed) {
-                            v *= (kMaxSpeed / speed);
-                        }
-                        transport->serverLinearVelocity = v;
-                        transport->serverAngularVelocity = 0.0f;
-                        transport->hasServerVelocity = true;
+                    size_t n = path.points.size();
+                    size_t nextIdx = (bestIdx + 1) % n;
+                    uint32_t t0 = path.points[bestIdx].tMs;
+                    uint32_t t1 = path.points[nextIdx].tMs;
+                    if (nextIdx == 0 && t1 <= t0 && path.durationMs > 0) {
+                        t1 = path.durationMs;
                     }
-                }
+                    if (t1 <= t0 && n > 2) {
+                        size_t prevIdx = (bestIdx + n - 1) % n;
+                        t0 = path.points[prevIdx].tMs;
+                        t1 = path.points[bestIdx].tMs;
+                        glm::vec3 seg = path.points[bestIdx].pos - path.points[prevIdx].pos;
+                        float dtSeg = static_cast<float>(t1 - t0) / 1000.0f;
+                        if (dtSeg > 0.001f) {
+                            glm::vec3 v = seg / dtSeg;
+                            float speed = glm::length(v);
+                            constexpr float kMinBootstrapSpeed = 0.25f;
+                            constexpr float kMaxSpeed = 60.0f;
+                            if (speed < kMinBootstrapSpeed) {
+                                speed = 0.0f;
+                            }
+                            if (speed > kMaxSpeed) {
+                                v *= (kMaxSpeed / speed);
+                            }
+                            if (speed >= kMinBootstrapSpeed) {
+                                transport->serverLinearVelocity = v;
+                                transport->serverAngularVelocity = 0.0f;
+                                transport->hasServerVelocity = true;
+                            }
+                        }
+                    } else {
+                        glm::vec3 seg = path.points[nextIdx].pos - path.points[bestIdx].pos;
+                        float dtSeg = static_cast<float>(t1 - t0) / 1000.0f;
+                        if (dtSeg > 0.001f) {
+                            glm::vec3 v = seg / dtSeg;
+                            float speed = glm::length(v);
+                            constexpr float kMinBootstrapSpeed = 0.25f;
+                            constexpr float kMaxSpeed = 60.0f;
+                            if (speed < kMinBootstrapSpeed) {
+                                speed = 0.0f;
+                            }
+                            if (speed > kMaxSpeed) {
+                                v *= (kMaxSpeed / speed);
+                            }
+                            if (speed >= kMinBootstrapSpeed) {
+                                transport->serverLinearVelocity = v;
+                                transport->serverAngularVelocity = 0.0f;
+                                transport->hasServerVelocity = true;
+                            }
+                        }
+                    }
 
-                if (transport->hasServerVelocity) {
-                    LOG_INFO("Transport 0x", std::hex, guid, std::dec,
-                             " bootstrapped velocity from DBC path ", transport->pathId,
-                             " v=(", transport->serverLinearVelocity.x, ", ",
-                             transport->serverLinearVelocity.y, ", ",
-                             transport->serverLinearVelocity.z, ")");
+                    if (transport->hasServerVelocity) {
+                        LOG_INFO("Transport 0x", std::hex, guid, std::dec,
+                                 " bootstrapped velocity from DBC path ", transport->pathId,
+                                 " v=(", transport->serverLinearVelocity.x, ", ",
+                                 transport->serverLinearVelocity.y, ", ",
+                                 transport->serverLinearVelocity.z, ")");
+                    } else {
+                        LOG_INFO("Transport 0x", std::hex, guid, std::dec,
+                                 " skipped DBC bootstrap velocity (segment too short/static)");
+                    }
                 }
             }
+        } else if (!transport->allowBootstrapVelocity) {
+            LOG_INFO("Transport 0x", std::hex, guid, std::dec,
+                     " DBC bootstrap velocity disabled for this transport");
         }
     }
 

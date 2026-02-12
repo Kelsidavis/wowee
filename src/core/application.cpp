@@ -351,6 +351,7 @@ void Application::logoutToLogin() {
     }
     npcsSpawned = false;
     playerCharacterSpawned = false;
+    weaponsSheathed_ = false;
     world.reset();
     if (renderer) {
         // Remove old player model so it doesn't persist into next session
@@ -407,6 +408,16 @@ void Application::update(float deltaTime) {
             }
             auto gh2 = std::chrono::high_resolution_clock::now();
             ghTime += std::chrono::duration<float, std::milli>(gh2 - gh1).count();
+
+            // Toggle weapon sheathe state with Z (ignored while UI captures keyboard).
+            {
+                const bool uiWantsKeyboard = ImGui::GetIO().WantCaptureKeyboard;
+                auto& input = Input::getInstance();
+                if (!uiWantsKeyboard && input.isKeyJustPressed(SDL_SCANCODE_Z)) {
+                    weaponsSheathed_ = !weaponsSheathed_;
+                    loadEquippedWeapons();
+                }
+            }
 
             auto w1 = std::chrono::high_resolution_clock::now();
             if (world) {
@@ -1235,6 +1246,16 @@ void Application::setupUICallbacks() {
         // Server-authoritative movement - set initial position from spawn data
         glm::vec3 canonicalPos(x, y, z);
         transportManager->updateServerTransport(guid, canonicalPos, orientation);
+
+        // If a move packet arrived before registration completed, replay latest now.
+        auto pendingIt = pendingTransportMoves_.find(guid);
+        if (pendingIt != pendingTransportMoves_.end()) {
+            const PendingTransportMove pending = pendingIt->second;
+            transportManager->updateServerTransport(guid, glm::vec3(pending.x, pending.y, pending.z), pending.orientation);
+            LOG_INFO("Replayed queued transport move for GUID=0x", std::hex, guid, std::dec,
+                     " pos=(", pending.x, ", ", pending.y, ", ", pending.z, ") orientation=", pending.orientation);
+            pendingTransportMoves_.erase(pendingIt);
+        }
         LOG_INFO("Transport registered - server-authoritative movement");
     });
 
@@ -1329,13 +1350,15 @@ void Application::setupUICallbacks() {
 
                     transportManager->registerTransport(guid, wmoInstanceId, pathId, canonicalSpawnPos);
                 } else {
+                    pendingTransportMoves_[guid] = PendingTransportMove{x, y, z, orientation};
                     LOG_WARNING("Cannot auto-spawn transport 0x", std::hex, guid, std::dec,
-                                " - WMO instance not found");
+                                " - WMO instance not found (queued move for replay)");
                     return;
                 }
             } else {
+                pendingTransportMoves_[guid] = PendingTransportMove{x, y, z, orientation};
                 LOG_WARNING("Cannot auto-spawn transport 0x", std::hex, guid, std::dec,
-                            " - entity not found in EntityManager");
+                            " - entity not found in EntityManager (queued move for replay)");
                 return;
             }
         }
@@ -1878,6 +1901,13 @@ void Application::loadEquippedWeapons() {
         { game::EquipSlot::MAIN_HAND, 1 },
         { game::EquipSlot::OFF_HAND,  2 },
     };
+
+    if (weaponsSheathed_) {
+        for (const auto& ws : weaponSlots) {
+            charRenderer->detachWeapon(charInstanceId, ws.attachmentId);
+        }
+        return;
+    }
 
     for (const auto& ws : weaponSlots) {
         const auto& equipSlot = inventory.getEquipSlot(ws.slot);

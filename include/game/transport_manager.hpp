@@ -66,6 +66,7 @@ struct ActiveTransport {
     glm::vec3 serverLinearVelocity;
     float serverAngularVelocity;
     bool hasServerVelocity;
+    bool allowBootstrapVelocity;   // Disable DBC bootstrap when spawn/path mismatch is clearly invalid
 };
 
 class TransportManager {

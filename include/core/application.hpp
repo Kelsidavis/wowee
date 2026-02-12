@@ -176,6 +176,13 @@ private:
     std::unordered_map<uint32_t, uint32_t> gameObjectDisplayIdModelCache_; // displayId → M2 modelId
     std::unordered_map<uint32_t, uint32_t> gameObjectDisplayIdWmoCache_;   // displayId → WMO modelId
     std::unordered_map<uint64_t, GameObjectInstanceInfo> gameObjectInstances_; // guid → instance info
+    struct PendingTransportMove {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float orientation = 0.0f;
+    };
+    std::unordered_map<uint64_t, PendingTransportMove> pendingTransportMoves_; // guid -> latest pre-registration move
     uint32_t nextGameObjectModelId_ = 20000;
     uint32_t nextGameObjectWmoModelId_ = 40000;
     bool gameObjectLookupsBuilt_ = false;
@@ -184,6 +191,7 @@ private:
     uint32_t mountInstanceId_ = 0;
     uint32_t mountModelId_ = 0;
     uint32_t pendingMountDisplayId_ = 0;  // Deferred mount load (0 = none pending)
+    bool weaponsSheathed_ = false;
     void processPendingMount();
     bool creatureLookupsBuilt_ = false;
 
