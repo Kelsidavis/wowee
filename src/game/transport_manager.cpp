@@ -998,7 +998,7 @@ uint32_t TransportManager::pickFallbackMovingPath(uint32_t entry, uint32_t displ
 
     // Fallback by display model family.
     const bool looksLikeShip =
-        (displayId == 3015u || displayId == 2454u || displayId == 7446u || displayId == 455u || displayId == 462u);
+        (displayId == 3015u || displayId == 2454u || displayId == 7446u);
     const bool looksLikeZeppelin =
         (displayId == 3031u || displayId == 7546u || displayId == 1587u || displayId == 807u || displayId == 808u);
 

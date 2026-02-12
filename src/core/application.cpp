@@ -1232,7 +1232,7 @@ void Application::setupUICallbacks() {
         const bool shipOrZeppelinDisplay =
             (displayId == 3015 || displayId == 3031 || displayId == 7546 ||
              displayId == 7446 || displayId == 1587 || displayId == 2454 ||
-             displayId == 807 || displayId == 808 || displayId == 455 || displayId == 462);
+             displayId == 807 || displayId == 808);
         bool hasUsablePath = transportManager->hasPathForEntry(entry);
         if (shipOrZeppelinDisplay) {
             // For true transports, reject tiny XY tracks that effectively look stationary.
@@ -1332,7 +1332,7 @@ void Application::setupUICallbacks() {
                     const bool shipOrZeppelinDisplay =
                         (displayId == 3015 || displayId == 3031 || displayId == 7546 ||
                          displayId == 7446 || displayId == 1587 || displayId == 2454 ||
-                         displayId == 807 || displayId == 808 || displayId == 455 || displayId == 462);
+                         displayId == 807 || displayId == 808);
                     bool hasUsablePath = transportManager->hasPathForEntry(entry);
                     if (shipOrZeppelinDisplay) {
                         hasUsablePath = transportManager->hasUsableMovingPathForEntry(entry, 25.0f);
@@ -3343,28 +3343,29 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t 
 
     std::string modelPath;
 
-    // Override model path for transports with wrong displayIds (preloaded transports)
-    // Check if this GUID is a known transport
-    bool isTransport = gameHandler && gameHandler->isTransportGuid(guid);
-    if (isTransport) {
-        // Map common transport displayIds to correct WMO paths
-        // DisplayIds 455, 462 = Elevators/Ships → try standard ship
-        // DisplayIds 807, 808 = Zeppelins
-        // DisplayIds 2454, 1587 = Special ships/icebreakers
-        if (displayId == 455 || displayId == 462 || entry == 20808 || entry == 176231 || entry == 176310) {
-            modelPath = "World\\wmo\\transports\\transport_ship\\transportship.wmo";
-            LOG_INFO("Overriding transport entry/display ", entry, "/", displayId, " → transportship.wmo");
-        } else if (displayId == 807 || displayId == 808 || displayId == 175080 || displayId == 176495 || displayId == 164871) {
-            modelPath = "World\\wmo\\transports\\transport_zeppelin\\transport_zeppelin.wmo";
-            LOG_INFO("Overriding transport displayId ", displayId, " → transport_zeppelin.wmo");
-        } else if (displayId == 1587) {
-            modelPath = "World\\wmo\\transports\\transport_horde_zeppelin\\Transport_Horde_Zeppelin.wmo";
-            LOG_INFO("Overriding transport displayId ", displayId, " → Transport_Horde_Zeppelin.wmo");
-        } else if (displayId == 2454 || displayId == 181688 || displayId == 190536) {
-            modelPath = "World\\wmo\\transports\\icebreaker\\Transport_Icebreaker_ship.wmo";
-            LOG_INFO("Overriding transport displayId ", displayId, " → Transport_Icebreaker_ship.wmo");
+        // Override model path for transports with wrong displayIds (preloaded transports)
+        // Check if this GUID is a known transport
+        bool isTransport = gameHandler && gameHandler->isTransportGuid(guid);
+        if (isTransport) {
+            // Map common transport displayIds to correct WMO paths
+            // NOTE: displayIds 455/462 are elevators in Thunder Bluff and should NOT be forced to ships.
+            // Keep ship/zeppelin overrides entry-driven where possible.
+            // DisplayIds 807, 808 = Zeppelins
+            // DisplayIds 2454, 1587 = Special ships/icebreakers
+            if (entry == 20808 || entry == 176231 || entry == 176310) {
+                modelPath = "World\\wmo\\transports\\transport_ship\\transportship.wmo";
+                LOG_INFO("Overriding transport entry/display ", entry, "/", displayId, " → transportship.wmo");
+            } else if (displayId == 807 || displayId == 808 || displayId == 175080 || displayId == 176495 || displayId == 164871) {
+                modelPath = "World\\wmo\\transports\\transport_zeppelin\\transport_zeppelin.wmo";
+                LOG_INFO("Overriding transport displayId ", displayId, " → transport_zeppelin.wmo");
+            } else if (displayId == 1587) {
+                modelPath = "World\\wmo\\transports\\transport_horde_zeppelin\\Transport_Horde_Zeppelin.wmo";
+                LOG_INFO("Overriding transport displayId ", displayId, " → Transport_Horde_Zeppelin.wmo");
+            } else if (displayId == 2454 || displayId == 181688 || displayId == 190536) {
+                modelPath = "World\\wmo\\transports\\icebreaker\\Transport_Icebreaker_ship.wmo";
+                LOG_INFO("Overriding transport displayId ", displayId, " → Transport_Icebreaker_ship.wmo");
+            }
         }
-    }
 
     // Fallback to normal displayId lookup if not a transport or no override matched
     if (modelPath.empty()) {
