@@ -622,6 +622,7 @@ public:
     void closeTaxi();
     void activateTaxi(uint32_t destNodeId);
     bool isOnTaxiFlight() const { return onTaxiFlight_; }
+    bool isTaxiMountActive() const { return taxiMountActive_; }
     const ShowTaxiNodesData& getTaxiData() const { return currentTaxiData_; }
     uint32_t getTaxiCurrentNode() const { return currentTaxiData_.nearestNode; }
 

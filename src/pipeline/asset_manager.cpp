@@ -26,10 +26,11 @@ bool AssetManager::initialize(const std::string& dataPath_) {
         return false;
     }
 
-    // Set dynamic file cache budget based on available RAM
+    // Set dynamic file cache budget based on available RAM.
+    // Bias toward MPQ decompressed-file caching to minimize runtime read/decompress stalls.
     auto& memMonitor = core::MemoryMonitor::getInstance();
     size_t recommendedBudget = memMonitor.getRecommendedCacheBudget();
-    fileCacheBudget = recommendedBudget / 2;  // Split budget: half for file cache, half for other caches
+    fileCacheBudget = (recommendedBudget * 3) / 4;  // 75% of global cache budget
 
     initialized = true;
     LOG_INFO("Asset manager initialized (dynamic file cache: ",
@@ -152,20 +153,26 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     }
 
     std::string normalized = normalizePath(path);
-    std::lock_guard<std::mutex> lock(readMutex);
-
-    // Check cache first
-    auto it = fileCache.find(normalized);
-    if (it != fileCache.end()) {
-        // Cache hit - update access time and return cached data
-        it->second.lastAccessTime = ++fileCacheAccessCounter;
-        fileCacheHits++;
-        return it->second.data;
+    {
+        std::lock_guard<std::mutex> cacheLock(cacheMutex);
+        // Check cache first
+        auto it = fileCache.find(normalized);
+        if (it != fileCache.end()) {
+            // Cache hit - update access time and return cached data
+            it->second.lastAccessTime = ++fileCacheAccessCounter;
+            fileCacheHits++;
+            return it->second.data;
+        }
+        fileCacheMisses++;
     }
 
-    // Cache miss - decompress from MPQ
-    fileCacheMisses++;
-    std::vector<uint8_t> data = mpqManager.readFile(normalized);
+    // Cache miss - decompress from MPQ.
+    // Keep MPQ reads serialized, but do not block cache-hit readers on this mutex.
+    std::vector<uint8_t> data;
+    {
+        std::lock_guard<std::mutex> readLock(readMutex);
+        data = mpqManager.readFile(normalized);
+    }
     if (data.empty()) {
         return data;  // File not found
     }
@@ -173,6 +180,7 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     // Add to cache if within budget
     size_t fileSize = data.size();
     if (fileSize > 0 && fileSize < fileCacheBudget / 2) {  // Don't cache files > 50% of budget (very aggressive)
+        std::lock_guard<std::mutex> cacheLock(cacheMutex);
         // Evict old entries if needed (LRU)
         while (fileCacheTotalBytes + fileSize > fileCacheBudget && !fileCache.empty()) {
             // Find least recently used entry
@@ -198,7 +206,7 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
 }
 
 void AssetManager::clearCache() {
-    std::lock_guard<std::mutex> lock(readMutex);
+    std::scoped_lock lock(readMutex, cacheMutex);
     dbcCache.clear();
     fileCache.clear();
     fileCacheTotalBytes = 0;
@@ -211,6 +219,9 @@ std::string AssetManager::normalizePath(const std::string& path) const {
 
     // Convert forward slashes to backslashes (WoW uses backslashes)
     std::replace(normalized.begin(), normalized.end(), '/', '\\');
+    // Lowercase for case-insensitive cache keys (improves hit rate across mixed-case callers).
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
     return normalized;
 }

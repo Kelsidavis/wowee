@@ -112,17 +112,12 @@ void CameraController::update(float deltaTime) {
         return;
     }
 
-    // During taxi flights, skip input/movement logic but still position camera
+    // During taxi flights, skip movement logic but keep camera orbit/zoom controls.
     if (externalFollow_) {
-        // Mouse look (right mouse button)
-        if (rightMouseDown) {
-            int mouseDX, mouseDY;
-            SDL_GetRelativeMouseState(&mouseDX, &mouseDY);
-            yaw -= mouseDX * mouseSensitivity;
-            pitch -= mouseDY * mouseSensitivity;
-            pitch = glm::clamp(pitch, -89.0f, 89.0f);
-            camera->setRotation(yaw, pitch);
-        }
+        camera->setRotation(yaw, pitch);
+        float zoomLerp = 1.0f - std::exp(-ZOOM_SMOOTH_SPEED * deltaTime);
+        currentDistance += (userTargetDistance - currentDistance) * zoomLerp;
+        collisionDistance = currentDistance;
 
         // Position camera behind character during taxi
         if (thirdPerson && followTarget) {

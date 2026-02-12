@@ -210,49 +210,58 @@ void GameHandler::update(float deltaTime) {
         // Detect taxi flight landing: UNIT_FLAG_TAXI_FLIGHT (0x00000100) cleared
         if (onTaxiFlight_) {
             updateClientTaxi(deltaTime);
-            if (!taxiMountActive_ && !taxiClientActive_ && taxiClientPath_.empty()) {
-                onTaxiFlight_ = false;
-                LOG_INFO("Cleared stale taxi state in update");
-            }
             auto playerEntity = entityManager.getEntity(playerGuid);
-            if (playerEntity && playerEntity->getType() == ObjectType::UNIT) {
-                auto unit = std::static_pointer_cast<Unit>(playerEntity);
-                if ((unit->getUnitFlags() & 0x00000100) == 0) {
-                    onTaxiFlight_ = false;
-                    taxiLandingCooldown_ = 2.0f;  // 2 second cooldown to prevent re-entering
-                    if (taxiMountActive_ && mountCallback_) {
-                        mountCallback_(0);
-                    }
-                    taxiMountActive_ = false;
-                    taxiMountDisplayId_ = 0;
-                    currentMountDisplayId_ = 0;
-                    taxiClientActive_ = false;
-                    taxiClientPath_.clear();
-                    taxiRecoverPending_ = false;
-                    movementInfo.flags = 0;
-                    movementInfo.flags2 = 0;
-                    if (socket) {
-                        sendMovement(Opcode::CMSG_MOVE_STOP);
-                        sendMovement(Opcode::CMSG_MOVE_HEARTBEAT);
-                    }
-                    LOG_INFO("Taxi flight landed");
+            auto unit = std::dynamic_pointer_cast<Unit>(playerEntity);
+            if (unit &&
+                (unit->getUnitFlags() & 0x00000100) == 0 &&
+                !taxiClientActive_ &&
+                !taxiActivatePending_) {
+                onTaxiFlight_ = false;
+                taxiLandingCooldown_ = 2.0f;  // 2 second cooldown to prevent re-entering
+                if (taxiMountActive_ && mountCallback_) {
+                    mountCallback_(0);
                 }
+                taxiMountActive_ = false;
+                taxiMountDisplayId_ = 0;
+                currentMountDisplayId_ = 0;
+                taxiClientActive_ = false;
+                taxiClientPath_.clear();
+                taxiRecoverPending_ = false;
+                movementInfo.flags = 0;
+                movementInfo.flags2 = 0;
+                if (socket) {
+                    sendMovement(Opcode::CMSG_MOVE_STOP);
+                    sendMovement(Opcode::CMSG_MOVE_HEARTBEAT);
+                }
+                LOG_INFO("Taxi flight landed");
             }
         }
 
         // Safety: if taxi flight ended but mount is still active, force dismount.
+        // Guard against transient taxi-state flicker.
         if (!onTaxiFlight_ && taxiMountActive_) {
-            if (mountCallback_) mountCallback_(0);
-            taxiMountActive_ = false;
-            taxiMountDisplayId_ = 0;
-            currentMountDisplayId_ = 0;
-            movementInfo.flags = 0;
-            movementInfo.flags2 = 0;
-            if (socket) {
-                sendMovement(Opcode::CMSG_MOVE_STOP);
-                sendMovement(Opcode::CMSG_MOVE_HEARTBEAT);
+            bool serverStillTaxi = false;
+            auto playerEntity = entityManager.getEntity(playerGuid);
+            auto playerUnit = std::dynamic_pointer_cast<Unit>(playerEntity);
+            if (playerUnit) {
+                serverStillTaxi = (playerUnit->getUnitFlags() & 0x00000100) != 0;
             }
-            LOG_INFO("Taxi dismount cleanup");
+
+            if (serverStillTaxi || taxiClientActive_ || taxiActivatePending_) {
+                onTaxiFlight_ = true;
+            } else {
+                if (mountCallback_) mountCallback_(0);
+                taxiMountActive_ = false;
+                taxiMountDisplayId_ = 0;
+                currentMountDisplayId_ = 0;
+                movementInfo.flags = 0;
+                movementInfo.flags2 = 0;
+                if (socket) {
+                    sendMovement(Opcode::CMSG_MOVE_STOP);
+                    sendMovement(Opcode::CMSG_MOVE_HEARTBEAT);
+                }
+                LOG_INFO("Taxi dismount cleanup");
+            }
         }
 
         if (taxiRecoverPending_ && state == WorldState::IN_WORLD) {
@@ -1696,16 +1705,8 @@ void GameHandler::sendMovement(Opcode opcode) {
         return;
     }
 
-    // Block movement during taxi flight
-    if (onTaxiFlight_) {
-        // If taxi visuals are already gone, clear taxi state to avoid stuck movement.
-        if (!taxiMountActive_ && !taxiClientActive_ && taxiClientPath_.empty()) {
-            onTaxiFlight_ = false;
-            LOG_INFO("Cleared stale taxi state in sendMovement");
-        } else {
-            return;
-        }
-    }
+    // Block manual movement while taxi is active/mounted, but still allow heartbeat packets.
+    if ((onTaxiFlight_ || taxiMountActive_) && opcode != Opcode::CMSG_MOVE_HEARTBEAT) return;
     if (resurrectPending_) return;
 
     // Use real millisecond timestamp (server validates for anti-cheat)
@@ -2346,6 +2347,16 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     if (block.guid == playerGuid) {
                         if (block.hasMovement && block.runSpeed > 0.1f && block.runSpeed < 100.0f) {
                             serverRunSpeed_ = block.runSpeed;
+                            // Some server dismount paths update run speed without updating mount display field.
+                            if (!onTaxiFlight_ && !taxiMountActive_ &&
+                                currentMountDisplayId_ != 0 && block.runSpeed <= 8.5f) {
+                                LOG_INFO("Auto-clearing mount from movement speed update: speed=", block.runSpeed,
+                                         " displayId=", currentMountDisplayId_);
+                                currentMountDisplayId_ = 0;
+                                if (mountCallback_) {
+                                    mountCallback_(0);
+                                }
+                            }
                         }
                         for (const auto& [key, val] : block.fields) {
                             lastPlayerFields_[key] = val;
@@ -4158,6 +4169,17 @@ void GameHandler::handleForceRunSpeedChange(network::Packet& packet) {
     }
 
     serverRunSpeed_ = newSpeed;
+
+    // Server can auto-dismount (e.g. entering no-mount areas) and only send a speed change.
+    // Keep client mount visuals in sync with server-authoritative movement speed.
+    if (!onTaxiFlight_ && !taxiMountActive_ && currentMountDisplayId_ != 0 && newSpeed <= 8.5f) {
+        LOG_INFO("Auto-clearing mount from speed change: speed=", newSpeed,
+                 " displayId=", currentMountDisplayId_);
+        currentMountDisplayId_ = 0;
+        if (mountCallback_) {
+            mountCallback_(0);
+        }
+    }
 }
 
 // ============================================================
@@ -6057,9 +6079,11 @@ void GameHandler::applyTaxiMountForCurrentNode() {
     }
     uint32_t mountId = isAlliance ? it->second.mountDisplayIdAlliance
                                   : it->second.mountDisplayIdHorde;
+    if (mountId == 541) mountId = 0;  // Placeholder/invalid in some DBC sets
     if (mountId == 0) {
         mountId = isAlliance ? it->second.mountDisplayIdHorde
                              : it->second.mountDisplayIdAlliance;
+        if (mountId == 541) mountId = 0;
     }
     if (mountId == 0) {
         auto& app = core::Application::getInstance();
@@ -6076,7 +6100,17 @@ void GameHandler::applyTaxiMountForCurrentNode() {
         if (it->second.mountDisplayIdAlliance != 0) mountId = it->second.mountDisplayIdAlliance;
         else if (it->second.mountDisplayIdHorde != 0) mountId = it->second.mountDisplayIdHorde;
     }
-    if (mountId == 0 || mountId == 541) {
+    if (mountId == 0) {
+        // 3.3.5a fallback display IDs (real CreatureDisplayInfo entries).
+        // Alliance taxi gryphons commonly use 1210-1213.
+        // Horde taxi wyverns commonly use 1310-1312.
+        static const uint32_t kAllianceTaxiDisplays[] = {1210u, 1211u, 1212u, 1213u};
+        static const uint32_t kHordeTaxiDisplays[] = {1310u, 1311u, 1312u};
+        mountId = isAlliance ? kAllianceTaxiDisplays[0] : kHordeTaxiDisplays[0];
+    }
+
+    // Last resort legacy fallback.
+    if (mountId == 0) {
         mountId = isAlliance ? 30412u : 30413u;
     }
     if (mountId != 0) {
@@ -6123,33 +6157,57 @@ void GameHandler::startClientTaxiPath(const std::vector<uint32_t>& pathNodes) {
     }
 
     if (taxiClientPath_.size() < 2) {
+        // Fallback: use TaxiNodes directly when TaxiPathNode spline data is missing.
+        taxiClientPath_.clear();
+        for (uint32_t nodeId : pathNodes) {
+            auto nodeIt = taxiNodes_.find(nodeId);
+            if (nodeIt == taxiNodes_.end()) continue;
+            glm::vec3 serverPos(nodeIt->second.x, nodeIt->second.y, nodeIt->second.z);
+            taxiClientPath_.push_back(core::coords::serverToCanonical(serverPos));
+        }
+    }
+
+    if (taxiClientPath_.size() < 2) {
         LOG_WARNING("Taxi path too short: ", taxiClientPath_.size(), " waypoints");
         return;
     }
 
-    // Set initial orientation to face the first flight segment
-    if (!entityManager.hasEntity(playerGuid)) return;
+    // Set initial orientation to face the first non-degenerate flight segment.
+    glm::vec3 start = taxiClientPath_[0];
+    glm::vec3 dir(0.0f);
+    float dirLen = 0.0f;
+    for (size_t i = 1; i < taxiClientPath_.size(); i++) {
+        dir = taxiClientPath_[i] - start;
+        dirLen = glm::length(dir);
+        if (dirLen >= 0.001f) {
+            break;
+        }
+    }
+
+    float initialOrientation = movementInfo.orientation;
+    float initialRenderYaw = movementInfo.orientation;
+    float initialPitch = 0.0f;
+    float initialRoll = 0.0f;
+    if (dirLen >= 0.001f) {
+        initialOrientation = std::atan2(dir.y, dir.x);
+        glm::vec3 renderDir = core::coords::canonicalToRender(dir);
+        initialRenderYaw = std::atan2(renderDir.y, renderDir.x);
+        glm::vec3 dirNorm = dir / dirLen;
+        initialPitch = std::asin(std::clamp(dirNorm.z, -1.0f, 1.0f));
+    }
+
+    movementInfo.x = start.x;
+    movementInfo.y = start.y;
+    movementInfo.z = start.z;
+    movementInfo.orientation = initialOrientation;
+
     auto playerEntity = entityManager.getEntity(playerGuid);
     if (playerEntity) {
-        glm::vec3 start = taxiClientPath_[0];
-        glm::vec3 end = taxiClientPath_[1];
-        glm::vec3 dir = end - start;
-        float dirLen = glm::length(dir);
-        if (dirLen < 0.001f) return;
-        float initialOrientation = std::atan2(dir.y, dir.x) - 1.57079632679f;
-
-        // Calculate initial pitch from altitude change
-        glm::vec3 dirNorm = dir / dirLen;
-        float initialPitch = std::asin(std::clamp(dirNorm.z, -1.0f, 1.0f));
-        float initialRoll = 0.0f;  // No initial banking
-
         playerEntity->setPosition(start.x, start.y, start.z, initialOrientation);
-        movementInfo.orientation = initialOrientation;
+    }
 
-        // Update mount rotation immediately with pitch and roll
-        if (taxiOrientationCallback_) {
-            taxiOrientationCallback_(initialOrientation, initialPitch, initialRoll);
-        }
+    if (taxiOrientationCallback_) {
+        taxiOrientationCallback_(initialRenderYaw, initialPitch, initialRoll);
     }
 
     LOG_INFO("Taxi flight started with ", taxiClientPath_.size(), " spline waypoints");
@@ -6158,31 +6216,9 @@ void GameHandler::startClientTaxiPath(const std::vector<uint32_t>& pathNodes) {
 
 void GameHandler::updateClientTaxi(float deltaTime) {
     if (!taxiClientActive_ || taxiClientPath_.size() < 2) return;
-    if (!entityManager.hasEntity(playerGuid)) return;
     auto playerEntity = entityManager.getEntity(playerGuid);
-    if (!playerEntity) return;
 
-    if (taxiClientIndex_ + 1 >= taxiClientPath_.size()) {
-        taxiClientActive_ = false;
-        return;
-    }
-
-    glm::vec3 start = taxiClientPath_[taxiClientIndex_];
-    glm::vec3 end = taxiClientPath_[taxiClientIndex_ + 1];
-    glm::vec3 dir = end - start;
-    float segmentLen = glm::length(dir);
-    if (segmentLen < 0.01f) {
-        taxiClientIndex_++;
-        taxiClientSegmentProgress_ = 0.0f;
-        return;
-    }
-
-    taxiClientSegmentProgress_ += taxiClientSpeed_ * deltaTime;
-    float t = taxiClientSegmentProgress_ / segmentLen;
-    if (t >= 1.0f) {
-        taxiClientIndex_++;
-        taxiClientSegmentProgress_ = 0.0f;
-        if (taxiClientIndex_ + 1 >= taxiClientPath_.size()) {
+    auto finishTaxiFlight = [&]() {
             taxiClientActive_ = false;
             onTaxiFlight_ = false;
             taxiLandingCooldown_ = 2.0f;  // 2 second cooldown to prevent re-entering
@@ -6201,8 +6237,48 @@ void GameHandler::updateClientTaxi(float deltaTime) {
                 sendMovement(Opcode::CMSG_MOVE_HEARTBEAT);
             }
             LOG_INFO("Taxi flight landed (client path)");
-        }
+    };
+
+    if (taxiClientIndex_ + 1 >= taxiClientPath_.size()) {
+        finishTaxiFlight();
         return;
+    }
+
+    float remainingDistance = taxiClientSegmentProgress_ + (taxiClientSpeed_ * deltaTime);
+    glm::vec3 start(0.0f);
+    glm::vec3 end(0.0f);
+    glm::vec3 dir(0.0f);
+    float segmentLen = 0.0f;
+    float t = 0.0f;
+
+    // Consume as many tiny/finished segments as needed this frame so taxi doesn't stall
+    // on dense/degenerate node clusters near takeoff/landing.
+    while (true) {
+        if (taxiClientIndex_ + 1 >= taxiClientPath_.size()) {
+            finishTaxiFlight();
+            return;
+        }
+
+        start = taxiClientPath_[taxiClientIndex_];
+        end = taxiClientPath_[taxiClientIndex_ + 1];
+        dir = end - start;
+        segmentLen = glm::length(dir);
+
+        if (segmentLen < 0.01f) {
+            taxiClientIndex_++;
+            continue;
+        }
+
+        if (remainingDistance >= segmentLen) {
+            remainingDistance -= segmentLen;
+            taxiClientIndex_++;
+            taxiClientSegmentProgress_ = 0.0f;
+            continue;
+        }
+
+        taxiClientSegmentProgress_ = remainingDistance;
+        t = taxiClientSegmentProgress_ / segmentLen;
+        break;
     }
 
     // Use Catmull-Rom spline for smooth interpolation between waypoints
@@ -6240,7 +6316,7 @@ void GameHandler::updateClientTaxi(float deltaTime) {
     }
 
     // Calculate yaw from horizontal direction
-    float targetOrientation = std::atan2(tangent.y, tangent.x) - 1.57079632679f;
+    float targetOrientation = std::atan2(tangent.y, tangent.x);
 
     // Calculate pitch from vertical component (altitude change)
     glm::vec3 tangentNorm = tangent / std::max(tangentLen, 0.0001f);
@@ -6259,15 +6335,20 @@ void GameHandler::updateClientTaxi(float deltaTime) {
     // Smooth rotation transition (lerp towards target)
     float smoothOrientation = currentOrientation + orientDiff * std::min(1.0f, deltaTime * 3.0f);
 
-    playerEntity->setPosition(nextPos.x, nextPos.y, nextPos.z, smoothOrientation);
+    if (playerEntity) {
+        playerEntity->setPosition(nextPos.x, nextPos.y, nextPos.z, smoothOrientation);
+    }
     movementInfo.x = nextPos.x;
     movementInfo.y = nextPos.y;
     movementInfo.z = nextPos.z;
     movementInfo.orientation = smoothOrientation;
 
-    // Update mount rotation with yaw, pitch, and roll for realistic flight
+    // Update mount rotation with yaw/pitch/roll. Use render-space tangent yaw to
+    // avoid canonical<->render convention mismatches.
     if (taxiOrientationCallback_) {
-        taxiOrientationCallback_(smoothOrientation, pitch, roll);
+        glm::vec3 renderTangent = core::coords::canonicalToRender(tangent);
+        float renderYaw = std::atan2(renderTangent.y, renderTangent.x);
+        taxiOrientationCallback_(renderYaw, pitch, roll);
     }
 }
 
@@ -6279,13 +6360,19 @@ void GameHandler::handleActivateTaxiReply(network::Packet& packet) {
     }
 
     if (data.result == 0) {
+        // Some cores can emit duplicate success replies (e.g. basic + express activate).
+        // Ignore repeats once taxi is already active and no activation is pending.
+        if (onTaxiFlight_ && !taxiActivatePending_) {
+            return;
+        }
         onTaxiFlight_ = true;
         taxiWindowOpen_ = false;
-        taxiMountActive_ = false;
-        taxiMountDisplayId_ = 0;
         taxiActivatePending_ = false;
         taxiActivateTimer_ = 0.0f;
         applyTaxiMountForCurrentNode();
+        if (socket) {
+            sendMovement(Opcode::CMSG_MOVE_HEARTBEAT);
+        }
         LOG_INFO("Taxi flight started!");
     } else {
         LOG_WARNING("Taxi activation failed, result=", data.result);
@@ -6437,6 +6524,9 @@ void GameHandler::activateTaxi(uint32_t destNodeId) {
     if (!onTaxiFlight_) {
         onTaxiFlight_ = true;
         applyTaxiMountForCurrentNode();
+    }
+    if (socket) {
+        sendMovement(Opcode::CMSG_MOVE_HEARTBEAT);
     }
 
     // Trigger terrain precache immediately (non-blocking).

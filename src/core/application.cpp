@@ -447,10 +447,14 @@ void Application::update(float deltaTime) {
                 renderer->getCameraController()->setRunSpeedOverride(gameHandler->getServerRunSpeed());
             }
 
-            bool onTaxi = gameHandler && gameHandler->isOnTaxiFlight();
+            bool onTaxi = gameHandler && (gameHandler->isOnTaxiFlight() || gameHandler->isTaxiMountActive());
             if (renderer && renderer->getCameraController()) {
                 renderer->getCameraController()->setExternalFollow(onTaxi);
                 renderer->getCameraController()->setExternalMoving(onTaxi);
+                if (onTaxi) {
+                    // Drop any stale local movement toggles while server drives taxi motion.
+                    renderer->getCameraController()->clearMovementInputs();
+                }
                 if (lastTaxiFlight_ && !onTaxi) {
                     renderer->getCameraController()->clearMovementInputs();
                 }
@@ -467,7 +471,12 @@ void Application::update(float deltaTime) {
             }
             if (renderer && renderer->getTerrainManager()) {
                 renderer->getTerrainManager()->setStreamingEnabled(true);
-                renderer->getTerrainManager()->setUpdateInterval(0.1f);
+                // Slightly slower stream tick on taxi reduces bursty I/O and frame hitches.
+                renderer->getTerrainManager()->setUpdateInterval(onTaxi ? 0.2f : 0.1f);
+                // Keep taxi streaming focused ahead on the route to reduce burst loads.
+                renderer->getTerrainManager()->setLoadRadius(onTaxi ? 2 : 4);
+                renderer->getTerrainManager()->setUnloadRadius(onTaxi ? 5 : 7);
+                renderer->getTerrainManager()->setTaxiStreamingMode(onTaxi);
             }
             lastTaxiFlight_ = onTaxi;
 
@@ -489,9 +498,6 @@ void Application::update(float deltaTime) {
                         glm::vec3 canonical(playerEntity->getX(), playerEntity->getY(), playerEntity->getZ());
                         glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
                         renderer->getCharacterPosition() = renderPos;
-                        // Lock yaw to server/taxi orientation so mouse cannot steer during taxi.
-                        float yawDeg = glm::degrees(playerEntity->getOrientation()) + 90.0f;
-                        renderer->setCharacterYaw(yawDeg);
                     }
                 } else if (onTransport) {
                     // Transport mode: compose world position from transport transform + local offset
@@ -518,7 +524,7 @@ void Application::update(float deltaTime) {
             }
 
             // Send movement heartbeat every 500ms (keeps server position in sync)
-            // Skip during taxi flights - server controls position
+            // Skip periodic taxi heartbeats; taxi start sends explicit heartbeats already.
             if (gameHandler && renderer && !onTaxi) {
                 movementHeartbeatTimer += deltaTime;
                 if (movementHeartbeatTimer >= 0.5f) {
@@ -791,21 +797,27 @@ void Application::setupUICallbacks() {
 
         std::set<std::pair<int, int>> uniqueTiles;
 
-        // Sample waypoints along path and gather tiles
-        for (const auto& waypoint : path) {
+        // Sample waypoints along path and gather tiles.
+        // Use stride to avoid enqueueing huge numbers of tiles at once.
+        const size_t stride = 4;
+        for (size_t i = 0; i < path.size(); i += stride) {
+            const auto& waypoint = path[i];
             glm::vec3 renderPos = core::coords::canonicalToRender(waypoint);
             int tileX = static_cast<int>(32 - (renderPos.x / 533.33333f));
             int tileY = static_cast<int>(32 - (renderPos.y / 533.33333f));
 
-            // Load tile at waypoint + 1 radius around it (3x3 per waypoint)
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    int tx = tileX + dx;
-                    int ty = tileY + dy;
-                    if (tx >= 0 && tx <= 63 && ty >= 0 && ty <= 63) {
-                        uniqueTiles.insert({tx, ty});
-                    }
-                }
+            // Precache only the sampled tile itself; terrain streaming handles neighbors.
+            if (tileX >= 0 && tileX <= 63 && tileY >= 0 && tileY <= 63) {
+                uniqueTiles.insert({tileX, tileY});
+            }
+        }
+        // Ensure final destination tile is included.
+        if (!path.empty()) {
+            glm::vec3 renderPos = core::coords::canonicalToRender(path.back());
+            int tileX = static_cast<int>(32 - (renderPos.x / 533.33333f));
+            int tileY = static_cast<int>(32 - (renderPos.y / 533.33333f));
+            if (tileX >= 0 && tileX <= 63 && tileY >= 0 && tileY <= 63) {
+                uniqueTiles.insert({tileX, tileY});
             }
         }
 
@@ -817,25 +829,22 @@ void Application::setupUICallbacks() {
     // Taxi orientation callback - update mount rotation during flight
     gameHandler->setTaxiOrientationCallback([this](float yaw, float pitch, float roll) {
         if (renderer && renderer->getCameraController()) {
-            // Convert radians to degrees for camera controller (character facing)
+            // Taxi callback now provides render-space yaw directly.
             float yawDegrees = glm::degrees(yaw);
             renderer->getCameraController()->setFacingYaw(yawDegrees);
+            renderer->setCharacterYaw(yawDegrees);
             // Set mount pitch and roll for realistic flight animation
             renderer->setMountPitchRoll(pitch, roll);
         }
     });
 
-    // Taxi flight start callback - upload all precached tiles to GPU before flight begins
+    // Taxi flight start callback - keep non-blocking to avoid hitching at takeoff.
     gameHandler->setTaxiFlightStartCallback([this]() {
         if (renderer && renderer->getTerrainManager() && renderer->getM2Renderer()) {
-            LOG_INFO("Uploading all precached tiles (terrain + M2 models) to GPU before taxi flight...");
-            auto start = std::chrono::steady_clock::now();
-            renderer->getTerrainManager()->processAllReadyTiles();
-            auto end = std::chrono::steady_clock::now();
-            auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            LOG_INFO("Taxi flight start: incremental terrain/M2 streaming active");
             uint32_t m2Count = renderer->getM2Renderer()->getModelCount();
             uint32_t instCount = renderer->getM2Renderer()->getInstanceCount();
-            LOG_INFO("GPU upload completed in ", durationMs, "ms - ", m2Count, " M2 models in VRAM (", instCount, " instances)");
+            LOG_INFO("Current M2 VRAM state: ", m2Count, " models (", instCount, " instances)");
         }
     });
 
@@ -3080,7 +3089,7 @@ void Application::processCreatureSpawnQueue() {
                 retries = it->second;
             }
             if (retries < MAX_CREATURE_SPAWN_RETRIES) {
-                creatureSpawnRetryCounts_[s.guid] = static_cast<uint8_t>(retries + 1);
+                creatureSpawnRetryCounts_[s.guid] = static_cast<uint16_t>(retries + 1);
                 pendingCreatureSpawns_.push_back(s);
                 pendingCreatureSpawnGuids_.insert(s.guid);
             } else {
@@ -3176,35 +3185,87 @@ void Application::processPendingMount() {
 
     // Apply creature skin textures from CreatureDisplayInfo.dbc.
     // Re-apply even for cached models so transient failures can self-heal.
+    std::string modelDir;
+    size_t lastSlash = m2Path.find_last_of("\\/");
+    if (lastSlash != std::string::npos) {
+        modelDir = m2Path.substr(0, lastSlash + 1);
+    }
+
     auto itDisplayData = displayDataMap_.find(mountDisplayId);
+    bool haveDisplayData = false;
+    CreatureDisplayData dispData{};
     if (itDisplayData != displayDataMap_.end()) {
-        CreatureDisplayData dispData = itDisplayData->second;
+        dispData = itDisplayData->second;
+        haveDisplayData = true;
+    } else {
+        // Some taxi mount display IDs are sparse; recover skins by matching model path.
+        std::string lowerMountPath = m2Path;
+        std::transform(lowerMountPath.begin(), lowerMountPath.end(), lowerMountPath.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        int bestScore = -1;
+        for (const auto& [dispId, data] : displayDataMap_) {
+            auto pit = modelIdToPath_.find(data.modelId);
+            if (pit == modelIdToPath_.end()) continue;
+            std::string p = pit->second;
+            std::transform(p.begin(), p.end(), p.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (p != lowerMountPath) continue;
+            int score = 0;
+            if (!data.skin1.empty()) {
+                std::string p1 = modelDir + data.skin1 + ".blp";
+                score += assetManager->fileExists(p1) ? 30 : 3;
+            }
+            if (!data.skin2.empty()) {
+                std::string p2 = modelDir + data.skin2 + ".blp";
+                score += assetManager->fileExists(p2) ? 20 : 2;
+            }
+            if (!data.skin3.empty()) {
+                std::string p3 = modelDir + data.skin3 + ".blp";
+                score += assetManager->fileExists(p3) ? 10 : 1;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                dispData = data;
+                haveDisplayData = true;
+            }
+        }
+        if (haveDisplayData) {
+            LOG_INFO("Recovered mount display data by model path for displayId=", mountDisplayId,
+                     " skin1='", dispData.skin1, "' skin2='", dispData.skin2,
+                     "' skin3='", dispData.skin3, "'");
+        }
+    }
+    if (haveDisplayData) {
         // If this displayId has no skins, try to find another displayId for the same model with skins.
         if (dispData.skin1.empty() && dispData.skin2.empty() && dispData.skin3.empty()) {
-            uint32_t modelId = dispData.modelId;
+            uint32_t sourceModelId = dispData.modelId;
             int bestScore = -1;
             for (const auto& [dispId, data] : displayDataMap_) {
-                if (data.modelId != modelId) continue;
+                if (data.modelId != sourceModelId) continue;
                 int score = 0;
-                if (!data.skin1.empty()) score += 3;
-                if (!data.skin2.empty()) score += 2;
-                if (!data.skin3.empty()) score += 1;
+                if (!data.skin1.empty()) {
+                    std::string p = modelDir + data.skin1 + ".blp";
+                    score += assetManager->fileExists(p) ? 30 : 3;
+                }
+                if (!data.skin2.empty()) {
+                    std::string p = modelDir + data.skin2 + ".blp";
+                    score += assetManager->fileExists(p) ? 20 : 2;
+                }
+                if (!data.skin3.empty()) {
+                    std::string p = modelDir + data.skin3 + ".blp";
+                    score += assetManager->fileExists(p) ? 10 : 1;
+                }
                 if (score > bestScore) {
                     bestScore = score;
                     dispData = data;
                 }
             }
             LOG_INFO("Mount skin fallback for displayId=", mountDisplayId,
-                     " modelId=", modelId, " skin1='", dispData.skin1,
+                     " modelId=", sourceModelId, " skin1='", dispData.skin1,
                      "' skin2='", dispData.skin2, "' skin3='", dispData.skin3, "'");
         }
         const auto* md = charRenderer->getModelData(modelId);
         if (md) {
-            std::string modelDir;
-            size_t lastSlash = m2Path.find_last_of("\\/");
-            if (lastSlash != std::string::npos) {
-                modelDir = m2Path.substr(0, lastSlash + 1);
-            }
             int replaced = 0;
             for (size_t ti = 0; ti < md->textures.size(); ti++) {
                 const auto& tex = md->textures[ti];
@@ -3231,6 +3292,7 @@ void Application::processPendingMount() {
                 if (skinTex != 0) {
                     charRenderer->setModelTexture(modelId, 0, skinTex);
                     LOG_INFO("Forced mount skin1 texture on slot 0: ", texPath);
+                    replaced++;
                 }
             } else if (replaced == 0 && !md->textures.empty() && !md->textures[0].filename.empty()) {
                 // Last-resort: use the model's first texture filename if it exists.
@@ -3238,6 +3300,27 @@ void Application::processPendingMount() {
                 if (texId != 0) {
                     charRenderer->setModelTexture(modelId, 0, texId);
                     LOG_INFO("Forced mount model texture on slot 0: ", md->textures[0].filename);
+                    replaced++;
+                }
+            }
+
+            // Final taxi mount fallback for gryphon/wyvern models when display tables are sparse.
+            if (replaced == 0 && !md->textures.empty()) {
+                std::string lowerMountPath = m2Path;
+                std::transform(lowerMountPath.begin(), lowerMountPath.end(), lowerMountPath.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (lowerMountPath.find("creature\\gryphon\\gryphon.m2") != std::string::npos) {
+                    GLuint texId = charRenderer->loadTexture("Creature\\Gryphon\\Gryphon.blp");
+                    if (texId != 0) {
+                        charRenderer->setModelTexture(modelId, 0, texId);
+                        LOG_INFO("Forced canonical gryphon texture on slot 0");
+                    }
+                } else if (lowerMountPath.find("creature\\wyvern\\wyvern.m2") != std::string::npos) {
+                    GLuint texId = charRenderer->loadTexture("Creature\\Wyvern\\Wyvern.blp");
+                    if (texId != 0) {
+                        charRenderer->setModelTexture(modelId, 0, texId);
+                        LOG_INFO("Forced canonical wyvern texture on slot 0");
+                    }
                 }
             }
         }

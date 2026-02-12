@@ -115,9 +115,10 @@ bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer*
         return false;
     }
 
-    // Set dynamic tile cache budget (use other half of recommended budget)
+    // Set dynamic tile cache budget.
+    // Keep this lower so decompressed MPQ file cache can stay very aggressive.
     auto& memMonitor = core::MemoryMonitor::getInstance();
-    tileCacheBudgetBytes_ = memMonitor.getRecommendedCacheBudget() / 2;
+    tileCacheBudgetBytes_ = memMonitor.getRecommendedCacheBudget() / 4;
     LOG_INFO("Terrain tile cache budget: ", tileCacheBudgetBytes_ / (1024 * 1024), " MB (dynamic)");
 
     // Start background worker pool (dynamic: scales with available cores)
@@ -222,7 +223,7 @@ bool TerrainManager::enqueueTile(int x, int y) {
 
     {
         std::lock_guard<std::mutex> lock(queueMutex);
-        loadQueue.push(coord);
+        loadQueue.push_back(coord);
         pendingTiles[coord] = true;
     }
     queueCV.notify_all();
@@ -791,7 +792,7 @@ void TerrainManager::workerLoop() {
 
             if (!loadQueue.empty()) {
                 coord = loadQueue.front();
-                loadQueue.pop();
+                loadQueue.pop_front();
                 hasWork = true;
             }
         }
@@ -1056,7 +1057,7 @@ void TerrainManager::unloadAll() {
     // Clear queues
     {
         std::lock_guard<std::mutex> lock(queueMutex);
-        while (!loadQueue.empty()) loadQueue.pop();
+        while (!loadQueue.empty()) loadQueue.pop_front();
         while (!readyQueue.empty()) readyQueue.pop();
     }
     pendingTiles.clear();
@@ -1353,7 +1354,7 @@ void TerrainManager::streamTiles() {
                 if (pendingTiles.find(coord) != pendingTiles.end()) continue;
                 if (failedTiles.find(coord) != failedTiles.end()) continue;
 
-                loadQueue.push(coord);
+                loadQueue.push_back(coord);
                 pendingTiles[coord] = true;
             }
         }
@@ -1409,7 +1410,9 @@ void TerrainManager::precacheTiles(const std::vector<std::pair<int, int>>& tiles
         if (pendingTiles.find(coord) != pendingTiles.end()) continue;
         if (failedTiles.find(coord) != failedTiles.end()) continue;
 
-        loadQueue.push(coord);
+        // Precache work is prioritized so taxi-route tiles are prepared before
+        // opportunistic radius streaming tiles.
+        loadQueue.push_front(coord);
         pendingTiles[coord] = true;
     }
 

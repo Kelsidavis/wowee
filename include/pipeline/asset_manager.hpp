@@ -102,6 +102,7 @@ private:
 
     MPQManager mpqManager;
     mutable std::mutex readMutex;
+    mutable std::mutex cacheMutex;
     std::map<std::string, std::shared_ptr<DBCFile>> dbcCache;
 
     // Decompressed file cache (LRU, dynamic budget based on system RAM)

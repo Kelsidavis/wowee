@@ -146,14 +146,11 @@ void SkySystem::render(const Camera& camera, const SkyParams& params) {
 }
 
 glm::vec3 SkySystem::getSunPosition(const SkyParams& params) const {
-    // TESTING: X-up test
-    glm::vec3 dir = glm::vec3(1.0f, 0.0f, 0.0f);  // X-up
-    glm::vec3 pos = dir * 800.0f;
-
-    static int counter = 0;
-    if (counter++ % 100 == 0) {
-        LOG_INFO("Flare TEST X-UP dir=(", dir.x, ",", dir.y, ",", dir.z, ") pos=(", pos.x, ",", pos.y, ",", pos.z, ")");
+    glm::vec3 dir = glm::normalize(params.directionalDir);
+    if (glm::length(dir) < 0.0001f) {
+        dir = glm::vec3(0.0f, 0.0f, 1.0f);
     }
+    glm::vec3 pos = dir * 800.0f;
     return pos;
 }
 

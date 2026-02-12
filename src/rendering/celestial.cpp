@@ -125,11 +125,8 @@ void Celestial::shutdown() {
 void Celestial::render(const Camera& camera, float timeOfDay,
                        const glm::vec3* sunDir, const glm::vec3* sunColor, float gameTime) {
     if (!renderingEnabled || vao == 0 || !celestialShader) {
-        LOG_WARNING("Celestial render blocked: enabled=", renderingEnabled, " vao=", vao, " shader=", (celestialShader ? "ok" : "null"));
         return;
     }
-
-    LOG_INFO("Celestial render: timeOfDay=", timeOfDay, " gameTime=", gameTime);
 
     // Update moon phases from game time if available (deterministic)
     if (gameTime >= 0.0f) {
@@ -166,22 +163,16 @@ void Celestial::renderSun(const Camera& camera, float timeOfDay,
                           const glm::vec3* sunDir, const glm::vec3* sunColor) {
     // Sun visible from 5:00 to 19:00
     if (timeOfDay < 5.0f || timeOfDay >= 19.0f) {
-        LOG_INFO("Sun not visible: timeOfDay=", timeOfDay, " (visible 5:00-19:00)");
         return;
     }
 
-    LOG_INFO("Rendering sun: timeOfDay=", timeOfDay, " sunDir=", (sunDir ? "yes" : "no"), " sunColor=", (sunColor ? "yes" : "no"));
-
     celestialShader->use();
 
-    // TESTING: Try X-up (final axis test)
-    glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.0f, 0.0f));  // X-up test
-    LOG_INFO("Sun direction (TESTING X-UP): dir=(", dir.x, ",", dir.y, ",", dir.z, ")");
+    glm::vec3 dir = sunDir ? glm::normalize(*sunDir) : glm::vec3(0.0f, 0.0f, 1.0f);
 
     // Place sun on sky sphere at fixed distance
     const float sunDistance = 800.0f;
     glm::vec3 sunPos = dir * sunDistance;
-    LOG_INFO("Sun position: dir * ", sunDistance, " = (", sunPos.x, ",", sunPos.y, ",", sunPos.z, ")");
 
     // Create model matrix
     glm::mat4 model = glm::mat4(1.0f);

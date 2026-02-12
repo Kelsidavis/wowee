@@ -17,6 +17,7 @@
 #include <list>
 #include <vector>
 #include <condition_variable>
+#include <deque>
 #include <glm/glm.hpp>
 
 namespace wowee {
@@ -187,6 +188,7 @@ public:
     void setUnloadRadius(int radius) { unloadRadius = radius; }
     void setStreamingEnabled(bool enabled) { streamingEnabled = enabled; }
     void setUpdateInterval(float seconds) { updateInterval = seconds; }
+    void setTaxiStreamingMode(bool enabled) { taxiStreamingMode_ = enabled; }
     void setWaterRenderer(WaterRenderer* renderer) { waterRenderer = renderer; }
     void setM2Renderer(M2Renderer* renderer) { m2Renderer = renderer; }
     void setWMORenderer(WMORenderer* renderer) { wmoRenderer = renderer; }
@@ -286,6 +288,7 @@ private:
     int unloadRadius = 7;    // Unload tiles beyond this radius
     float updateInterval = 0.033f;  // Check streaming every 33ms (~30 fps)
     float timeSinceLastUpdate = 0.0f;
+    bool taxiStreamingMode_ = false;
 
     // Tile size constants (WoW ADT specifications)
     // A tile (ADT) = 16x16 chunks = 533.33 units across
@@ -298,7 +301,7 @@ private:
     int workerCount = 0;
     std::mutex queueMutex;
     std::condition_variable queueCV;
-    std::queue<TileCoord> loadQueue;
+    std::deque<TileCoord> loadQueue;
     std::queue<std::shared_ptr<PendingTile>> readyQueue;
 
     // In-RAM tile cache (LRU) to avoid re-reading from disk

@@ -957,13 +957,9 @@ void Renderer::updateCharacterAnimation() {
 
         // Sync mount instance position and rotation
         float mountBob = 0.0f;
+        float mountYawRad = glm::radians(characterYaw);
         if (mountInstanceId_ > 0) {
             characterRenderer->setInstancePosition(mountInstanceId_, characterPosition);
-            float yawRad = glm::radians(characterYaw);
-            if (taxiFlight_) {
-                // Taxi mounts commonly use a different model-forward axis than player rigs.
-                yawRad += 1.57079632679f;
-            }
 
             // Procedural lean into turns (ground mounts only, optional enhancement)
             if (!taxiFlight_ && moving && lastDeltaTime_ > 0.0f) {
@@ -982,7 +978,7 @@ void Renderer::updateCharacterAnimation() {
             }
 
             // Apply pitch (up/down), roll (banking), and yaw for realistic flight
-            characterRenderer->setInstanceRotation(mountInstanceId_, glm::vec3(mountPitch_, mountRoll_, yawRad));
+            characterRenderer->setInstanceRotation(mountInstanceId_, glm::vec3(mountPitch_, mountRoll_, mountYawRad));
 
             // Drive mount model animation: idle when still, run when moving
             auto pickMountAnim = [&](std::initializer_list<uint32_t> candidates, uint32_t fallback) -> uint32_t {
@@ -1172,7 +1168,42 @@ void Renderer::updateCharacterAnimation() {
             }
         }
 
-        // Use mount's attachment point for proper bone-driven rider positioning
+        // Use mount's attachment point for proper bone-driven rider positioning.
+        if (taxiFlight_) {
+            glm::mat4 mountSeatTransform(1.0f);
+            bool haveSeat = false;
+            static constexpr uint32_t kTaxiSeatAttachmentId = 0;  // deterministic rider seat
+            if (mountSeatAttachmentId_ == -1) {
+                mountSeatAttachmentId_ = static_cast<int>(kTaxiSeatAttachmentId);
+            }
+            if (mountSeatAttachmentId_ >= 0) {
+                haveSeat = characterRenderer->getAttachmentTransform(
+                    mountInstanceId_, static_cast<uint32_t>(mountSeatAttachmentId_), mountSeatTransform);
+            }
+            if (!haveSeat) {
+                mountSeatAttachmentId_ = -2;
+            }
+
+            if (haveSeat) {
+                glm::vec3 targetRiderPos = glm::vec3(mountSeatTransform[3]) + glm::vec3(0.0f, 0.0f, 0.02f);
+                // Taxi passengers should be rigidly parented to mount attachment transforms.
+                // Smoothing here introduces visible seat lag/drift on turns.
+                mountSeatSmoothingInit_ = false;
+                smoothedMountSeatPos_ = targetRiderPos;
+                characterRenderer->setInstancePosition(characterInstanceId, targetRiderPos);
+            } else {
+                mountSeatSmoothingInit_ = false;
+                glm::vec3 playerPos = characterPosition + glm::vec3(0.0f, 0.0f, mountHeightOffset_ + 0.10f);
+                characterRenderer->setInstancePosition(characterInstanceId, playerPos);
+            }
+
+            float riderPitch = mountPitch_ * 0.35f;
+            float riderRoll = mountRoll_ * 0.35f;
+            characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(riderPitch, riderRoll, mountYawRad));
+            return;
+        }
+
+        // Ground mounts: try a seat attachment first.
         glm::mat4 mountSeatTransform;
         bool haveSeat = false;
         if (mountSeatAttachmentId_ >= 0) {
