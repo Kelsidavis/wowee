@@ -124,27 +124,44 @@ void TCPSocket::send(const Packet& packet) {
 void TCPSocket::update() {
     if (!connected) return;
 
-    // Receive data into buffer
-    uint8_t buffer[4096];
-    ssize_t received = net::portableRecv(sockfd, buffer, sizeof(buffer));
+    // Drain the socket. Some servers send small packets and close immediately; a single recv()
+    // can return a partial packet, and the next recv() may return 0 (FIN) which would otherwise
+    // make us drop the buffered bytes without parsing.
+    bool sawClose = false;
+    bool receivedAny = false;
+    for (;;) {
+        uint8_t buffer[4096];
+        ssize_t received = net::portableRecv(sockfd, buffer, sizeof(buffer));
 
-    if (received > 0) {
-        LOG_DEBUG("Received ", received, " bytes from server");
-        receiveBuffer.insert(receiveBuffer.end(), buffer, buffer + received);
+        if (received > 0) {
+            receivedAny = true;
+            LOG_DEBUG("Received ", received, " bytes from server");
+            receiveBuffer.insert(receiveBuffer.end(), buffer, buffer + received);
+            continue; // keep draining
+        }
 
-        // Try to parse complete packets from buffer
+        if (received == 0) {
+            sawClose = true;
+            break;
+        }
+
+        int err = net::lastError();
+        if (net::isWouldBlock(err)) {
+            break;
+        }
+
+        LOG_ERROR("Receive failed: ", net::errorString(err));
+        disconnect();
+        return;
+    }
+
+    if (receivedAny) {
         tryParsePackets();
     }
-    else if (received == 0) {
+
+    if (sawClose) {
         LOG_INFO("Connection closed by server");
         disconnect();
-    }
-    else {
-        int err = net::lastError();
-        if (!net::isWouldBlock(err)) {
-            LOG_ERROR("Receive failed: ", net::errorString(err));
-            disconnect();
-        }
     }
 }
 
