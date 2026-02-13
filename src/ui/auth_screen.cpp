@@ -336,6 +336,18 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
         // Checkbox state changed
     }
 
+    // Optional 2FA / PIN field (some servers require this; e.g. Turtle WoW uses Google Authenticator).
+    // Keep it visible pre-connect so we can send LOGON_PROOF immediately after the SRP challenge.
+    {
+        ImGuiInputTextFlags pinFlags = ImGuiInputTextFlags_Password;
+        if (authHandler.getState() == auth::AuthState::PIN_REQUIRED) {
+            pinFlags |= ImGuiInputTextFlags_EnterReturnsTrue;
+        }
+        ImGui::InputText("2FA / PIN", pinCode, sizeof(pinCode), pinFlags);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(optional)");
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -356,6 +368,7 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     if (authenticating) {
         auto state = authHandler.getState();
         if (state != auth::AuthState::PIN_REQUIRED) {
+            pinAutoSubmitted_ = false;
             authTimer += ImGui::GetIO().DeltaTime;
 
             // Show progress with elapsed time
@@ -363,13 +376,28 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
             snprintf(progressBuf, sizeof(progressBuf), "Authenticating... (%.0fs)", authTimer);
             ImGui::Text("%s", progressBuf);
         } else {
-            ImGui::TextWrapped("This server requires a PIN. Enter your PIN to continue.");
-            ImGui::InputText("PIN", pinCode, sizeof(pinCode), ImGuiInputTextFlags_Password);
+            ImGui::TextWrapped("This server requires a 2FA / PIN code. Enter it and submit quickly (the server may time out).");
+
+            // If the user already typed a code before clicking Connect, submit immediately once.
+            if (!pinAutoSubmitted_) {
+                bool digitsOnly = true;
+                size_t len = std::strlen(pinCode);
+                for (size_t i = 0; i < len; ++i) {
+                    if (pinCode[i] < '0' || pinCode[i] > '9') { digitsOnly = false; break; }
+                }
+                if (digitsOnly && len >= 4 && len <= 10) {
+                    authHandler.submitPin(pinCode);
+                    pinCode[0] = '\0';
+                    pinAutoSubmitted_ = true;
+                }
+            }
+
             ImGui::SameLine();
-            if (ImGui::Button("Submit PIN")) {
+            if (ImGui::Button("Submit 2FA/PIN")) {
                 authHandler.submitPin(pinCode);
-                // Don't keep the PIN around longer than needed.
+                // Don't keep the code around longer than needed.
                 pinCode[0] = '\0';
+                pinAutoSubmitted_ = true;
             }
         }
 
@@ -489,18 +517,24 @@ void AuthScreen::attemptAuth(auth::AuthHandler& authHandler) {
         authenticating = true;
         authTimer = 0.0f;
         setStatus("Connected, authenticating...", false);
+        pinAutoSubmitted_ = false;
 
         // Save login info for next session
         saveLoginInfo(false);
 
+        const std::string pinStr = trimAscii(pinCode);
+
         // Send authentication credentials
         if (useHash) {
             auto hashBytes = hexDecode(savedPasswordHash);
-            authHandler.authenticateWithHash(username, hashBytes);
+            authHandler.authenticateWithHash(username, hashBytes, pinStr);
         } else {
             usingStoredHash = false;
-            authHandler.authenticate(username, password);
+            authHandler.authenticate(username, password, pinStr);
         }
+
+        // Don't keep the code around longer than needed.
+        pinCode[0] = '\0';
     } else {
         std::stringstream errSs;
         errSs << "Failed to connect to " << hostname << ":" << port

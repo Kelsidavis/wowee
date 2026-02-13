@@ -59,6 +59,7 @@ private:
     int expansionIndex = 0;     // Index into expansion registry profiles
     bool authenticating = false;
     bool showPassword = false;
+    bool pinAutoSubmitted_ = false;
 
     // Status
     std::string statusMessage;

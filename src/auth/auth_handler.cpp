@@ -81,6 +81,10 @@ void AuthHandler::requestRealmList() {
 }
 
 void AuthHandler::authenticate(const std::string& user, const std::string& pass) {
+    authenticate(user, pass, std::string());
+}
+
+void AuthHandler::authenticate(const std::string& user, const std::string& pass, const std::string& pin) {
     if (!isConnected()) {
         LOG_ERROR("Cannot authenticate: not connected to auth server");
         fail("Not connected");
@@ -97,7 +101,7 @@ void AuthHandler::authenticate(const std::string& user, const std::string& pass)
 
     username = user;
     password = pass;
-    pendingPin_.clear();
+    pendingPin_ = pin;
     securityFlags_ = 0;
     pinGridSeed_ = 0;
     pinServerSalt_ = {};
@@ -111,6 +115,10 @@ void AuthHandler::authenticate(const std::string& user, const std::string& pass)
 }
 
 void AuthHandler::authenticateWithHash(const std::string& user, const std::vector<uint8_t>& authHash) {
+    authenticateWithHash(user, authHash, std::string());
+}
+
+void AuthHandler::authenticateWithHash(const std::string& user, const std::vector<uint8_t>& authHash, const std::string& pin) {
     if (!isConnected()) {
         LOG_ERROR("Cannot authenticate: not connected to auth server");
         fail("Not connected");
@@ -127,7 +135,7 @@ void AuthHandler::authenticateWithHash(const std::string& user, const std::vecto
 
     username = user;
     password.clear();
-    pendingPin_.clear();
+    pendingPin_ = pin;
     securityFlags_ = 0;
     pinGridSeed_ = 0;
     pinServerSalt_ = {};
@@ -341,7 +349,21 @@ void AuthHandler::handlePacket(network::Packet& packet) {
             if (state == AuthState::CHALLENGE_SENT) {
                 handleLogonChallengeResponse(packet);
             } else {
-                LOG_WARNING("Unexpected LOGON_CHALLENGE response in state: ", (int)state);
+                // Some servers send a short LOGON_CHALLENGE failure packet if auth times out while we wait for 2FA/PIN.
+                LogonChallengeResponse response;
+                if (LogonChallengeResponseParser::parse(packet, response) && !response.isSuccess()) {
+                    std::ostringstream ss;
+                    ss << "Server cancelled authentication";
+                    if (state == AuthState::PIN_REQUIRED) {
+                        ss << " while waiting for 2FA/PIN code";
+                    }
+                    ss << ": " << getAuthResultString(response.result)
+                       << " (code 0x" << std::hex << std::setw(2) << std::setfill('0')
+                       << static_cast<unsigned>(response.result) << std::dec << ")";
+                    fail(ss.str());
+                } else {
+                    LOG_WARNING("Unexpected LOGON_CHALLENGE response in state: ", (int)state);
+                }
             }
             break;
 
