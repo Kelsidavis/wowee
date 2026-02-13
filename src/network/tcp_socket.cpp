@@ -230,11 +230,15 @@ size_t TCPSocket::getExpectedPacketSize(uint8_t opcode) {
 
         case 0x01:  // LOGON_PROOF response
             // Success: opcode(1) + status(1) + M2(20) + accountFlags(4) + surveyId(4) + loginFlags(2) = 32
+            // Some vanilla-era servers send a shorter success response:
+            // opcode(1) + status(1) + M2(20) = 22
             // Failure: varies by server — minimum 2 bytes (opcode + status), some send 4
             if (receiveBuffer.size() >= 2) {
                 uint8_t status = receiveBuffer[1];
                 if (status == 0x00) {
-                    return 32;  // Success (WotLK 3.3.5a format)
+                    if (receiveBuffer.size() >= 32) return 32;  // WotLK-style
+                    if (receiveBuffer.size() >= 22) return 22;  // minimal/vanilla-style
+                    return 0;
                 } else {
                     // Consume up to 4 bytes if available, minimum 2
                     return (receiveBuffer.size() >= 4) ? 4 : 2;
