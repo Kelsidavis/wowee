@@ -101,7 +101,7 @@ void AuthHandler::authenticate(const std::string& user, const std::string& pass,
 
     username = user;
     password = pass;
-    pendingPin_ = pin;
+    pendingSecurityCode_ = pin;
     securityFlags_ = 0;
     pinGridSeed_ = 0;
     pinServerSalt_ = {};
@@ -135,7 +135,7 @@ void AuthHandler::authenticateWithHash(const std::string& user, const std::vecto
 
     username = user;
     password.clear();
-    pendingPin_ = pin;
+    pendingSecurityCode_ = pin;
     securityFlags_ = 0;
     pinGridSeed_ = 0;
     pinServerSalt_ = {};
@@ -203,9 +203,9 @@ void AuthHandler::handleLogonChallengeResponse(network::Packet& packet) {
 
     setState(AuthState::CHALLENGE_RECEIVED);
 
-    // If PIN is required, wait for user input.
-    if ((securityFlags_ & 0x01) && pendingPin_.empty()) {
-        setState(AuthState::PIN_REQUIRED);
+    // If a security code is required, wait for user input.
+    if (((securityFlags_ & 0x04) || (securityFlags_ & 0x01)) && pendingSecurityCode_.empty()) {
+        setState((securityFlags_ & 0x04) ? AuthState::AUTHENTICATOR_REQUIRED : AuthState::PIN_REQUIRED);
         return;
     }
 
@@ -225,7 +225,7 @@ void AuthHandler::sendLogonProof() {
 
     if (securityFlags_ & 0x01) {
         try {
-            PinProof proof = computePinProof(pendingPin_, pinGridSeed_, pinServerSalt_);
+            PinProof proof = computePinProof(pendingSecurityCode_, pinGridSeed_, pinServerSalt_);
             pinClientSalt = proof.clientSalt;
             pinHash = proof.hash;
             pinClientSaltPtr = &pinClientSalt;
@@ -239,13 +239,25 @@ void AuthHandler::sendLogonProof() {
     auto packet = LogonProofPacket::build(A, M1, securityFlags_, pinClientSaltPtr, pinHashPtr);
     socket->send(packet);
 
+    if (securityFlags_ & 0x04) {
+        // TrinityCore-style Google Authenticator token: send immediately after proof.
+        // Token is typically 6 digits.
+        const std::string token = pendingSecurityCode_;
+        auto tokPkt = AuthenticatorTokenPacket::build(token);
+        socket->send(tokPkt);
+    }
+
     setState(AuthState::PROOF_SENT);
 }
 
 void AuthHandler::submitPin(const std::string& pin) {
-    pendingPin_ = pin;
-    // If we're waiting on a PIN, continue immediately.
-    if (state == AuthState::PIN_REQUIRED) {
+    submitSecurityCode(pin);
+}
+
+void AuthHandler::submitSecurityCode(const std::string& code) {
+    pendingSecurityCode_ = code;
+    // If we're waiting on a security code, continue immediately.
+    if (state == AuthState::PIN_REQUIRED || state == AuthState::AUTHENTICATOR_REQUIRED) {
         sendLogonProof();
     }
 }

@@ -21,6 +21,7 @@ enum class AuthState {
     CHALLENGE_SENT,
     CHALLENGE_RECEIVED,
     PIN_REQUIRED,
+    AUTHENTICATOR_REQUIRED,
     PROOF_SENT,
     AUTHENTICATED,
     REALM_LIST_REQUESTED,
@@ -51,6 +52,8 @@ public:
     // Optional: when the auth server requires a PIN (securityFlags & 0x01), call this to continue.
     // PIN must be 4-10 digits.
     void submitPin(const std::string& pin);
+    // Generic continuation for PIN / authenticator-required servers.
+    void submitSecurityCode(const std::string& code);
 
     // Set client version info (call before authenticate)
     void setClientInfo(const ClientInfo& info) { clientInfo = info; }
@@ -108,7 +111,7 @@ private:
     uint8_t securityFlags_ = 0;
     uint32_t pinGridSeed_ = 0;
     std::array<uint8_t, 16> pinServerSalt_{}; // from LOGON_CHALLENGE response
-    std::string pendingPin_;
+    std::string pendingSecurityCode_;
 };
 
 } // namespace auth

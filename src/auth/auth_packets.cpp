@@ -142,6 +142,10 @@ bool LogonChallengeResponseParser::parse(network::Packet& packet, LogonChallenge
             response.pinSalt[i] = packet.readUInt8();
         }
     }
+    if (response.securityFlags & 0x04) {
+        // Authenticator required (TrinityCore): u8 requiredFlag (usually 1)
+        response.authenticatorRequired = packet.readUInt8();
+    }
 
     LOG_DEBUG("Parsed LOGON_CHALLENGE response:");
     LOG_DEBUG("  B size: ", response.B.size(), " bytes");
@@ -207,6 +211,17 @@ network::Packet LogonProofPacket::build(const std::vector<uint8_t>& A,
     LOG_DEBUG("  M1 size: ", M1.size(), " bytes");
     LOG_DEBUG("  Total size: ", packet.getSize(), " bytes");
 
+    return packet;
+}
+
+network::Packet AuthenticatorTokenPacket::build(const std::string& token) {
+    network::Packet packet(static_cast<uint16_t>(AuthOpcode::AUTHENTICATOR));
+    // TrinityCore expects: u8 len + ascii token bytes (not null-terminated)
+    uint8_t len = static_cast<uint8_t>(std::min<size_t>(255, token.size()));
+    packet.writeUInt8(len);
+    if (len > 0) {
+        packet.writeBytes(reinterpret_cast<const uint8_t*>(token.data()), len);
+    }
     return packet;
 }
 

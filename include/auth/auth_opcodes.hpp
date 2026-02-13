@@ -11,6 +11,7 @@ enum class AuthOpcode : uint8_t {
     LOGON_PROOF = 0x01,
     RECONNECT_CHALLENGE = 0x02,
     RECONNECT_PROOF = 0x03,
+    AUTHENTICATOR = 0x04,  // TrinityCore-style Google Authenticator token
     REALM_LIST = 0x10,
 };
 

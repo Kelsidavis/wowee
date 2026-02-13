@@ -367,7 +367,7 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     // Connect button
     if (authenticating) {
         auto state = authHandler.getState();
-        if (state != auth::AuthState::PIN_REQUIRED) {
+        if (state != auth::AuthState::PIN_REQUIRED && state != auth::AuthState::AUTHENTICATOR_REQUIRED) {
             pinAutoSubmitted_ = false;
             authTimer += ImGui::GetIO().DeltaTime;
 
@@ -385,8 +385,10 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
                 for (size_t i = 0; i < len; ++i) {
                     if (pinCode[i] < '0' || pinCode[i] > '9') { digitsOnly = false; break; }
                 }
-                if (digitsOnly && len >= 4 && len <= 10) {
-                    authHandler.submitPin(pinCode);
+                // Auto-submit if the user prefilled a plausible code.
+                // PIN-grid: 4-10 digits. Authenticator (TOTP): typically 6 digits.
+                if (digitsOnly && ((len >= 4 && len <= 10) || len == 6)) {
+                    authHandler.submitSecurityCode(pinCode);
                     pinCode[0] = '\0';
                     pinAutoSubmitted_ = true;
                 }
@@ -394,7 +396,7 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
 
             ImGui::SameLine();
             if (ImGui::Button("Submit 2FA/PIN")) {
-                authHandler.submitPin(pinCode);
+                authHandler.submitSecurityCode(pinCode);
                 // Don't keep the code around longer than needed.
                 pinCode[0] = '\0';
                 pinAutoSubmitted_ = true;
@@ -429,7 +431,8 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
                 setStatus("Authentication failed", true);
             }
             authenticating = false;
-        } else if (state != auth::AuthState::PIN_REQUIRED && authTimer >= AUTH_TIMEOUT) {
+        } else if (state != auth::AuthState::PIN_REQUIRED && state != auth::AuthState::AUTHENTICATOR_REQUIRED
+                   && authTimer >= AUTH_TIMEOUT) {
             setStatus("Connection timed out - server did not respond", true);
             authenticating = false;
             authHandler.disconnect();

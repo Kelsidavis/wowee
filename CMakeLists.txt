@@ -425,6 +425,25 @@ set_target_properties(dbc_to_csv PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
+# ---- Tool: auth_probe (LOGON_CHALLENGE probe) ----
+add_executable(auth_probe
+    tools/auth_probe/main.cpp
+    src/auth/auth_packets.cpp
+    src/auth/auth_opcodes.cpp
+    src/auth/crypto.cpp
+    src/network/packet.cpp
+    src/network/socket.cpp
+    src/network/tcp_socket.cpp
+    src/core/logger.cpp
+)
+target_include_directories(auth_probe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(auth_probe PRIVATE Threads::Threads OpenSSL::Crypto)
+set_target_properties(auth_probe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
 # ---- Tool: blp_convert (BLP ↔ PNG) ----
 add_executable(blp_convert
     tools/blp_convert/main.cpp

@@ -43,6 +43,9 @@ struct LogonChallengeResponse {
     uint32_t pinGridSeed = 0;
     std::array<uint8_t, 16> pinSalt{};
 
+    // Authenticator extension (securityFlags & 0x04)
+    uint8_t authenticatorRequired = 0;
+
     bool isSuccess() const { return result == AuthResult::SUCCESS; }
 };
 
@@ -62,6 +65,12 @@ public:
                                   uint8_t securityFlags,
                                   const std::array<uint8_t, 16>* pinClientSalt,
                                   const std::array<uint8_t, 20>* pinHash);
+};
+
+// AUTHENTICATOR token packet builder (opcode 0x04 on many TrinityCore-derived servers)
+class AuthenticatorTokenPacket {
+public:
+    static network::Packet build(const std::string& token);
 };
 
 // LOGON_PROOF response data
