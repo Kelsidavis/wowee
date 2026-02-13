@@ -433,6 +433,17 @@ void AuthHandler::update(float /*deltaTime*/) {
 
     // Update socket (processes incoming data and calls packet callback)
     socket->update();
+
+    // If the server drops the TCP connection mid-auth, surface it as an auth failure immediately
+    // (otherwise the UI just hits its generic timeout).
+    if (!socket->isConnected()) {
+        if (state != AuthState::DISCONNECTED &&
+            state != AuthState::FAILED &&
+            state != AuthState::AUTHENTICATED &&
+            state != AuthState::REALM_LIST_RECEIVED) {
+            fail("Disconnected by auth server");
+        }
+    }
 }
 
 void AuthHandler::setState(AuthState newState) {
