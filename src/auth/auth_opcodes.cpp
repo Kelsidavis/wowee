@@ -18,11 +18,9 @@ const char* getAuthResultString(AuthResult result) {
         case AuthResult::OUT_OF_CREDIT: return "Account out of credit/time";
         case AuthResult::BUSY: return "Server is busy - try again later";
         case AuthResult::BUILD_INVALID:
-            return "Version mismatch - this client is WotLK 3.3.5a (build 12340). "
-                   "The server requires a different client version";
+            return "Version mismatch - the server requires a different client build/version";
         case AuthResult::BUILD_UPDATE:
-            return "Client update required - the server expects a different build version. "
-                   "This client only supports WotLK 3.3.5a (build 12340)";
+            return "Client update required - the server expects a different client build/version";
         case AuthResult::INVALID_SERVER: return "Invalid server";
         case AuthResult::ACCOUNT_SUSPENDED: return "This account has been suspended";
         case AuthResult::ACCESS_DENIED: return "Access denied";

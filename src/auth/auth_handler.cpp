@@ -167,7 +167,18 @@ void AuthHandler::handleLogonChallengeResponse(network::Packet& packet) {
     }
 
     if (!response.isSuccess()) {
-        fail(std::string("LOGON_CHALLENGE failed: ") + getAuthResultString(response.result));
+        if (response.result == AuthResult::BUILD_INVALID || response.result == AuthResult::BUILD_UPDATE) {
+            std::ostringstream ss;
+            ss << "LOGON_CHALLENGE failed: version mismatch (client v"
+               << (int)clientInfo.majorVersion << "."
+               << (int)clientInfo.minorVersion << "."
+               << (int)clientInfo.patchVersion
+               << " build " << clientInfo.build
+               << ", auth protocol " << (int)clientInfo.protocolVersion << ")";
+            fail(ss.str());
+        } else {
+            fail(std::string("LOGON_CHALLENGE failed: ") + getAuthResultString(response.result));
+        }
         return;
     }
 
@@ -353,13 +364,22 @@ void AuthHandler::handlePacket(network::Packet& packet) {
                 LogonChallengeResponse response;
                 if (LogonChallengeResponseParser::parse(packet, response) && !response.isSuccess()) {
                     std::ostringstream ss;
-                    ss << "Server cancelled authentication";
+                    ss << "LOGON_CHALLENGE failed";
                     if (state == AuthState::PIN_REQUIRED) {
                         ss << " while waiting for 2FA/PIN code";
                     }
-                    ss << ": " << getAuthResultString(response.result)
-                       << " (code 0x" << std::hex << std::setw(2) << std::setfill('0')
-                       << static_cast<unsigned>(response.result) << std::dec << ")";
+                    if (response.result == AuthResult::BUILD_INVALID || response.result == AuthResult::BUILD_UPDATE) {
+                        ss << ": version mismatch (client v"
+                           << (int)clientInfo.majorVersion << "."
+                           << (int)clientInfo.minorVersion << "."
+                           << (int)clientInfo.patchVersion
+                           << " build " << clientInfo.build
+                           << ", auth protocol " << (int)clientInfo.protocolVersion << ")";
+                    } else {
+                        ss << ": " << getAuthResultString(response.result)
+                           << " (code 0x" << std::hex << std::setw(2) << std::setfill('0')
+                           << static_cast<unsigned>(response.result) << std::dec << ")";
+                    }
                     fail(ss.str());
                 } else {
                     LOG_WARNING("Unexpected LOGON_CHALLENGE response in state: ", (int)state);
