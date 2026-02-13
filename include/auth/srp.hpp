@@ -27,6 +27,15 @@ public:
               const std::vector<uint8_t>& N,
               const std::vector<uint8_t>& salt);
 
+    // Some SRP implementations use k = H(N|g) instead of the WoW-specific k=3.
+    // Default is false (k=3).
+    void setUseHashedK(bool enabled) { useHashedK_ = enabled; }
+
+    // Controls how SHA1 outputs are interpreted when converted to big integers (x, u, optionally k).
+    // Many SRP implementations treat hash outputs as big-endian integers.
+    // Default is false (treat hash outputs as little-endian integers).
+    void setHashBigEndian(bool enabled) { hashBigEndian_ = enabled; }
+
     // Get client public ephemeral (A) - send to server
     std::vector<uint8_t> getA() const;
 
@@ -73,6 +82,8 @@ private:
     std::vector<uint8_t> stored_auth_hash;  // Pre-computed SHA1(UPPER(user):UPPER(pass))
 
     bool initialized = false;
+    bool useHashedK_ = false;
+    bool hashBigEndian_ = false;
 };
 
 } // namespace auth

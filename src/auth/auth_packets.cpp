@@ -126,9 +126,9 @@ bool LogonChallengeResponseParser::parse(network::Packet& packet, LogonChallenge
         response.salt[i] = packet.readUInt8();
     }
 
-    // Unknown/padding - 16 bytes
-    for (int i = 0; i < 16; ++i) {
-        packet.readUInt8();
+    // Integrity salt / CRC salt - 16 bytes
+    for (size_t i = 0; i < response.checksumSalt.size(); ++i) {
+        response.checksumSalt[i] = packet.readUInt8();
     }
 
     // Security flags
@@ -162,7 +162,7 @@ bool LogonChallengeResponseParser::parse(network::Packet& packet, LogonChallenge
 
 network::Packet LogonProofPacket::build(const std::vector<uint8_t>& A,
                                          const std::vector<uint8_t>& M1) {
-    return build(A, M1, 0, nullptr, nullptr);
+    return build(A, M1, 0, nullptr, nullptr, nullptr);
 }
 
 network::Packet LogonProofPacket::buildLegacy(const std::vector<uint8_t>& A,
@@ -185,6 +185,7 @@ network::Packet LogonProofPacket::buildLegacy(const std::vector<uint8_t>& A,
 network::Packet LogonProofPacket::build(const std::vector<uint8_t>& A,
                                          const std::vector<uint8_t>& M1,
                                          uint8_t securityFlags,
+                                         const std::array<uint8_t, 20>* crcHash,
                                          const std::array<uint8_t, 16>* pinClientSalt,
                                          const std::array<uint8_t, 20>* pinHash) {
     if (A.size() != 32) {
@@ -202,9 +203,11 @@ network::Packet LogonProofPacket::build(const std::vector<uint8_t>& A,
     // M1 (client proof) - 20 bytes
     packet.writeBytes(M1.data(), M1.size());
 
-    // CRC hash - 20 bytes (zeros)
-    for (int i = 0; i < 20; ++i) {
-        packet.writeUInt8(0);
+    // CRC hash / integrity hash - 20 bytes
+    if (crcHash) {
+        packet.writeBytes(crcHash->data(), crcHash->size());
+    } else {
+        for (int i = 0; i < 20; ++i) packet.writeUInt8(0);
     }
 
     // Number of keys

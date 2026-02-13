@@ -58,6 +58,18 @@ void SRP::feed(const std::vector<uint8_t>& B_bytes,
     this->N = BigNum(N_bytes, true);
     this->s = BigNum(salt_bytes, true);
 
+    if (useHashedK_) {
+        // k = H(N | g) (SRP-6a style)
+        std::vector<uint8_t> Ng;
+        Ng.insert(Ng.end(), N_bytes.begin(), N_bytes.end());
+        Ng.insert(Ng.end(), g_bytes.begin(), g_bytes.end());
+        std::vector<uint8_t> k_bytes = Crypto::sha1(Ng);
+        k = BigNum(k_bytes, !hashBigEndian_);
+        LOG_DEBUG("Using hashed SRP multiplier k=H(N|g)");
+    } else {
+        k = BigNum(K_VALUE);
+    }
+
     LOG_DEBUG("SRP challenge data loaded");
 
     // Now compute everything in sequence
@@ -72,7 +84,7 @@ void SRP::feed(const std::vector<uint8_t>& B_bytes,
     x_input.insert(x_input.end(), salt_bytes.begin(), salt_bytes.end());
     x_input.insert(x_input.end(), auth_hash.begin(), auth_hash.end());
     std::vector<uint8_t> x_bytes = Crypto::sha1(x_input);
-    x = BigNum(x_bytes, true);
+    x = BigNum(x_bytes, !hashBigEndian_);
     LOG_DEBUG("Computed x (salted password hash)");
 
     // 3. Generate client ephemeral (a, A)
@@ -151,7 +163,7 @@ void SRP::computeSessionKey() {
     AB.insert(AB.end(), B_bytes_u.begin(), B_bytes_u.end());
 
     std::vector<uint8_t> u_bytes = Crypto::sha1(AB);
-    u = BigNum(u_bytes, true);
+    u = BigNum(u_bytes, !hashBigEndian_);
 
     LOG_DEBUG("Scrambler u calculated");
 

@@ -37,6 +37,7 @@ struct LogonChallengeResponse {
     std::vector<uint8_t> g;     // Generator (variable, usually 1 byte)
     std::vector<uint8_t> N;     // Prime modulus (variable, usually 256 bytes)
     std::vector<uint8_t> salt;  // Salt (32 bytes)
+    std::array<uint8_t, 16> checksumSalt{}; // aka "crc_salt"/integrity salt
     uint8_t securityFlags;
 
     // PIN extension (securityFlags & 0x01)
@@ -66,6 +67,7 @@ public:
     static network::Packet build(const std::vector<uint8_t>& A,
                                   const std::vector<uint8_t>& M1,
                                   uint8_t securityFlags,
+                                  const std::array<uint8_t, 20>* crcHash,
                                   const std::array<uint8_t, 16>* pinClientSalt,
                                   const std::array<uint8_t, 20>* pinHash);
 };

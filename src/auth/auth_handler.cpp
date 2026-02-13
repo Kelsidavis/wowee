@@ -1,5 +1,6 @@
 #include "auth/auth_handler.hpp"
 #include "auth/pin_auth.hpp"
+#include "auth/integrity.hpp"
 #include "network/tcp_socket.hpp"
 #include "network/packet.hpp"
 #include "core/logger.hpp"
@@ -7,6 +8,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 namespace wowee {
 namespace auth {
@@ -105,6 +107,7 @@ void AuthHandler::authenticate(const std::string& user, const std::string& pass,
     securityFlags_ = 0;
     pinGridSeed_ = 0;
     pinServerSalt_ = {};
+    checksumSalt_ = {};
 
     // Initialize SRP
     srp = std::make_unique<SRP>();
@@ -139,6 +142,7 @@ void AuthHandler::authenticateWithHash(const std::string& user, const std::vecto
     securityFlags_ = 0;
     pinGridSeed_ = 0;
     pinServerSalt_ = {};
+    checksumSalt_ = {};
 
     // Initialize SRP with pre-computed hash
     srp = std::make_unique<SRP>();
@@ -196,6 +200,7 @@ void AuthHandler::handleLogonChallengeResponse(network::Packet& packet) {
     srp->feed(response.B, response.g, response.N, response.salt);
 
     securityFlags_ = response.securityFlags;
+    checksumSalt_ = response.checksumSalt;
     if (securityFlags_ & 0x01) {
         pinGridSeed_ = response.pinGridSeed;
         pinServerSalt_ = response.pinSalt;
@@ -222,6 +227,8 @@ void AuthHandler::sendLogonProof() {
     std::array<uint8_t, 20> pinHash{};
     const std::array<uint8_t, 16>* pinClientSaltPtr = nullptr;
     const std::array<uint8_t, 20>* pinHashPtr = nullptr;
+    std::array<uint8_t, 20> crcHash{};
+    const std::array<uint8_t, 20>* crcHashPtr = nullptr;
 
     if (securityFlags_ & 0x01) {
         try {
@@ -236,20 +243,54 @@ void AuthHandler::sendLogonProof() {
         }
     }
 
-    // Protocol < 8 uses a shorter proof packet (no securityFlags byte).
-    if (clientInfo.protocolVersion < 8) {
-        auto packet = LogonProofPacket::buildLegacy(A, M1);
-        socket->send(packet);
-    } else {
-        auto packet = LogonProofPacket::build(A, M1, securityFlags_, pinClientSaltPtr, pinHashPtr);
-        socket->send(packet);
-
-        if (securityFlags_ & 0x04) {
-            // TrinityCore-style Google Authenticator token: send immediately after proof.
-            const std::string token = pendingSecurityCode_;
-            auto tokPkt = AuthenticatorTokenPacket::build(token);
-            socket->send(tokPkt);
+    // Legacy client integrity hash (aka "CRC hash"). Some servers enforce this for classic builds.
+    // We compute it when checksumSalt was provided (always present on success challenge) and files exist.
+    {
+        std::vector<std::string> candidateDirs;
+        if (const char* env = std::getenv("WOWEE_INTEGRITY_DIR")) {
+            if (env && *env) candidateDirs.push_back(env);
         }
+        // Default local extraction layout
+        candidateDirs.push_back("Data/misc");
+        // Common turtle repack location used in this workspace
+        if (const char* home = std::getenv("HOME")) {
+            if (home && *home) {
+                candidateDirs.push_back(std::string(home) + "/Downloads/twmoa_1180");
+                candidateDirs.push_back(std::string(home) + "/twmoa_1180");
+            }
+        }
+
+        const char* candidateExes[] = { "WoW.exe", "TurtleWoW.exe", "Wow.exe" };
+        bool ok = false;
+        std::string lastErr;
+        for (const auto& dir : candidateDirs) {
+            for (const char* exe : candidateExes) {
+                std::string err;
+                if (computeIntegrityHashWin32WithExe(checksumSalt_, A, dir, exe, crcHash, err)) {
+                    crcHashPtr = &crcHash;
+                    LOG_INFO("Integrity hash computed from ", dir, " (", exe, ")");
+                    ok = true;
+                    break;
+                }
+                lastErr = err;
+            }
+            if (ok) break;
+        }
+        if (!ok) {
+            LOG_WARNING("Integrity hash not computed (", lastErr,
+                        "). Server may reject classic clients without it. "
+                        "Set WOWEE_INTEGRITY_DIR to your client folder.");
+        }
+    }
+
+    auto packet = LogonProofPacket::build(A, M1, securityFlags_, crcHashPtr, pinClientSaltPtr, pinHashPtr);
+    socket->send(packet);
+
+    if ((securityFlags_ & 0x04) && clientInfo.protocolVersion >= 8) {
+        // TrinityCore-style Google Authenticator token: send immediately after proof.
+        const std::string token = pendingSecurityCode_;
+        auto tokPkt = AuthenticatorTokenPacket::build(token);
+        socket->send(tokPkt);
     }
 
     setState(AuthState::PROOF_SENT);

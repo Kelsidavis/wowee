@@ -90,6 +90,7 @@ set(WOWEE_SOURCES
     src/auth/auth_opcodes.cpp
     src/auth/auth_packets.cpp
     src/auth/pin_auth.cpp
+    src/auth/integrity.cpp
     src/auth/srp.cpp
     src/auth/big_num.cpp
     src/auth/crypto.cpp
@@ -441,6 +442,28 @@ target_include_directories(auth_probe PRIVATE
 )
 target_link_libraries(auth_probe PRIVATE Threads::Threads OpenSSL::Crypto)
 set_target_properties(auth_probe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+# ---- Tool: auth_login_probe (challenge + proof probe) ----
+add_executable(auth_login_probe
+    tools/auth_login_probe/main.cpp
+    src/auth/auth_packets.cpp
+    src/auth/auth_opcodes.cpp
+    src/auth/crypto.cpp
+    src/auth/integrity.cpp
+    src/auth/big_num.cpp
+    src/auth/srp.cpp
+    src/network/packet.cpp
+    src/network/socket.cpp
+    src/network/tcp_socket.cpp
+    src/core/logger.cpp
+)
+target_include_directories(auth_login_probe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(auth_login_probe PRIVATE Threads::Threads OpenSSL::Crypto)
+set_target_properties(auth_login_probe PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 

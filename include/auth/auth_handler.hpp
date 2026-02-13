@@ -111,6 +111,7 @@ private:
     uint8_t securityFlags_ = 0;
     uint32_t pinGridSeed_ = 0;
     std::array<uint8_t, 16> pinServerSalt_{}; // from LOGON_CHALLENGE response
+    std::array<uint8_t, 16> checksumSalt_{};  // from LOGON_CHALLENGE response (integrity salt)
     std::string pendingSecurityCode_;
 };
 
