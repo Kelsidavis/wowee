@@ -4,6 +4,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
 #include <map>
@@ -30,17 +31,18 @@ void SpellbookScreen::loadSpellDBC(pipeline::AssetManager* assetManager) {
 
     // WoW 3.3.5a Spell.dbc fields (0-based):
     // 0 = SpellID, 4 = Attributes, 133 = SpellIconID, 136 = SpellName_enUS, 153 = RankText_enUS
+    const auto* spellL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
     uint32_t count = dbc->getRecordCount();
     for (uint32_t i = 0; i < count; ++i) {
-        uint32_t spellId = dbc->getUInt32(i, 0);
+        uint32_t spellId = dbc->getUInt32(i, spellL ? (*spellL)["ID"] : 0);
         if (spellId == 0) continue;
 
         SpellInfo info;
         info.spellId = spellId;
-        info.attributes = dbc->getUInt32(i, 4);
-        info.iconId = dbc->getUInt32(i, 133);
-        info.name = dbc->getString(i, 136);
-        info.rank = dbc->getString(i, 153);
+        info.attributes = dbc->getUInt32(i, spellL ? (*spellL)["Attributes"] : 4);
+        info.iconId = dbc->getUInt32(i, spellL ? (*spellL)["IconID"] : 133);
+        info.name = dbc->getString(i, spellL ? (*spellL)["Name"] : 136);
+        info.rank = dbc->getString(i, spellL ? (*spellL)["Rank"] : 153);
 
         if (!info.name.empty()) {
             spellData[spellId] = std::move(info);
@@ -63,9 +65,10 @@ void SpellbookScreen::loadSpellIconDBC(pipeline::AssetManager* assetManager) {
         return;
     }
 
+    const auto* iconL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SpellIcon") : nullptr;
     for (uint32_t i = 0; i < dbc->getRecordCount(); i++) {
-        uint32_t id = dbc->getUInt32(i, 0);
-        std::string path = dbc->getString(i, 1);
+        uint32_t id = dbc->getUInt32(i, iconL ? (*iconL)["ID"] : 0);
+        std::string path = dbc->getString(i, iconL ? (*iconL)["Path"] : 1);
         if (!path.empty() && id > 0) {
             spellIconPaths[id] = path;
         }
@@ -82,11 +85,12 @@ void SpellbookScreen::loadSkillLineDBCs(pipeline::AssetManager* assetManager) {
 
     // Load SkillLine.dbc: field 0 = ID, field 1 = categoryID, field 3 = name_enUS
     auto skillLineDbc = assetManager->loadDBC("SkillLine.dbc");
+    const auto* slL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SkillLine") : nullptr;
     if (skillLineDbc && skillLineDbc->isLoaded()) {
         for (uint32_t i = 0; i < skillLineDbc->getRecordCount(); i++) {
-            uint32_t id = skillLineDbc->getUInt32(i, 0);
-            uint32_t category = skillLineDbc->getUInt32(i, 1);
-            std::string name = skillLineDbc->getString(i, 3);
+            uint32_t id = skillLineDbc->getUInt32(i, slL ? (*slL)["ID"] : 0);
+            uint32_t category = skillLineDbc->getUInt32(i, slL ? (*slL)["Category"] : 1);
+            std::string name = skillLineDbc->getString(i, slL ? (*slL)["Name"] : 3);
             if (id > 0 && !name.empty()) {
                 skillLineNames[id] = name;
                 skillLineCategories[id] = category;
@@ -99,10 +103,11 @@ void SpellbookScreen::loadSkillLineDBCs(pipeline::AssetManager* assetManager) {
 
     // Load SkillLineAbility.dbc: field 0 = ID, field 1 = skillLineID, field 2 = spellID
     auto slaDbc = assetManager->loadDBC("SkillLineAbility.dbc");
+    const auto* slaL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SkillLineAbility") : nullptr;
     if (slaDbc && slaDbc->isLoaded()) {
         for (uint32_t i = 0; i < slaDbc->getRecordCount(); i++) {
-            uint32_t skillLineId = slaDbc->getUInt32(i, 1);
-            uint32_t spellId = slaDbc->getUInt32(i, 2);
+            uint32_t skillLineId = slaDbc->getUInt32(i, slaL ? (*slaL)["SkillLineID"] : 1);
+            uint32_t spellId = slaDbc->getUInt32(i, slaL ? (*slaL)["SpellID"] : 2);
             if (spellId > 0 && skillLineId > 0) {
                 spellToSkillLine[spellId] = skillLineId;
             }

@@ -55,13 +55,6 @@ imgui.ini
 config.ini
 config.json
 
-# WoW data (users must supply their own)
-Data/
-*.mpq
-
-# Texture assets (not distributed - see README)
-assets/textures/
-
 # Runtime cache (floor heights, etc.)
 cache/
 

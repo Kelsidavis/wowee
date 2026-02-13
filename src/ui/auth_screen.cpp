@@ -5,6 +5,7 @@
 #include "rendering/renderer.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/music_manager.hpp"
+#include "game/expansion_profile.hpp"
 #include <imgui.h>
 #include <filesystem>
 #include <sstream>
@@ -148,9 +149,30 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     if (port < 1) port = 1;
     if (port > 65535) port = 65535;
 
-    // Compatibility mode dropdown
-    const char* compatModes[] = { "3.3.5a" };
-    ImGui::Combo("Compatibility Mode", &compatibilityMode, compatModes, IM_ARRAYSIZE(compatModes));
+    // Expansion selector (populated from ExpansionRegistry)
+    auto* registry = core::Application::getInstance().getExpansionRegistry();
+    if (registry && !registry->getAllProfiles().empty()) {
+        auto& profiles = registry->getAllProfiles();
+        // Build combo items: "WotLK (3.3.5a)"
+        std::string preview;
+        if (expansionIndex >= 0 && expansionIndex < static_cast<int>(profiles.size())) {
+            preview = profiles[expansionIndex].shortName + " (" + profiles[expansionIndex].versionString() + ")";
+        }
+        if (ImGui::BeginCombo("Expansion", preview.c_str())) {
+            for (int i = 0; i < static_cast<int>(profiles.size()); ++i) {
+                std::string label = profiles[i].shortName + " (" + profiles[i].versionString() + ")";
+                bool selected = (expansionIndex == i);
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    expansionIndex = i;
+                    registry->setActive(profiles[i].id);
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+    } else {
+        ImGui::Text("Expansion: WotLK 3.3.5a (default)");
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -291,6 +313,21 @@ void AuthScreen::attemptAuth(auth::AuthHandler& authHandler) {
         failureReason = reason;
     });
 
+    // Configure client version from active expansion profile
+    auto* reg = core::Application::getInstance().getExpansionRegistry();
+    if (reg) {
+        auto* profile = reg->getActive();
+        if (profile) {
+            auth::ClientInfo info;
+            info.majorVersion = profile->majorVersion;
+            info.minorVersion = profile->minorVersion;
+            info.patchVersion = profile->patchVersion;
+            info.build = profile->build;
+            info.protocolVersion = profile->protocolVersion;
+            authHandler.setClientInfo(info);
+        }
+    }
+
     if (authHandler.connect(hostname, static_cast<uint16_t>(port))) {
         authenticating = true;
         authTimer = 0.0f;
@@ -350,6 +387,11 @@ void AuthScreen::saveLoginInfo() {
     if (!savedPasswordHash.empty()) {
         out << "password_hash=" << savedPasswordHash << "\n";
     }
+    // Save active expansion id
+    auto* expReg = core::Application::getInstance().getExpansionRegistry();
+    if (expReg && !expReg->getActiveId().empty()) {
+        out << "expansion=" << expReg->getActiveId() << "\n";
+    }
 
     LOG_INFO("Login info saved to ", path);
 }
@@ -376,6 +418,15 @@ void AuthScreen::loadLoginInfo() {
             username[sizeof(username) - 1] = '\0';
         } else if (key == "password_hash" && !val.empty()) {
             savedPasswordHash = val;
+        } else if (key == "expansion" && !val.empty()) {
+            auto* expReg = core::Application::getInstance().getExpansionRegistry();
+            if (expReg && expReg->setActive(val)) {
+                // Find matching index
+                auto& profiles = expReg->getAllProfiles();
+                for (int i = 0; i < static_cast<int>(profiles.size()); ++i) {
+                    if (profiles[i].id == val) { expansionIndex = i; break; }
+                }
+            }
         }
     }
 

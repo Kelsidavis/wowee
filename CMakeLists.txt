@@ -95,6 +95,9 @@ set(WOWEE_SOURCES
     src/auth/rc4.cpp
 
     # Game
+    src/game/expansion_profile.cpp
+    src/game/opcode_table.cpp
+    src/game/update_field_table.cpp
     src/game/game_handler.cpp
     src/game/warden_crypto.cpp
     src/game/warden_module.cpp
@@ -105,6 +108,8 @@ set(WOWEE_SOURCES
     src/game/entity.cpp
     src/game/opcodes.cpp
     src/game/world_packets.cpp
+    src/game/packet_parsers_tbc.cpp
+    src/game/packet_parsers_classic.cpp
     src/game/character.cpp
     src/game/zone_manager.cpp
     src/game/inventory.cpp
@@ -131,6 +136,8 @@ set(WOWEE_SOURCES
     src/pipeline/m2_loader.cpp
     src/pipeline/wmo_loader.cpp
     src/pipeline/adt_loader.cpp
+    src/pipeline/dbc_layout.cpp
+    src/pipeline/hd_pack_manager.cpp
     src/pipeline/terrain_mesh.cpp
 
     # Rendering

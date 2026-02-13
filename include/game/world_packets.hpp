@@ -514,7 +514,6 @@ public:
      */
     static uint64_t readPackedGuid(network::Packet& packet);
 
-private:
     /**
      * Parse a single update block
      *

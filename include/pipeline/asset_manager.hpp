@@ -6,6 +6,7 @@
 #include "pipeline/loose_file_reader.hpp"
 #include <memory>
 #include <string>
+#include <vector>
 #include <map>
 #include <mutex>
 
@@ -16,6 +17,8 @@ namespace pipeline {
  * AssetManager - Unified interface for loading WoW assets
  *
  * Reads pre-extracted loose files indexed by manifest.json.
+ * Supports layered manifests: overlay manifests (HD packs, mods)
+ * are checked before the base manifest, with higher priority first.
  * Use the asset_extract tool to extract MPQ archives first.
  * All reads are fully parallel (no serialization mutex needed).
  */
@@ -40,6 +43,26 @@ public:
      * Check if asset manager is initialized
      */
     bool isInitialized() const { return initialized; }
+
+    /**
+     * Add an overlay manifest (HD packs, mods) checked before the base manifest.
+     * Higher priority overlays are checked first.
+     * @param manifestPath Full path to the overlay's manifest.json
+     * @param priority Priority level (higher = checked first)
+     * @param id Unique identifier for this overlay (e.g. "hd_character")
+     * @return true if overlay loaded successfully
+     */
+    bool addOverlayManifest(const std::string& manifestPath, int priority, const std::string& id);
+
+    /**
+     * Remove a previously added overlay manifest by id.
+     */
+    void removeOverlay(const std::string& id);
+
+    /**
+     * Get list of active overlay IDs.
+     */
+    std::vector<std::string> getOverlayIds() const;
 
     /**
      * Load a BLP texture
@@ -105,9 +128,23 @@ private:
     bool initialized = false;
     std::string dataPath;
 
-    // Loose file backend
+    // Base manifest (loaded from dataPath/manifest.json)
     AssetManifest manifest_;
     LooseFileReader looseReader_;
+
+    // Overlay manifests (HD packs, mods) - sorted by priority descending
+    struct ManifestLayer {
+        AssetManifest manifest;
+        int priority;
+        std::string id;
+    };
+    std::vector<ManifestLayer> overlayLayers_;  // Sorted by priority desc
+
+    /**
+     * Resolve filesystem path checking overlays first, then base manifest.
+     * Returns empty string if not found in any layer.
+     */
+    std::string resolveLayeredPath(const std::string& normalizedPath) const;
 
     mutable std::mutex cacheMutex;
     std::map<std::string, std::shared_ptr<DBCFile>> dbcCache;

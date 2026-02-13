@@ -45,6 +45,10 @@ public:
     void authenticate(const std::string& username, const std::string& password);
     void authenticateWithHash(const std::string& username, const std::vector<uint8_t>& authHash);
 
+    // Set client version info (call before authenticate)
+    void setClientInfo(const ClientInfo& info) { clientInfo = info; }
+    const ClientInfo& getClientInfo() const { return clientInfo; }
+
     // Realm list
     void requestRealmList();
     const std::vector<Realm>& getRealms() const { return realms; }

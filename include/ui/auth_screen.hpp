@@ -3,6 +3,7 @@
 #include "auth/auth_handler.hpp"
 #include "rendering/video_player.hpp"
 #include <string>
+#include <vector>
 #include <functional>
 
 namespace wowee { namespace ui {
@@ -46,7 +47,7 @@ private:
     char username[256] = "";
     char password[256] = "";
     int port = 3724;
-    int compatibilityMode = 0;  // 0 = 3.3.5a
+    int expansionIndex = 0;     // Index into expansion registry profiles
     bool authenticating = false;
     bool showPassword = false;
 

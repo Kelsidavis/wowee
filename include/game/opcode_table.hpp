@@ -1,0 +1,407 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <optional>
+
+namespace wowee {
+namespace game {
+
+/**
+ * Logical opcode identifiers (expansion-agnostic).
+ *
+ * These are compile-time enum values used in switch statements.
+ * The actual wire values depend on the active expansion and are
+ * loaded from JSON at runtime via OpcodeTable.
+ */
+enum class LogicalOpcode : uint16_t {
+    // ---- Client to Server (Core) ----
+    CMSG_PING,
+    CMSG_AUTH_SESSION,
+    CMSG_CHAR_CREATE,
+    CMSG_CHAR_ENUM,
+    CMSG_CHAR_DELETE,
+    CMSG_PLAYER_LOGIN,
+
+    // ---- Movement ----
+    CMSG_MOVE_START_FORWARD,
+    CMSG_MOVE_START_BACKWARD,
+    CMSG_MOVE_STOP,
+    CMSG_MOVE_START_STRAFE_LEFT,
+    CMSG_MOVE_START_STRAFE_RIGHT,
+    CMSG_MOVE_STOP_STRAFE,
+    CMSG_MOVE_JUMP,
+    CMSG_MOVE_START_TURN_LEFT,
+    CMSG_MOVE_START_TURN_RIGHT,
+    CMSG_MOVE_STOP_TURN,
+    CMSG_MOVE_SET_FACING,
+    CMSG_MOVE_FALL_LAND,
+    CMSG_MOVE_START_SWIM,
+    CMSG_MOVE_STOP_SWIM,
+    CMSG_MOVE_HEARTBEAT,
+
+    // ---- Server to Client (Core) ----
+    SMSG_AUTH_CHALLENGE,
+    SMSG_AUTH_RESPONSE,
+    SMSG_CHAR_CREATE,
+    SMSG_CHAR_ENUM,
+    SMSG_CHAR_DELETE,
+    SMSG_PONG,
+    SMSG_LOGIN_VERIFY_WORLD,
+    SMSG_LOGIN_SETTIMESPEED,
+    SMSG_TUTORIAL_FLAGS,
+    SMSG_WARDEN_DATA,
+    CMSG_WARDEN_DATA,
+    SMSG_ACCOUNT_DATA_TIMES,
+    SMSG_CLIENTCACHE_VERSION,
+    SMSG_FEATURE_SYSTEM_STATUS,
+    SMSG_MOTD,
+
+    // ---- Entity/Object updates ----
+    SMSG_UPDATE_OBJECT,
+    SMSG_COMPRESSED_UPDATE_OBJECT,
+    SMSG_MONSTER_MOVE_TRANSPORT,
+    SMSG_DESTROY_OBJECT,
+
+    // ---- Chat ----
+    CMSG_MESSAGECHAT,
+    SMSG_MESSAGECHAT,
+
+    // ---- Server Info Commands ----
+    CMSG_WHO,
+    SMSG_WHO,
+    CMSG_REQUEST_PLAYED_TIME,
+    SMSG_PLAYED_TIME,
+    CMSG_QUERY_TIME,
+    SMSG_QUERY_TIME_RESPONSE,
+
+    // ---- Social Commands ----
+    SMSG_FRIEND_STATUS,
+    CMSG_ADD_FRIEND,
+    CMSG_DEL_FRIEND,
+    CMSG_SET_CONTACT_NOTES,
+    CMSG_ADD_IGNORE,
+    CMSG_DEL_IGNORE,
+
+    // ---- Logout Commands ----
+    CMSG_PLAYER_LOGOUT,
+    CMSG_LOGOUT_REQUEST,
+    CMSG_LOGOUT_CANCEL,
+    SMSG_LOGOUT_RESPONSE,
+    SMSG_LOGOUT_COMPLETE,
+
+    // ---- Stand State ----
+    CMSG_STAND_STATE_CHANGE,
+
+    // ---- Display Toggles ----
+    CMSG_SHOWING_HELM,
+    CMSG_SHOWING_CLOAK,
+
+    // ---- PvP ----
+    CMSG_TOGGLE_PVP,
+
+    // ---- Guild ----
+    CMSG_GUILD_INVITE,
+    CMSG_GUILD_ACCEPT,
+    CMSG_GUILD_DECLINE_INVITATION,
+    CMSG_GUILD_INFO,
+    CMSG_GUILD_GET_ROSTER,
+    CMSG_GUILD_PROMOTE_MEMBER,
+    CMSG_GUILD_DEMOTE_MEMBER,
+    CMSG_GUILD_LEAVE,
+    CMSG_GUILD_MOTD,
+    SMSG_GUILD_INFO,
+    SMSG_GUILD_ROSTER,
+
+    // ---- Ready Check ----
+    MSG_RAID_READY_CHECK,
+    MSG_RAID_READY_CHECK_CONFIRM,
+
+    // ---- Duel ----
+    CMSG_DUEL_PROPOSED,
+    CMSG_DUEL_ACCEPTED,
+    CMSG_DUEL_CANCELLED,
+    SMSG_DUEL_REQUESTED,
+
+    // ---- Trade ----
+    CMSG_INITIATE_TRADE,
+
+    // ---- Random Roll ----
+    MSG_RANDOM_ROLL,
+
+    // ---- Phase 1: Foundation (Targeting, Queries) ----
+    CMSG_SET_SELECTION,
+    CMSG_NAME_QUERY,
+    SMSG_NAME_QUERY_RESPONSE,
+    CMSG_CREATURE_QUERY,
+    SMSG_CREATURE_QUERY_RESPONSE,
+    CMSG_GAMEOBJECT_QUERY,
+    SMSG_GAMEOBJECT_QUERY_RESPONSE,
+    CMSG_SET_ACTIVE_MOVER,
+    CMSG_BINDER_ACTIVATE,
+
+    // ---- XP ----
+    SMSG_LOG_XPGAIN,
+
+    // ---- Creature Movement ----
+    SMSG_MONSTER_MOVE,
+
+    // ---- Phase 2: Combat Core ----
+    CMSG_ATTACKSWING,
+    CMSG_ATTACKSTOP,
+    SMSG_ATTACKSTART,
+    SMSG_ATTACKSTOP,
+    SMSG_ATTACKERSTATEUPDATE,
+    SMSG_SPELLNONMELEEDAMAGELOG,
+    SMSG_SPELLHEALLOG,
+    SMSG_SPELLENERGIZELOG,
+    SMSG_PERIODICAURALOG,
+    SMSG_ENVIRONMENTALDAMAGELOG,
+
+    // ---- Phase 3: Spells, Action Bar, Auras ----
+    CMSG_CAST_SPELL,
+    CMSG_CANCEL_CAST,
+    CMSG_CANCEL_AURA,
+    SMSG_CAST_FAILED,
+    SMSG_SPELL_START,
+    SMSG_SPELL_GO,
+    SMSG_SPELL_FAILURE,
+    SMSG_SPELL_COOLDOWN,
+    SMSG_COOLDOWN_EVENT,
+    SMSG_UPDATE_AURA_DURATION,
+    SMSG_INITIAL_SPELLS,
+    SMSG_LEARNED_SPELL,
+    SMSG_SUPERCEDED_SPELL,
+    SMSG_REMOVED_SPELL,
+    SMSG_SEND_UNLEARN_SPELLS,
+    SMSG_SPELL_DELAYED,
+    SMSG_AURA_UPDATE,
+    SMSG_AURA_UPDATE_ALL,
+    SMSG_SET_FLAT_SPELL_MODIFIER,
+    SMSG_SET_PCT_SPELL_MODIFIER,
+
+    // ---- Talents ----
+    SMSG_TALENTS_INFO,
+    CMSG_LEARN_TALENT,
+    MSG_TALENT_WIPE_CONFIRM,
+
+    // ---- Phase 4: Group/Party ----
+    CMSG_GROUP_INVITE,
+    SMSG_GROUP_INVITE,
+    CMSG_GROUP_ACCEPT,
+    CMSG_GROUP_DECLINE,
+    SMSG_GROUP_DECLINE,
+    CMSG_GROUP_UNINVITE_GUID,
+    SMSG_GROUP_UNINVITE,
+    CMSG_GROUP_SET_LEADER,
+    SMSG_GROUP_SET_LEADER,
+    CMSG_GROUP_DISBAND,
+    SMSG_GROUP_LIST,
+    SMSG_PARTY_COMMAND_RESULT,
+    MSG_RAID_TARGET_UPDATE,
+    CMSG_REQUEST_RAID_INFO,
+    SMSG_RAID_INSTANCE_INFO,
+
+    // ---- Phase 5: Loot ----
+    CMSG_AUTOSTORE_LOOT_ITEM,
+    CMSG_LOOT,
+    CMSG_LOOT_MONEY,
+    CMSG_LOOT_RELEASE,
+    SMSG_LOOT_RESPONSE,
+    SMSG_LOOT_RELEASE_RESPONSE,
+    SMSG_LOOT_REMOVED,
+    SMSG_LOOT_MONEY_NOTIFY,
+    SMSG_LOOT_CLEAR_MONEY,
+
+    // ---- Phase 5: Taxi / Flight Paths ----
+    CMSG_ACTIVATETAXI,
+
+    // ---- Phase 5: NPC Gossip ----
+    CMSG_GOSSIP_HELLO,
+    CMSG_GOSSIP_SELECT_OPTION,
+    SMSG_GOSSIP_MESSAGE,
+    SMSG_GOSSIP_COMPLETE,
+    SMSG_NPC_TEXT_UPDATE,
+
+    // ---- Phase 5: GameObject ----
+    CMSG_GAMEOBJECT_USE,
+
+    // ---- Phase 5: Quests ----
+    CMSG_QUESTGIVER_STATUS_QUERY,
+    SMSG_QUESTGIVER_STATUS,
+    SMSG_QUESTGIVER_STATUS_MULTIPLE,
+    CMSG_QUESTGIVER_HELLO,
+    CMSG_QUESTGIVER_QUERY_QUEST,
+    SMSG_QUESTGIVER_QUEST_DETAILS,
+    CMSG_QUESTGIVER_ACCEPT_QUEST,
+    CMSG_QUESTGIVER_COMPLETE_QUEST,
+    SMSG_QUESTGIVER_REQUEST_ITEMS,
+    CMSG_QUESTGIVER_REQUEST_REWARD,
+    SMSG_QUESTGIVER_OFFER_REWARD,
+    CMSG_QUESTGIVER_CHOOSE_REWARD,
+    SMSG_QUESTGIVER_QUEST_INVALID,
+    SMSG_QUESTGIVER_QUEST_COMPLETE,
+    CMSG_QUESTLOG_REMOVE_QUEST,
+    SMSG_QUESTUPDATE_ADD_KILL,
+    SMSG_QUESTUPDATE_COMPLETE,
+    CMSG_QUEST_QUERY,
+    SMSG_QUEST_QUERY_RESPONSE,
+    SMSG_QUESTLOG_FULL,
+
+    // ---- Phase 5: Vendor ----
+    CMSG_LIST_INVENTORY,
+    SMSG_LIST_INVENTORY,
+    CMSG_SELL_ITEM,
+    SMSG_SELL_ITEM,
+    CMSG_BUY_ITEM,
+    SMSG_BUY_FAILED,
+
+    // ---- Trainer ----
+    CMSG_TRAINER_LIST,
+    SMSG_TRAINER_LIST,
+    CMSG_TRAINER_BUY_SPELL,
+    SMSG_TRAINER_BUY_FAILED,
+
+    // ---- Phase 5: Item/Equip ----
+    CMSG_ITEM_QUERY_SINGLE,
+    SMSG_ITEM_QUERY_SINGLE_RESPONSE,
+    CMSG_USE_ITEM,
+    CMSG_AUTOEQUIP_ITEM,
+    CMSG_SWAP_ITEM,
+    CMSG_SWAP_INV_ITEM,
+    SMSG_INVENTORY_CHANGE_FAILURE,
+    CMSG_INSPECT,
+    SMSG_INSPECT_RESULTS,
+
+    // ---- Death/Respawn ----
+    CMSG_REPOP_REQUEST,
+    SMSG_RESURRECT_REQUEST,
+    CMSG_RESURRECT_RESPONSE,
+    CMSG_SPIRIT_HEALER_ACTIVATE,
+    SMSG_SPIRIT_HEALER_CONFIRM,
+    SMSG_RESURRECT_CANCEL,
+
+    // ---- Teleport / Transfer ----
+    MSG_MOVE_TELEPORT_ACK,
+    SMSG_TRANSFER_PENDING,
+    SMSG_NEW_WORLD,
+    MSG_MOVE_WORLDPORT_ACK,
+    SMSG_TRANSFER_ABORTED,
+
+    // ---- Speed Changes ----
+    SMSG_FORCE_RUN_SPEED_CHANGE,
+    CMSG_FORCE_RUN_SPEED_CHANGE_ACK,
+
+    // ---- Mount ----
+    CMSG_CANCEL_MOUNT_AURA,
+
+    // ---- Taxi / Flight Paths ----
+    SMSG_SHOWTAXINODES,
+    SMSG_ACTIVATETAXIREPLY,
+    SMSG_ACTIVATETAXIREPLY_ALT,
+    SMSG_NEW_TAXI_PATH,
+    CMSG_ACTIVATETAXIEXPRESS,
+
+    // ---- Battleground ----
+    SMSG_BATTLEFIELD_PORT_DENIED,
+    SMSG_REMOVED_FROM_PVP_QUEUE,
+    SMSG_TRAINER_BUY_SUCCEEDED,
+    SMSG_BINDPOINTUPDATE,
+    CMSG_BATTLEFIELD_LIST,
+    SMSG_BATTLEFIELD_LIST,
+    CMSG_BATTLEFIELD_JOIN,
+    CMSG_BATTLEFIELD_STATUS,
+    SMSG_BATTLEFIELD_STATUS,
+    CMSG_BATTLEFIELD_PORT,
+    CMSG_BATTLEMASTER_HELLO,
+    MSG_PVP_LOG_DATA,
+    CMSG_LEAVE_BATTLEFIELD,
+    SMSG_GROUP_JOINED_BATTLEGROUND,
+    MSG_BATTLEGROUND_PLAYER_POSITIONS,
+    SMSG_BATTLEGROUND_PLAYER_JOINED,
+    SMSG_BATTLEGROUND_PLAYER_LEFT,
+    CMSG_BATTLEMASTER_JOIN,
+    SMSG_JOINED_BATTLEGROUND_QUEUE,
+
+    // ---- Arena Team ----
+    CMSG_ARENA_TEAM_CREATE,
+    SMSG_ARENA_TEAM_COMMAND_RESULT,
+    CMSG_ARENA_TEAM_QUERY,
+    SMSG_ARENA_TEAM_QUERY_RESPONSE,
+    CMSG_ARENA_TEAM_ROSTER,
+    SMSG_ARENA_TEAM_ROSTER,
+    CMSG_ARENA_TEAM_INVITE,
+    SMSG_ARENA_TEAM_INVITE,
+    CMSG_ARENA_TEAM_ACCEPT,
+    CMSG_ARENA_TEAM_DECLINE,
+    CMSG_ARENA_TEAM_LEAVE,
+    CMSG_ARENA_TEAM_REMOVE,
+    CMSG_ARENA_TEAM_DISBAND,
+    CMSG_ARENA_TEAM_LEADER,
+    SMSG_ARENA_TEAM_EVENT,
+    CMSG_BATTLEMASTER_JOIN_ARENA,
+    SMSG_ARENA_TEAM_STATS,
+    SMSG_ARENA_ERROR,
+    MSG_INSPECT_ARENA_TEAMS,
+
+    // Sentinel
+    COUNT
+};
+
+/**
+ * Maps LogicalOpcode ↔ expansion-specific wire values.
+ *
+ * Loaded from JSON (e.g. Data/expansions/wotlk/opcodes.json).
+ * Used for sending packets (toWire) and receiving them (fromWire).
+ */
+class OpcodeTable {
+public:
+    /**
+     * Load opcode mappings from a JSON file.
+     * Format: { "CMSG_PING": "0x1DC", "SMSG_AUTH_CHALLENGE": "0x1EC", ... }
+     */
+    bool loadFromJson(const std::string& path);
+
+    /** Load built-in WotLK defaults (hardcoded fallback). */
+    void loadWotlkDefaults();
+
+    /** LogicalOpcode → wire value for sending packets. Returns 0xFFFF if unknown. */
+    uint16_t toWire(LogicalOpcode op) const;
+
+    /** Wire value → LogicalOpcode for receiving packets. Returns nullopt if unknown. */
+    std::optional<LogicalOpcode> fromWire(uint16_t wireValue) const;
+
+    /** Check if a logical opcode has a wire mapping. */
+    bool hasOpcode(LogicalOpcode op) const;
+
+    /** Number of mapped opcodes. */
+    size_t size() const { return logicalToWire_.size(); }
+
+private:
+    std::unordered_map<uint16_t, uint16_t> logicalToWire_;   // LogicalOpcode → wire
+    std::unordered_map<uint16_t, uint16_t> wireToLogical_;   // wire → LogicalOpcode
+
+    static std::optional<LogicalOpcode> nameToLogical(const std::string& name);
+    static const char* logicalToName(LogicalOpcode op);
+};
+
+/**
+ * Global active opcode table pointer (set by GameHandler at startup).
+ * Used by world_packets.cpp and other code that needs to send packets
+ * without direct access to a GameHandler instance.
+ */
+void setActiveOpcodeTable(const OpcodeTable* table);
+const OpcodeTable* getActiveOpcodeTable();
+
+/**
+ * Get the wire value for a logical opcode using the active table.
+ * Convenience helper for packet construction code.
+ */
+inline uint16_t wireOpcode(LogicalOpcode op) {
+    const auto* table = getActiveOpcodeTable();
+    return table ? table->toWire(op) : 0xFFFF;
+}
+
+} // namespace game
+} // namespace wowee

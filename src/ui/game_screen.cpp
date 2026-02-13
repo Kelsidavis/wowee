@@ -22,6 +22,9 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "pipeline/hd_pack_manager.hpp"
+#include "game/expansion_profile.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
 #include <algorithm>
@@ -2360,7 +2363,8 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
             int32_t recIdx = displayInfoDbc->findRecordById(cloakDisplayId);
             if (recIdx >= 0) {
                 // DBC field 3 = modelTexture_1 (cape texture name)
-                std::string capeName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), 3);
+                const auto* dispL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
+                std::string capeName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), dispL ? (*dispL)["LeftModelTexture"] : 3);
                 if (!capeName.empty()) {
                     std::string capePath = "Item\\ObjectComponents\\Cape\\" + capeName + ".blp";
                     GLuint capeTex = charRenderer->loadTexture(capePath);
@@ -2422,10 +2426,11 @@ GLuint GameScreen::getSpellIcon(uint32_t spellId, pipeline::AssetManager* am) {
 
         // Load SpellIcon.dbc: field 0 = ID, field 1 = icon path
         auto iconDbc = am->loadDBC("SpellIcon.dbc");
+        const auto* iconL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SpellIcon") : nullptr;
         if (iconDbc && iconDbc->isLoaded()) {
             for (uint32_t i = 0; i < iconDbc->getRecordCount(); i++) {
-                uint32_t id = iconDbc->getUInt32(i, 0);
-                std::string path = iconDbc->getString(i, 1);
+                uint32_t id = iconDbc->getUInt32(i, iconL ? (*iconL)["ID"] : 0);
+                std::string path = iconDbc->getString(i, iconL ? (*iconL)["Path"] : 1);
                 if (!path.empty() && id > 0) {
                     spellIconPaths_[id] = path;
                 }
@@ -2434,10 +2439,11 @@ GLuint GameScreen::getSpellIcon(uint32_t spellId, pipeline::AssetManager* am) {
 
         // Load Spell.dbc: field 133 = SpellIconID
         auto spellDbc = am->loadDBC("Spell.dbc");
+        const auto* spellL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
         if (spellDbc && spellDbc->isLoaded() && spellDbc->getFieldCount() > 133) {
             for (uint32_t i = 0; i < spellDbc->getRecordCount(); i++) {
-                uint32_t id = spellDbc->getUInt32(i, 0);
-                uint32_t iconId = spellDbc->getUInt32(i, 133);
+                uint32_t id = spellDbc->getUInt32(i, spellL ? (*spellL)["ID"] : 0);
+                uint32_t iconId = spellDbc->getUInt32(i, spellL ? (*spellL)["IconID"] : 133);
                 if (id > 0 && iconId > 0) {
                     spellIconIds_[id] = iconId;
                 }
@@ -2530,8 +2536,9 @@ void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
                     if (assetMgr && assetMgr->isInitialized()) {
                         auto dbc = assetMgr->loadDBC("Spell.dbc");
                         if (dbc && dbc->isLoaded()) {
+                            const auto* actionSpellL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
                             uint32_t fieldCount = dbc->getFieldCount();
-                            uint32_t nameField = 136;
+                            uint32_t nameField = actionSpellL ? (*actionSpellL)["Name"] : 136;
                             if (fieldCount < 137) {
                                 if (fieldCount > 10) {
                                     nameField = fieldCount > 140 ? 136 : 1;
@@ -2542,7 +2549,7 @@ void GameScreen::renderActionBar(game::GameHandler& gameHandler) {
                             uint32_t count = dbc->getRecordCount();
                             actionSpellNames.reserve(count);
                             for (uint32_t r = 0; r < count; ++r) {
-                                uint32_t id = dbc->getUInt32(r, 0);
+                                uint32_t id = dbc->getUInt32(r, actionSpellL ? (*actionSpellL)["ID"] : 0);
                                 std::string name = dbc->getString(r, nameField);
                                 if (!name.empty() && id > 0) {
                                     actionSpellNames[id] = name;
@@ -4830,6 +4837,79 @@ void GameScreen::renderSettingsWindow() {
                         }
                     }
                     saveSettings();
+                }
+
+                ImGui::EndTabItem();
+            }
+
+            // ============================================================
+            // HD TEXTURES TAB
+            // ============================================================
+            if (ImGui::BeginTabItem("HD Textures")) {
+                ImGui::Spacing();
+
+                auto& app = core::Application::getInstance();
+                auto* hdMgr = app.getHDPackManager();
+
+                if (hdMgr) {
+                    const auto& packs = hdMgr->getAllPacks();
+                    if (packs.empty()) {
+                        ImGui::TextWrapped("No HD texture packs found.");
+                        ImGui::Spacing();
+                        ImGui::TextWrapped("Place packs in Data/hd/<pack_name>/ with a pack.json and manifest.json.");
+                    } else {
+                        ImGui::Text("Available HD Texture Packs:");
+                        ImGui::Spacing();
+
+                        bool changed = false;
+                        for (const auto& pack : packs) {
+                            bool enabled = pack.enabled;
+                            if (ImGui::Checkbox(pack.name.c_str(), &enabled)) {
+                                hdMgr->setPackEnabled(pack.id, enabled);
+                                changed = true;
+                            }
+                            ImGui::SameLine(0, 10);
+                            ImGui::TextDisabled("(%u MB)", pack.totalSizeMB);
+                            if (!pack.group.empty()) {
+                                ImGui::SameLine(0, 10);
+                                ImGui::TextDisabled("[%s]", pack.group.c_str());
+                            }
+                            if (!pack.expansions.empty()) {
+                                std::string expList;
+                                for (const auto& e : pack.expansions) {
+                                    if (!expList.empty()) expList += ", ";
+                                    expList += e;
+                                }
+                                ImGui::TextDisabled("  Compatible: %s", expList.c_str());
+                            }
+                        }
+
+                        if (changed) {
+                            ImGui::Spacing();
+                            ImGui::Separator();
+                            ImGui::Spacing();
+                            if (ImGui::Button("Apply HD Packs", ImVec2(-1, 0))) {
+                                std::string expansionId = "wotlk";
+                                if (app.getExpansionRegistry() && app.getExpansionRegistry()->getActive()) {
+                                    expansionId = app.getExpansionRegistry()->getActive()->id;
+                                }
+                                hdMgr->applyToAssetManager(app.getAssetManager(), expansionId);
+
+                                // Save settings
+                                std::string settingsDir;
+                                const char* xdg = std::getenv("XDG_DATA_HOME");
+                                if (xdg && *xdg) {
+                                    settingsDir = std::string(xdg) + "/wowee";
+                                } else {
+                                    const char* home = std::getenv("HOME");
+                                    settingsDir = std::string(home ? home : ".") + "/.local/share/wowee";
+                                }
+                                hdMgr->saveSettings(settingsDir + "/settings.cfg");
+                            }
+                        }
+                    }
+                } else {
+                    ImGui::Text("HD Pack Manager not available.");
                 }
 
                 ImGui::EndTabItem();

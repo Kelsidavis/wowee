@@ -2,6 +2,8 @@
 
 #include "game/world_packets.hpp"
 #include "game/character.hpp"
+#include "game/opcode_table.hpp"
+#include "game/update_field_table.hpp"
 #include "game/inventory.hpp"
 #include "game/spell_defines.hpp"
 #include "game/group_defines.hpp"
@@ -23,6 +25,7 @@ namespace wowee::game {
     class TransportManager;
     class WardenCrypto;
     class WardenModuleManager;
+    class PacketParsers;
 }
 
 namespace wowee {
@@ -108,6 +111,14 @@ public:
 
     GameHandler();
     ~GameHandler();
+
+    /** Access the active opcode table (wire ↔ logical mapping). */
+    const OpcodeTable& getOpcodeTable() const { return opcodeTable_; }
+    OpcodeTable& getOpcodeTable() { return opcodeTable_; }
+    const UpdateFieldTable& getUpdateFieldTable() const { return updateFieldTable_; }
+    UpdateFieldTable& getUpdateFieldTable() { return updateFieldTable_; }
+    PacketParsers* getPacketParsers() { return packetParsers_.get(); }
+    void setPacketParsers(std::unique_ptr<PacketParsers> parsers);
 
     /**
      * Connect to world server
@@ -927,6 +938,15 @@ private:
                                 float localOrientation);
     void clearTransportAttachment(uint64_t childGuid);
 
+    // Opcode translation table (expansion-specific wire ↔ logical mapping)
+    OpcodeTable opcodeTable_;
+
+    // Update field table (expansion-specific field index mapping)
+    UpdateFieldTable updateFieldTable_;
+
+    // Packet parsers (expansion-specific binary format handling)
+    std::unique_ptr<PacketParsers> packetParsers_;
+
     // Network
     std::unique_ptr<network::WorldSocket> socket;
 
@@ -1210,7 +1230,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> spellToSkillLine_;      // spellID -> skillLineID
     bool skillLineDbcLoaded_ = false;
     bool skillLineAbilityLoaded_ = false;
-    static constexpr uint16_t PLAYER_EXPLORED_ZONES_START = 1041;  // 3.3.5a UpdateFields
     static constexpr size_t PLAYER_EXPLORED_ZONES_COUNT = 128;
     std::vector<uint32_t> playerExploredZones_ =
         std::vector<uint32_t>(PLAYER_EXPLORED_ZONES_COUNT, 0u);

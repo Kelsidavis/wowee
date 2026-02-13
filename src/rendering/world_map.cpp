@@ -1,6 +1,7 @@
 #include "rendering/world_map.hpp"
 #include "rendering/shader.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "core/coordinates.hpp"
 #include "core/input.hpp"
 #include "core/logger.hpp"
@@ -182,13 +183,16 @@ void WorldMap::loadZonesFromDBC() {
     if (!zones.empty() || !assetManager) return;
 
     // Step 1: Resolve mapID from Map.dbc
+    const auto* activeLayout = pipeline::getActiveDBCLayout();
+    const auto* mapL = activeLayout ? activeLayout->getLayout("Map") : nullptr;
+
     int mapID = -1;
     auto mapDbc = assetManager->loadDBC("Map.dbc");
     if (mapDbc && mapDbc->isLoaded()) {
         for (uint32_t i = 0; i < mapDbc->getRecordCount(); i++) {
-            std::string dir = mapDbc->getString(i, 1);
+            std::string dir = mapDbc->getString(i, mapL ? (*mapL)["InternalName"] : 1);
             if (dir == mapName) {
-                mapID = static_cast<int>(mapDbc->getUInt32(i, 0));
+                mapID = static_cast<int>(mapDbc->getUInt32(i, mapL ? (*mapL)["ID"] : 0));
                 LOG_INFO("WorldMap: Map.dbc '", mapName, "' -> mapID=", mapID);
                 break;
             }
@@ -207,12 +211,13 @@ void WorldMap::loadZonesFromDBC() {
     }
 
     // Step 2: Load AreaTable explore flags by areaID.
+    const auto* atL = activeLayout ? activeLayout->getLayout("AreaTable") : nullptr;
     std::unordered_map<uint32_t, uint32_t> exploreFlagByAreaId;
     auto areaDbc = assetManager->loadDBC("AreaTable.dbc");
     if (areaDbc && areaDbc->isLoaded() && areaDbc->getFieldCount() > 3) {
         for (uint32_t i = 0; i < areaDbc->getRecordCount(); i++) {
-            const uint32_t areaId = areaDbc->getUInt32(i, 0);
-            const uint32_t exploreFlag = areaDbc->getUInt32(i, 3);
+            const uint32_t areaId = areaDbc->getUInt32(i, atL ? (*atL)["ID"] : 0);
+            const uint32_t exploreFlag = areaDbc->getUInt32(i, atL ? (*atL)["ExploreFlag"] : 3);
             if (areaId != 0) {
                 exploreFlagByAreaId[areaId] = exploreFlag;
             }
@@ -236,20 +241,22 @@ void WorldMap::loadZonesFromDBC() {
     //   4: locLeft, 5: locRight, 6: locTop, 7: locBottom
     //   8: displayMapID, 9: defaultDungeonFloor, 10: parentWorldMapID
 
+    const auto* wmaL = activeLayout ? activeLayout->getLayout("WorldMapArea") : nullptr;
+
     for (uint32_t i = 0; i < wmaDbc->getRecordCount(); i++) {
-        uint32_t recMapID = wmaDbc->getUInt32(i, 1);
+        uint32_t recMapID = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["MapID"] : 1);
         if (static_cast<int>(recMapID) != mapID) continue;
 
         WorldMapZone zone;
-        zone.wmaID   = wmaDbc->getUInt32(i, 0);
-        zone.areaID  = wmaDbc->getUInt32(i, 2);
-        zone.areaName = wmaDbc->getString(i, 3);
-        zone.locLeft   = wmaDbc->getFloat(i, 4);
-        zone.locRight  = wmaDbc->getFloat(i, 5);
-        zone.locTop    = wmaDbc->getFloat(i, 6);
-        zone.locBottom = wmaDbc->getFloat(i, 7);
-        zone.displayMapID = wmaDbc->getUInt32(i, 8);
-        zone.parentWorldMapID = wmaDbc->getUInt32(i, 10);
+        zone.wmaID   = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["ID"] : 0);
+        zone.areaID  = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["AreaID"] : 2);
+        zone.areaName = wmaDbc->getString(i, wmaL ? (*wmaL)["AreaName"] : 3);
+        zone.locLeft   = wmaDbc->getFloat(i, wmaL ? (*wmaL)["LocLeft"] : 4);
+        zone.locRight  = wmaDbc->getFloat(i, wmaL ? (*wmaL)["LocRight"] : 5);
+        zone.locTop    = wmaDbc->getFloat(i, wmaL ? (*wmaL)["LocTop"] : 6);
+        zone.locBottom = wmaDbc->getFloat(i, wmaL ? (*wmaL)["LocBottom"] : 7);
+        zone.displayMapID = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["DisplayMapID"] : 8);
+        zone.parentWorldMapID = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["ParentWorldMapID"] : 10);
         auto exploreIt = exploreFlagByAreaId.find(zone.areaID);
         if (exploreIt != exploreFlagByAreaId.end()) {
             zone.exploreFlag = exploreIt->second;
@@ -258,10 +265,10 @@ void WorldMap::loadZonesFromDBC() {
         int idx = static_cast<int>(zones.size());
 
         // Debug: also log raw uint32 values for bounds fields
-        uint32_t raw4 = wmaDbc->getUInt32(i, 4);
-        uint32_t raw5 = wmaDbc->getUInt32(i, 5);
-        uint32_t raw6 = wmaDbc->getUInt32(i, 6);
-        uint32_t raw7 = wmaDbc->getUInt32(i, 7);
+        uint32_t raw4 = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["LocLeft"] : 4);
+        uint32_t raw5 = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["LocRight"] : 5);
+        uint32_t raw6 = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["LocTop"] : 6);
+        uint32_t raw7 = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["LocBottom"] : 7);
 
         LOG_INFO("WorldMap: zone[", idx, "] areaID=", zone.areaID,
                  " '", zone.areaName, "' L=", zone.locLeft,

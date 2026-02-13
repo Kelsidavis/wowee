@@ -15,6 +15,7 @@ struct ClientInfo {
     uint8_t minorVersion = 3;
     uint8_t patchVersion = 5;
     uint16_t build = 12340;  // 3.3.5a
+    uint8_t protocolVersion = 8; // SRP auth protocol version
     std::string game = "WoW";
     std::string platform = "x86";
     std::string os = "Win";

@@ -4,6 +4,7 @@
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include <algorithm>
 #include <GL/glew.h>
 
@@ -448,15 +449,16 @@ void TalentScreen::loadSpellDBC(pipeline::AssetManager* assetManager) {
     }
 
     // WoW 3.3.5a Spell.dbc fields: 0=SpellID, 133=SpellIconID, 136=SpellName_enUS, 139=Tooltip_enUS
+    const auto* spellL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
     uint32_t count = dbc->getRecordCount();
     for (uint32_t i = 0; i < count; ++i) {
-        uint32_t spellId = dbc->getUInt32(i, 0);
+        uint32_t spellId = dbc->getUInt32(i, spellL ? (*spellL)["ID"] : 0);
         if (spellId == 0) continue;
 
-        uint32_t iconId = dbc->getUInt32(i, 133);
+        uint32_t iconId = dbc->getUInt32(i, spellL ? (*spellL)["IconID"] : 133);
         spellIconIds[spellId] = iconId;
 
-        std::string tooltip = dbc->getString(i, 139);
+        std::string tooltip = dbc->getString(i, spellL ? (*spellL)["Tooltip"] : 139);
         if (!tooltip.empty()) {
             spellTooltips[spellId] = tooltip;
         }
@@ -477,9 +479,10 @@ void TalentScreen::loadSpellIconDBC(pipeline::AssetManager* assetManager) {
         return;
     }
 
+    const auto* iconL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SpellIcon") : nullptr;
     for (uint32_t i = 0; i < dbc->getRecordCount(); i++) {
-        uint32_t id = dbc->getUInt32(i, 0);
-        std::string path = dbc->getString(i, 1);
+        uint32_t id = dbc->getUInt32(i, iconL ? (*iconL)["ID"] : 0);
+        std::string path = dbc->getString(i, iconL ? (*iconL)["Path"] : 1);
         if (!path.empty() && id > 0) {
             spellIconPaths[id] = path;
         }

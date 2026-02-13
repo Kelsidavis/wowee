@@ -39,40 +39,33 @@ network::Packet AuthSessionPacket::build(uint32_t build,
     LOG_DEBUG("  Auth hash: ", authHash.size(), " bytes");
 
     // Create packet (opcode will be added by WorldSocket)
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_AUTH_SESSION));
+    network::Packet packet(wireOpcode(Opcode::CMSG_AUTH_SESSION));
 
-    // AzerothCore 3.3.5a expects this exact field order:
-    // Build, LoginServerID, Account, LoginServerType, LocalChallenge,
-    // RegionID, BattlegroupID, RealmID, DosResponse, Digest, AddonInfo
+    bool isTbc = (build <= 8606);  // TBC 2.4.3 = 8606, WotLK starts at 11159+
 
-    // Build number (uint32, little-endian)
-    packet.writeUInt32(build);
-
-    // Login server ID (uint32, always 0)
-    packet.writeUInt32(0);
-
-    // Account name (null-terminated string)
-    packet.writeString(upperAccount);
-
-    // Login server type (uint32, always 0)
-    packet.writeUInt32(0);
-
-    // LocalChallenge / Client seed (uint32, little-endian)
-    packet.writeUInt32(clientSeed);
-
-    // Region ID (uint32)
-    packet.writeUInt32(0);
-
-    // Battlegroup ID (uint32)
-    packet.writeUInt32(0);
-
-    // Realm ID (uint32)
-    packet.writeUInt32(realmId);
-    LOG_DEBUG("  Realm ID: ", realmId);
-
-    // DOS response (uint64) - required for 3.x
-    packet.writeUInt32(0);
-    packet.writeUInt32(0);
+    if (isTbc) {
+        // TBC 2.4.3 format (6 fields):
+        // Build, ServerID, Account, ClientSeed, Digest, AddonInfo
+        packet.writeUInt32(build);
+        packet.writeUInt32(realmId);           // server_id
+        packet.writeString(upperAccount);
+        packet.writeUInt32(clientSeed);
+    } else {
+        // WotLK 3.3.5a format (11 fields):
+        // Build, LoginServerID, Account, LoginServerType, LocalChallenge,
+        // RegionID, BattlegroupID, RealmID, DosResponse, Digest, AddonInfo
+        packet.writeUInt32(build);
+        packet.writeUInt32(0);                 // LoginServerID
+        packet.writeString(upperAccount);
+        packet.writeUInt32(0);                 // LoginServerType
+        packet.writeUInt32(clientSeed);
+        packet.writeUInt32(0);                 // RegionID
+        packet.writeUInt32(0);                 // BattlegroupID
+        packet.writeUInt32(realmId);           // RealmID
+        LOG_DEBUG("  Realm ID: ", realmId);
+        packet.writeUInt32(0);                 // DOS response (uint64)
+        packet.writeUInt32(0);
+    }
 
     // Authentication hash/digest (20 bytes)
     packet.writeBytes(authHash.data(), authHash.size());
@@ -160,24 +153,29 @@ std::vector<uint8_t> AuthSessionPacket::computeAuthHash(
 }
 
 bool AuthChallengeParser::parse(network::Packet& packet, AuthChallengeData& data) {
-    // SMSG_AUTH_CHALLENGE format (WoW 3.3.5a):
-    // uint32 unknown1 (always 1?)
-    // uint32 serverSeed
+    // SMSG_AUTH_CHALLENGE format varies by expansion:
+    //   TBC 2.4.3:    uint32 serverSeed                      (4 bytes)
+    //   WotLK 3.3.5a: uint32 one + uint32 serverSeed + seeds (40 bytes)
 
-    if (packet.getSize() < 8) {
+    if (packet.getSize() < 4) {
         LOG_ERROR("SMSG_AUTH_CHALLENGE packet too small: ", packet.getSize(), " bytes");
         return false;
     }
 
-    data.unknown1 = packet.readUInt32();
-    data.serverSeed = packet.readUInt32();
+    if (packet.getSize() < 8) {
+        // TBC format: just the server seed (4 bytes)
+        data.unknown1 = 0;
+        data.serverSeed = packet.readUInt32();
+        LOG_INFO("Parsed SMSG_AUTH_CHALLENGE (TBC format):");
+    } else {
+        // WotLK format: unknown1 + serverSeed + encryption seeds
+        data.unknown1 = packet.readUInt32();
+        data.serverSeed = packet.readUInt32();
+        LOG_INFO("Parsed SMSG_AUTH_CHALLENGE (WotLK format):");
+        LOG_INFO("  Unknown1: 0x", std::hex, data.unknown1, std::dec);
+    }
 
-    LOG_INFO("Parsed SMSG_AUTH_CHALLENGE:");
-    LOG_INFO("  Unknown1: 0x", std::hex, data.unknown1, std::dec);
     LOG_INFO("  Server seed: 0x", std::hex, data.serverSeed, std::dec);
-
-    // Note: 3.3.5a has additional data after this (seed2, etc.)
-    // but we only need the first seed for authentication
 
     return true;
 }
@@ -257,7 +255,7 @@ const char* getAuthResultString(AuthResult result) {
 // ============================================================
 
 network::Packet CharCreatePacket::build(const CharCreateData& data) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_CHAR_CREATE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_CHAR_CREATE));
 
     // Convert nonbinary gender to server-compatible value (servers only support male/female)
     Gender serverGender = toServerGender(data.gender);
@@ -305,7 +303,7 @@ bool CharCreateResponseParser::parse(network::Packet& packet, CharCreateResponse
 
 network::Packet CharEnumPacket::build() {
     // CMSG_CHAR_ENUM has no body - just the opcode
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_CHAR_ENUM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_CHAR_ENUM));
 
     LOG_DEBUG("Built CMSG_CHAR_ENUM packet (no body)");
 
@@ -399,7 +397,7 @@ bool CharEnumParser::parse(network::Packet& packet, CharEnumResponse& response) 
 }
 
 network::Packet PlayerLoginPacket::build(uint64_t characterGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_PLAYER_LOGIN));
+    network::Packet packet(wireOpcode(Opcode::CMSG_PLAYER_LOGIN));
 
     // Write character GUID (8 bytes, little-endian)
     packet.writeUInt64(characterGuid);
@@ -491,7 +489,7 @@ bool MotdParser::parse(network::Packet& packet, MotdData& data) {
 }
 
 network::Packet PingPacket::build(uint32_t sequence, uint32_t latency) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_PING));
+    network::Packet packet(wireOpcode(Opcode::CMSG_PING));
 
     // Write sequence number (uint32, little-endian)
     packet.writeUInt32(sequence);
@@ -618,7 +616,7 @@ void MovementPacket::writeMovementPayload(network::Packet& packet, const Movemen
 }
 
 network::Packet MovementPacket::build(Opcode opcode, const MovementInfo& info, uint64_t playerGuid) {
-    network::Packet packet(static_cast<uint16_t>(opcode));
+    network::Packet packet(wireOpcode(opcode));
 
     // Movement packet format (WoW 3.3.5a):
     // packed GUID + movement payload
@@ -634,7 +632,7 @@ network::Packet MovementPacket::build(Opcode opcode, const MovementInfo& info, u
             char b[4]; snprintf(b, sizeof(b), "%02x ", raw[i]);
             hex += b;
         }
-        LOG_INFO("MOVEPKT opcode=0x", std::hex, static_cast<uint16_t>(opcode), std::dec,
+        LOG_INFO("MOVEPKT opcode=0x", std::hex, wireOpcode(opcode), std::dec,
                  " guid=0x", std::hex, playerGuid, std::dec,
                  " payload=", raw.size(), " bytes",
                  " flags=0x", std::hex, info.flags, std::dec,
@@ -1096,7 +1094,7 @@ network::Packet MessageChatPacket::build(ChatType type,
                                           ChatLanguage language,
                                           const std::string& message,
                                           const std::string& target) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_MESSAGECHAT));
+    network::Packet packet(wireOpcode(Opcode::CMSG_MESSAGECHAT));
 
     // Write chat type
     packet.writeUInt32(static_cast<uint32_t>(type));
@@ -1267,21 +1265,21 @@ const char* getChatTypeString(ChatType type) {
 // ============================================================
 
 network::Packet SetSelectionPacket::build(uint64_t targetGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SET_SELECTION));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_SELECTION));
     packet.writeUInt64(targetGuid);
     LOG_DEBUG("Built CMSG_SET_SELECTION: target=0x", std::hex, targetGuid, std::dec);
     return packet;
 }
 
 network::Packet SetActiveMoverPacket::build(uint64_t guid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SET_ACTIVE_MOVER));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_ACTIVE_MOVER));
     packet.writeUInt64(guid);
     LOG_DEBUG("Built CMSG_SET_ACTIVE_MOVER: guid=0x", std::hex, guid, std::dec);
     return packet;
 }
 
 network::Packet InspectPacket::build(uint64_t targetGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_INSPECT));
+    network::Packet packet(wireOpcode(Opcode::CMSG_INSPECT));
     packet.writeUInt64(targetGuid);
     LOG_DEBUG("Built CMSG_INSPECT: target=0x", std::hex, targetGuid, std::dec);
     return packet;
@@ -1292,7 +1290,7 @@ network::Packet InspectPacket::build(uint64_t targetGuid) {
 // ============================================================
 
 network::Packet QueryTimePacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUERY_TIME));
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUERY_TIME));
     LOG_DEBUG("Built CMSG_QUERY_TIME");
     return packet;
 }
@@ -1305,7 +1303,7 @@ bool QueryTimeResponseParser::parse(network::Packet& packet, QueryTimeResponseDa
 }
 
 network::Packet RequestPlayedTimePacket::build(bool sendToChat) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_REQUEST_PLAYED_TIME));
+    network::Packet packet(wireOpcode(Opcode::CMSG_REQUEST_PLAYED_TIME));
     packet.writeUInt8(sendToChat ? 1 : 0);
     LOG_DEBUG("Built CMSG_REQUEST_PLAYED_TIME: sendToChat=", sendToChat);
     return packet;
@@ -1324,7 +1322,7 @@ network::Packet WhoPacket::build(uint32_t minLevel, uint32_t maxLevel,
                                  const std::string& guildName,
                                  uint32_t raceMask, uint32_t classMask,
                                  uint32_t zones) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_WHO));
+    network::Packet packet(wireOpcode(Opcode::CMSG_WHO));
     packet.writeUInt32(minLevel);
     packet.writeUInt32(maxLevel);
     packet.writeString(playerName);
@@ -1341,7 +1339,7 @@ network::Packet WhoPacket::build(uint32_t minLevel, uint32_t maxLevel,
 // ============================================================
 
 network::Packet AddFriendPacket::build(const std::string& playerName, const std::string& note) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ADD_FRIEND));
+    network::Packet packet(wireOpcode(Opcode::CMSG_ADD_FRIEND));
     packet.writeString(playerName);
     packet.writeString(note);
     LOG_DEBUG("Built CMSG_ADD_FRIEND: player=", playerName);
@@ -1349,14 +1347,14 @@ network::Packet AddFriendPacket::build(const std::string& playerName, const std:
 }
 
 network::Packet DelFriendPacket::build(uint64_t friendGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_DEL_FRIEND));
+    network::Packet packet(wireOpcode(Opcode::CMSG_DEL_FRIEND));
     packet.writeUInt64(friendGuid);
     LOG_DEBUG("Built CMSG_DEL_FRIEND: guid=0x", std::hex, friendGuid, std::dec);
     return packet;
 }
 
 network::Packet SetContactNotesPacket::build(uint64_t friendGuid, const std::string& note) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SET_CONTACT_NOTES));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_CONTACT_NOTES));
     packet.writeUInt64(friendGuid);
     packet.writeString(note);
     LOG_DEBUG("Built CMSG_SET_CONTACT_NOTES: guid=0x", std::hex, friendGuid, std::dec);
@@ -1375,14 +1373,14 @@ bool FriendStatusParser::parse(network::Packet& packet, FriendStatusData& data) 
 }
 
 network::Packet AddIgnorePacket::build(const std::string& playerName) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ADD_IGNORE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_ADD_IGNORE));
     packet.writeString(playerName);
     LOG_DEBUG("Built CMSG_ADD_IGNORE: player=", playerName);
     return packet;
 }
 
 network::Packet DelIgnorePacket::build(uint64_t ignoreGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_DEL_IGNORE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_DEL_IGNORE));
     packet.writeUInt64(ignoreGuid);
     LOG_DEBUG("Built CMSG_DEL_IGNORE: guid=0x", std::hex, ignoreGuid, std::dec);
     return packet;
@@ -1393,13 +1391,13 @@ network::Packet DelIgnorePacket::build(uint64_t ignoreGuid) {
 // ============================================================
 
 network::Packet LogoutRequestPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_LOGOUT_REQUEST));
+    network::Packet packet(wireOpcode(Opcode::CMSG_LOGOUT_REQUEST));
     LOG_DEBUG("Built CMSG_LOGOUT_REQUEST");
     return packet;
 }
 
 network::Packet LogoutCancelPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_LOGOUT_CANCEL));
+    network::Packet packet(wireOpcode(Opcode::CMSG_LOGOUT_CANCEL));
     LOG_DEBUG("Built CMSG_LOGOUT_CANCEL");
     return packet;
 }
@@ -1416,7 +1414,7 @@ bool LogoutResponseParser::parse(network::Packet& packet, LogoutResponseData& da
 // ============================================================
 
 network::Packet StandStateChangePacket::build(uint8_t state) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_STAND_STATE_CHANGE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_STAND_STATE_CHANGE));
     packet.writeUInt32(state);
     LOG_DEBUG("Built CMSG_STAND_STATE_CHANGE: state=", (int)state);
     return packet;
@@ -1427,14 +1425,14 @@ network::Packet StandStateChangePacket::build(uint8_t state) {
 // ============================================================
 
 network::Packet ShowingHelmPacket::build(bool show) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SHOWING_HELM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SHOWING_HELM));
     packet.writeUInt8(show ? 1 : 0);
     LOG_DEBUG("Built CMSG_SHOWING_HELM: show=", show);
     return packet;
 }
 
 network::Packet ShowingCloakPacket::build(bool show) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SHOWING_CLOAK));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SHOWING_CLOAK));
     packet.writeUInt8(show ? 1 : 0);
     LOG_DEBUG("Built CMSG_SHOWING_CLOAK: show=", show);
     return packet;
@@ -1445,7 +1443,7 @@ network::Packet ShowingCloakPacket::build(bool show) {
 // ============================================================
 
 network::Packet TogglePvpPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_TOGGLE_PVP));
+    network::Packet packet(wireOpcode(Opcode::CMSG_TOGGLE_PVP));
     LOG_DEBUG("Built CMSG_TOGGLE_PVP");
     return packet;
 }
@@ -1455,46 +1453,46 @@ network::Packet TogglePvpPacket::build() {
 // ============================================================
 
 network::Packet GuildInfoPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GUILD_INFO));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GUILD_INFO));
     LOG_DEBUG("Built CMSG_GUILD_INFO");
     return packet;
 }
 
 network::Packet GuildRosterPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GUILD_GET_ROSTER));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GUILD_GET_ROSTER));
     LOG_DEBUG("Built CMSG_GUILD_GET_ROSTER");
     return packet;
 }
 
 network::Packet GuildMotdPacket::build(const std::string& motd) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GUILD_MOTD));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GUILD_MOTD));
     packet.writeString(motd);
     LOG_DEBUG("Built CMSG_GUILD_MOTD: ", motd);
     return packet;
 }
 
 network::Packet GuildPromotePacket::build(const std::string& playerName) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GUILD_PROMOTE_MEMBER));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GUILD_PROMOTE_MEMBER));
     packet.writeString(playerName);
     LOG_DEBUG("Built CMSG_GUILD_PROMOTE_MEMBER: ", playerName);
     return packet;
 }
 
 network::Packet GuildDemotePacket::build(const std::string& playerName) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GUILD_DEMOTE_MEMBER));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GUILD_DEMOTE_MEMBER));
     packet.writeString(playerName);
     LOG_DEBUG("Built CMSG_GUILD_DEMOTE_MEMBER: ", playerName);
     return packet;
 }
 
 network::Packet GuildLeavePacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GUILD_LEAVE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GUILD_LEAVE));
     LOG_DEBUG("Built CMSG_GUILD_LEAVE");
     return packet;
 }
 
 network::Packet GuildInvitePacket::build(const std::string& playerName) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GUILD_INVITE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GUILD_INVITE));
     packet.writeString(playerName);
     LOG_DEBUG("Built CMSG_GUILD_INVITE: ", playerName);
     return packet;
@@ -1505,13 +1503,13 @@ network::Packet GuildInvitePacket::build(const std::string& playerName) {
 // ============================================================
 
 network::Packet ReadyCheckPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::MSG_RAID_READY_CHECK));
+    network::Packet packet(wireOpcode(Opcode::MSG_RAID_READY_CHECK));
     LOG_DEBUG("Built MSG_RAID_READY_CHECK");
     return packet;
 }
 
 network::Packet ReadyCheckConfirmPacket::build(bool ready) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::MSG_RAID_READY_CHECK_CONFIRM));
+    network::Packet packet(wireOpcode(Opcode::MSG_RAID_READY_CHECK_CONFIRM));
     packet.writeUInt8(ready ? 1 : 0);
     LOG_DEBUG("Built MSG_RAID_READY_CHECK_CONFIRM: ready=", ready);
     return packet;
@@ -1522,7 +1520,7 @@ network::Packet ReadyCheckConfirmPacket::build(bool ready) {
 // ============================================================
 
 network::Packet DuelCancelPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_DUEL_CANCELLED));
+    network::Packet packet(wireOpcode(Opcode::CMSG_DUEL_CANCELLED));
     LOG_DEBUG("Built CMSG_DUEL_CANCELLED");
     return packet;
 }
@@ -1532,20 +1530,20 @@ network::Packet DuelCancelPacket::build() {
 // ============================================================
 
 network::Packet GroupUninvitePacket::build(const std::string& playerName) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_UNINVITE_GUID));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_UNINVITE_GUID));
     packet.writeString(playerName);
     LOG_DEBUG("Built CMSG_GROUP_UNINVITE_GUID for player: ", playerName);
     return packet;
 }
 
 network::Packet GroupDisbandPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_DISBAND));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_DISBAND));
     LOG_DEBUG("Built CMSG_GROUP_DISBAND");
     return packet;
 }
 
 network::Packet RaidTargetUpdatePacket::build(uint8_t targetIndex, uint64_t targetGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::MSG_RAID_TARGET_UPDATE));
+    network::Packet packet(wireOpcode(Opcode::MSG_RAID_TARGET_UPDATE));
     packet.writeUInt8(targetIndex);
     packet.writeUInt64(targetGuid);
     LOG_DEBUG("Built MSG_RAID_TARGET_UPDATE, index: ", (uint32_t)targetIndex, ", guid: 0x", std::hex, targetGuid, std::dec);
@@ -1553,7 +1551,7 @@ network::Packet RaidTargetUpdatePacket::build(uint8_t targetIndex, uint64_t targ
 }
 
 network::Packet RequestRaidInfoPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_REQUEST_RAID_INFO));
+    network::Packet packet(wireOpcode(Opcode::CMSG_REQUEST_RAID_INFO));
     LOG_DEBUG("Built CMSG_REQUEST_RAID_INFO");
     return packet;
 }
@@ -1563,34 +1561,34 @@ network::Packet RequestRaidInfoPacket::build() {
 // ============================================================
 
 network::Packet DuelProposedPacket::build(uint64_t targetGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_DUEL_PROPOSED));
+    network::Packet packet(wireOpcode(Opcode::CMSG_DUEL_PROPOSED));
     packet.writeUInt64(targetGuid);
     LOG_DEBUG("Built CMSG_DUEL_PROPOSED for target: 0x", std::hex, targetGuid, std::dec);
     return packet;
 }
 
 network::Packet InitiateTradePacket::build(uint64_t targetGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_INITIATE_TRADE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_INITIATE_TRADE));
     packet.writeUInt64(targetGuid);
     LOG_DEBUG("Built CMSG_INITIATE_TRADE for target: 0x", std::hex, targetGuid, std::dec);
     return packet;
 }
 
 network::Packet AttackSwingPacket::build(uint64_t targetGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ATTACKSWING));
+    network::Packet packet(wireOpcode(Opcode::CMSG_ATTACKSWING));
     packet.writeUInt64(targetGuid);
     LOG_DEBUG("Built CMSG_ATTACKSWING for target: 0x", std::hex, targetGuid, std::dec);
     return packet;
 }
 
 network::Packet AttackStopPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ATTACKSTOP));
+    network::Packet packet(wireOpcode(Opcode::CMSG_ATTACKSTOP));
     LOG_DEBUG("Built CMSG_ATTACKSTOP");
     return packet;
 }
 
 network::Packet CancelCastPacket::build(uint32_t spellId) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_CANCEL_CAST));
+    network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_CAST));
     packet.writeUInt32(0); // cast count/sequence
     packet.writeUInt32(spellId);
     LOG_DEBUG("Built CMSG_CANCEL_CAST for spell: ", spellId);
@@ -1602,7 +1600,7 @@ network::Packet CancelCastPacket::build(uint32_t spellId) {
 // ============================================================
 
 network::Packet RandomRollPacket::build(uint32_t minRoll, uint32_t maxRoll) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::MSG_RANDOM_ROLL));
+    network::Packet packet(wireOpcode(Opcode::MSG_RANDOM_ROLL));
     packet.writeUInt32(minRoll);
     packet.writeUInt32(maxRoll);
     LOG_DEBUG("Built MSG_RANDOM_ROLL: ", minRoll, "-", maxRoll);
@@ -1621,7 +1619,7 @@ bool RandomRollParser::parse(network::Packet& packet, RandomRollData& data) {
 }
 
 network::Packet NameQueryPacket::build(uint64_t playerGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_NAME_QUERY));
+    network::Packet packet(wireOpcode(Opcode::CMSG_NAME_QUERY));
     packet.writeUInt64(playerGuid);
     LOG_DEBUG("Built CMSG_NAME_QUERY: guid=0x", std::hex, playerGuid, std::dec);
     return packet;
@@ -1650,7 +1648,7 @@ bool NameQueryResponseParser::parse(network::Packet& packet, NameQueryResponseDa
 }
 
 network::Packet CreatureQueryPacket::build(uint32_t entry, uint64_t guid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_CREATURE_QUERY));
+    network::Packet packet(wireOpcode(Opcode::CMSG_CREATURE_QUERY));
     packet.writeUInt32(entry);
     packet.writeUInt64(guid);
     LOG_DEBUG("Built CMSG_CREATURE_QUERY: entry=", entry, " guid=0x", std::hex, guid, std::dec);
@@ -1691,7 +1689,7 @@ bool CreatureQueryResponseParser::parse(network::Packet& packet, CreatureQueryRe
 // ---- GameObject Query ----
 
 network::Packet GameObjectQueryPacket::build(uint32_t entry, uint64_t guid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GAMEOBJECT_QUERY));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GAMEOBJECT_QUERY));
     packet.writeUInt32(entry);
     packet.writeUInt64(guid);
     LOG_DEBUG("Built CMSG_GAMEOBJECT_QUERY: entry=", entry, " guid=0x", std::hex, guid, std::dec);
@@ -1725,7 +1723,7 @@ bool GameObjectQueryResponseParser::parse(network::Packet& packet, GameObjectQue
 // ---- Item Query ----
 
 network::Packet ItemQueryPacket::build(uint32_t entry, uint64_t guid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ITEM_QUERY_SINGLE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_ITEM_QUERY_SINGLE));
     packet.writeUInt32(entry);
     packet.writeUInt64(guid);
     LOG_DEBUG("Built CMSG_ITEM_QUERY_SINGLE: entry=", entry, " guid=0x", std::hex, guid, std::dec);
@@ -2116,7 +2114,7 @@ bool InitialSpellsParser::parse(network::Packet& packet, InitialSpellsData& data
 }
 
 network::Packet CastSpellPacket::build(uint32_t spellId, uint64_t targetGuid, uint8_t castCount) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_CAST_SPELL));
+    network::Packet packet(wireOpcode(Opcode::CMSG_CAST_SPELL));
     packet.writeUInt8(castCount);
     packet.writeUInt32(spellId);
     packet.writeUInt8(0x00); // castFlags = 0 for normal cast
@@ -2152,7 +2150,7 @@ network::Packet CastSpellPacket::build(uint32_t spellId, uint64_t targetGuid, ui
 }
 
 network::Packet CancelAuraPacket::build(uint32_t spellId) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_CANCEL_AURA));
+    network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_AURA));
     packet.writeUInt32(spellId);
     return packet;
 }
@@ -2273,7 +2271,7 @@ bool SpellCooldownParser::parse(network::Packet& packet, SpellCooldownData& data
 // ============================================================
 
 network::Packet GroupInvitePacket::build(const std::string& playerName) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_INVITE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_INVITE));
     packet.writeString(playerName);
     packet.writeUInt32(0); // unused
     LOG_DEBUG("Built CMSG_GROUP_INVITE: ", playerName);
@@ -2288,13 +2286,13 @@ bool GroupInviteResponseParser::parse(network::Packet& packet, GroupInviteRespon
 }
 
 network::Packet GroupAcceptPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_ACCEPT));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_ACCEPT));
     packet.writeUInt32(0); // unused in 3.3.5a
     return packet;
 }
 
 network::Packet GroupDeclinePacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GROUP_DECLINE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_DECLINE));
     return packet;
 }
 
@@ -2365,20 +2363,20 @@ bool GroupDeclineResponseParser::parse(network::Packet& packet, GroupDeclineData
 // ============================================================
 
 network::Packet LootPacket::build(uint64_t targetGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_LOOT));
+    network::Packet packet(wireOpcode(Opcode::CMSG_LOOT));
     packet.writeUInt64(targetGuid);
     LOG_DEBUG("Built CMSG_LOOT: target=0x", std::hex, targetGuid, std::dec);
     return packet;
 }
 
 network::Packet AutostoreLootItemPacket::build(uint8_t slotIndex) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_AUTOSTORE_LOOT_ITEM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_AUTOSTORE_LOOT_ITEM));
     packet.writeUInt8(slotIndex);
     return packet;
 }
 
 network::Packet UseItemPacket::build(uint8_t bagIndex, uint8_t slotIndex, uint64_t itemGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_USE_ITEM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_USE_ITEM));
     packet.writeUInt8(bagIndex);
     packet.writeUInt8(slotIndex);
     packet.writeUInt8(0);  // cast count
@@ -2392,14 +2390,14 @@ network::Packet UseItemPacket::build(uint8_t bagIndex, uint8_t slotIndex, uint64
 }
 
 network::Packet AutoEquipItemPacket::build(uint8_t srcBag, uint8_t srcSlot) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_AUTOEQUIP_ITEM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_AUTOEQUIP_ITEM));
     packet.writeUInt8(srcBag);
     packet.writeUInt8(srcSlot);
     return packet;
 }
 
 network::Packet SwapItemPacket::build(uint8_t dstBag, uint8_t dstSlot, uint8_t srcBag, uint8_t srcSlot) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SWAP_ITEM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SWAP_ITEM));
     packet.writeUInt8(dstBag);
     packet.writeUInt8(dstSlot);
     packet.writeUInt8(srcBag);
@@ -2408,19 +2406,19 @@ network::Packet SwapItemPacket::build(uint8_t dstBag, uint8_t dstSlot, uint8_t s
 }
 
 network::Packet SwapInvItemPacket::build(uint8_t srcSlot, uint8_t dstSlot) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SWAP_INV_ITEM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SWAP_INV_ITEM));
     packet.writeUInt8(srcSlot);
     packet.writeUInt8(dstSlot);
     return packet;
 }
 
 network::Packet LootMoneyPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_LOOT_MONEY));
+    network::Packet packet(wireOpcode(Opcode::CMSG_LOOT_MONEY));
     return packet;
 }
 
 network::Packet LootReleasePacket::build(uint64_t lootGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_LOOT_RELEASE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_LOOT_RELEASE));
     packet.writeUInt64(lootGuid);
     return packet;
 }
@@ -2453,19 +2451,19 @@ bool LootResponseParser::parse(network::Packet& packet, LootResponseData& data) 
 // ============================================================
 
 network::Packet GossipHelloPacket::build(uint64_t npcGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GOSSIP_HELLO));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GOSSIP_HELLO));
     packet.writeUInt64(npcGuid);
     return packet;
 }
 
 network::Packet QuestgiverHelloPacket::build(uint64_t npcGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_HELLO));
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_HELLO));
     packet.writeUInt64(npcGuid);
     return packet;
 }
 
 network::Packet GossipSelectOptionPacket::build(uint64_t npcGuid, uint32_t menuId, uint32_t optionId, const std::string& code) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GOSSIP_SELECT_OPTION));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GOSSIP_SELECT_OPTION));
     packet.writeUInt64(npcGuid);
     packet.writeUInt32(menuId);
     packet.writeUInt32(optionId);
@@ -2476,7 +2474,7 @@ network::Packet GossipSelectOptionPacket::build(uint64_t npcGuid, uint32_t menuI
 }
 
 network::Packet QuestgiverQueryQuestPacket::build(uint64_t npcGuid, uint32_t questId) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_QUERY_QUEST));
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_QUERY_QUEST));
     packet.writeUInt64(npcGuid);
     packet.writeUInt32(questId);
     packet.writeUInt8(1);  // isDialogContinued = 1 (from gossip)
@@ -2484,7 +2482,7 @@ network::Packet QuestgiverQueryQuestPacket::build(uint64_t npcGuid, uint32_t que
 }
 
 network::Packet QuestgiverAcceptQuestPacket::build(uint64_t npcGuid, uint32_t questId) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_ACCEPT_QUEST));
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_ACCEPT_QUEST));
     packet.writeUInt64(npcGuid);
     packet.writeUInt32(questId);
     packet.writeUInt32(0);  // unused
@@ -2584,7 +2582,7 @@ bool GossipMessageParser::parse(network::Packet& packet, GossipMessageData& data
 // ============================================================
 
 network::Packet BinderActivatePacket::build(uint64_t npcGuid) {
-    network::Packet pkt(static_cast<uint16_t>(Opcode::CMSG_BINDER_ACTIVATE));
+    network::Packet pkt(wireOpcode(Opcode::CMSG_BINDER_ACTIVATE));
     pkt.writeUInt64(npcGuid);
     return pkt;
 }
@@ -2703,14 +2701,14 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
 }
 
 network::Packet QuestgiverCompleteQuestPacket::build(uint64_t npcGuid, uint32_t questId) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_COMPLETE_QUEST));
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_COMPLETE_QUEST));
     packet.writeUInt64(npcGuid);
     packet.writeUInt32(questId);
     return packet;
 }
 
 network::Packet QuestgiverChooseRewardPacket::build(uint64_t npcGuid, uint32_t questId, uint32_t rewardIndex) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_QUESTGIVER_CHOOSE_REWARD));
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_CHOOSE_REWARD));
     packet.writeUInt64(npcGuid);
     packet.writeUInt32(questId);
     packet.writeUInt32(rewardIndex);
@@ -2722,13 +2720,13 @@ network::Packet QuestgiverChooseRewardPacket::build(uint64_t npcGuid, uint32_t q
 // ============================================================
 
 network::Packet ListInventoryPacket::build(uint64_t npcGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_LIST_INVENTORY));
+    network::Packet packet(wireOpcode(Opcode::CMSG_LIST_INVENTORY));
     packet.writeUInt64(npcGuid);
     return packet;
 }
 
 network::Packet BuyItemPacket::build(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_BUY_ITEM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_BUY_ITEM));
     packet.writeUInt64(vendorGuid);
     packet.writeUInt32(itemId);
     packet.writeUInt32(slot);
@@ -2738,7 +2736,7 @@ network::Packet BuyItemPacket::build(uint64_t vendorGuid, uint32_t itemId, uint3
 }
 
 network::Packet SellItemPacket::build(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SELL_ITEM));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SELL_ITEM));
     packet.writeUInt64(vendorGuid);
     packet.writeUInt64(itemGuid);
     packet.writeUInt32(count);
@@ -2812,7 +2810,7 @@ bool TrainerListParser::parse(network::Packet& packet, TrainerListData& data) {
 }
 
 network::Packet TrainerBuySpellPacket::build(uint64_t trainerGuid, uint32_t spellId) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_TRAINER_BUY_SPELL));
+    network::Packet packet(wireOpcode(Opcode::CMSG_TRAINER_BUY_SPELL));
     packet.writeUInt64(trainerGuid);
     packet.writeUInt32(spellId);
     return packet;
@@ -2919,14 +2917,14 @@ bool TalentsInfoParser::parse(network::Packet& packet, TalentsInfoData& data) {
 }
 
 network::Packet LearnTalentPacket::build(uint32_t talentId, uint32_t requestedRank) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_LEARN_TALENT));
+    network::Packet packet(wireOpcode(Opcode::CMSG_LEARN_TALENT));
     packet.writeUInt32(talentId);
     packet.writeUInt32(requestedRank);
     return packet;
 }
 
 network::Packet TalentWipeConfirmPacket::build(bool accept) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::MSG_TALENT_WIPE_CONFIRM));
+    network::Packet packet(wireOpcode(Opcode::MSG_TALENT_WIPE_CONFIRM));
     packet.writeUInt32(accept ? 1 : 0);
     return packet;
 }
@@ -2936,19 +2934,19 @@ network::Packet TalentWipeConfirmPacket::build(bool accept) {
 // ============================================================
 
 network::Packet RepopRequestPacket::build() {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_REPOP_REQUEST));
+    network::Packet packet(wireOpcode(Opcode::CMSG_REPOP_REQUEST));
     packet.writeUInt8(1);  // request release (1 = manual)
     return packet;
 }
 
 network::Packet SpiritHealerActivatePacket::build(uint64_t npcGuid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_SPIRIT_HEALER_ACTIVATE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_SPIRIT_HEALER_ACTIVATE));
     packet.writeUInt64(npcGuid);
     return packet;
 }
 
 network::Packet ResurrectResponsePacket::build(uint64_t casterGuid, bool accept) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_RESURRECT_RESPONSE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_RESURRECT_RESPONSE));
     packet.writeUInt64(casterGuid);
     packet.writeUInt8(accept ? 1 : 0);
     return packet;
@@ -2989,7 +2987,7 @@ bool ActivateTaxiReplyParser::parse(network::Packet& packet, ActivateTaxiReplyDa
 }
 
 network::Packet ActivateTaxiExpressPacket::build(uint64_t npcGuid, uint32_t totalCost, const std::vector<uint32_t>& pathNodes) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ACTIVATETAXIEXPRESS));
+    network::Packet packet(wireOpcode(Opcode::CMSG_ACTIVATETAXIEXPRESS));
     packet.writeUInt64(npcGuid);
     packet.writeUInt32(totalCost);
     packet.writeUInt32(static_cast<uint32_t>(pathNodes.size()));
@@ -3002,7 +3000,7 @@ network::Packet ActivateTaxiExpressPacket::build(uint64_t npcGuid, uint32_t tota
 }
 
 network::Packet ActivateTaxiPacket::build(uint64_t npcGuid, uint32_t srcNode, uint32_t destNode) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_ACTIVATETAXI));
+    network::Packet packet(wireOpcode(Opcode::CMSG_ACTIVATETAXI));
     packet.writeUInt64(npcGuid);
     packet.writeUInt32(srcNode);
     packet.writeUInt32(destNode);
@@ -3010,7 +3008,7 @@ network::Packet ActivateTaxiPacket::build(uint64_t npcGuid, uint32_t srcNode, ui
 }
 
 network::Packet GameObjectUsePacket::build(uint64_t guid) {
-    network::Packet packet(static_cast<uint16_t>(Opcode::CMSG_GAMEOBJECT_USE));
+    network::Packet packet(wireOpcode(Opcode::CMSG_GAMEOBJECT_USE));
     packet.writeUInt64(guid);
     return packet;
 }

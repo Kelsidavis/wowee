@@ -103,7 +103,75 @@ void AssetManager::shutdown() {
     }
 
     clearCache();
+    overlayLayers_.clear();
     initialized = false;
+}
+
+bool AssetManager::addOverlayManifest(const std::string& manifestPath, int priority, const std::string& id) {
+    // Check for duplicate
+    for (const auto& layer : overlayLayers_) {
+        if (layer.id == id) {
+            LOG_WARNING("Overlay '", id, "' already loaded, skipping");
+            return false;
+        }
+    }
+
+    ManifestLayer layer;
+    layer.priority = priority;
+    layer.id = id;
+
+    if (!layer.manifest.load(manifestPath)) {
+        LOG_ERROR("Failed to load overlay manifest: ", manifestPath);
+        return false;
+    }
+
+    overlayLayers_.push_back(std::move(layer));
+
+    // Sort by priority descending (highest priority first)
+    std::sort(overlayLayers_.begin(), overlayLayers_.end(),
+              [](const ManifestLayer& a, const ManifestLayer& b) {
+                  return a.priority > b.priority;
+              });
+
+    LOG_INFO("Added overlay '", id, "' (priority ", priority, ", ",
+             overlayLayers_.back().manifest.getEntryCount(), " files) from ", manifestPath);
+    return true;
+}
+
+void AssetManager::removeOverlay(const std::string& id) {
+    auto it = std::remove_if(overlayLayers_.begin(), overlayLayers_.end(),
+                             [&id](const ManifestLayer& layer) { return layer.id == id; });
+    if (it != overlayLayers_.end()) {
+        overlayLayers_.erase(it, overlayLayers_.end());
+        // Clear file cache since overlay removal changes file resolution
+        {
+            std::lock_guard<std::mutex> lock(cacheMutex);
+            fileCache.clear();
+            fileCacheTotalBytes = 0;
+        }
+        LOG_INFO("Removed overlay '", id, "', file cache cleared");
+    }
+}
+
+std::vector<std::string> AssetManager::getOverlayIds() const {
+    std::vector<std::string> ids;
+    ids.reserve(overlayLayers_.size());
+    for (const auto& layer : overlayLayers_) {
+        ids.push_back(layer.id);
+    }
+    return ids;
+}
+
+std::string AssetManager::resolveLayeredPath(const std::string& normalizedPath) const {
+    // Check overlay manifests first (sorted by priority desc)
+    for (const auto& layer : overlayLayers_) {
+        std::string fsPath = layer.manifest.resolveFilesystemPath(normalizedPath);
+        if (!fsPath.empty()) {
+            return fsPath;
+        }
+    }
+    // Fall back to base manifest
+    return manifest_.resolveFilesystemPath(normalizedPath);
 }
 
 BLPImage AssetManager::loadTexture(const std::string& path) {
@@ -144,7 +212,7 @@ BLPImage AssetManager::tryLoadPngOverride(const std::string& normalizedPath) con
     std::string ext = normalizedPath.substr(normalizedPath.size() - 4);
     if (ext != ".blp") return BLPImage();
 
-    std::string fsPath = manifest_.resolveFilesystemPath(normalizedPath);
+    std::string fsPath = resolveLayeredPath(normalizedPath);
     if (fsPath.empty()) return BLPImage();
 
     // Replace .blp/.BLP extension with .png
@@ -219,7 +287,14 @@ bool AssetManager::fileExists(const std::string& path) const {
     if (!initialized) {
         return false;
     }
-    return manifest_.hasEntry(normalizePath(path));
+    std::string normalized = normalizePath(path);
+    // Check overlay manifests first
+    for (const auto& layer : overlayLayers_) {
+        if (layer.manifest.hasEntry(normalized)) {
+            return true;
+        }
+    }
+    return manifest_.hasEntry(normalized);
 }
 
 std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
@@ -240,8 +315,8 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
         }
     }
 
-    // Read from filesystem (fully parallel, no serialization needed)
-    std::string fsPath = manifest_.resolveFilesystemPath(normalized);
+    // Read from filesystem using layered resolution (overlays first, then base)
+    std::string fsPath = resolveLayeredPath(normalized);
     if (fsPath.empty()) {
         return {};
     }

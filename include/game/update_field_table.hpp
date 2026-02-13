@@ -1,0 +1,93 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+
+namespace wowee {
+namespace game {
+
+/**
+ * Logical update field identifiers (expansion-agnostic).
+ * Wire indices are loaded at runtime from JSON.
+ */
+enum class UF : uint16_t {
+    // Object fields
+    OBJECT_FIELD_ENTRY,
+
+    // Unit fields
+    UNIT_FIELD_TARGET_LO,
+    UNIT_FIELD_TARGET_HI,
+    UNIT_FIELD_HEALTH,
+    UNIT_FIELD_POWER1,
+    UNIT_FIELD_MAXHEALTH,
+    UNIT_FIELD_MAXPOWER1,
+    UNIT_FIELD_LEVEL,
+    UNIT_FIELD_FACTIONTEMPLATE,
+    UNIT_FIELD_FLAGS,
+    UNIT_FIELD_FLAGS_2,
+    UNIT_FIELD_DISPLAYID,
+    UNIT_FIELD_MOUNTDISPLAYID,
+    UNIT_NPC_FLAGS,
+    UNIT_DYNAMIC_FLAGS,
+    UNIT_END,
+
+    // Player fields
+    PLAYER_FLAGS,
+    PLAYER_XP,
+    PLAYER_NEXT_LEVEL_XP,
+    PLAYER_FIELD_COINAGE,
+    PLAYER_QUEST_LOG_START,
+    PLAYER_FIELD_INV_SLOT_HEAD,
+    PLAYER_FIELD_PACK_SLOT_1,
+    PLAYER_SKILL_INFO_START,
+    PLAYER_EXPLORED_ZONES_START,
+
+    // GameObject fields
+    GAMEOBJECT_DISPLAYID,
+
+    // Item fields
+    ITEM_FIELD_STACK_COUNT,
+
+    COUNT
+};
+
+/**
+ * Maps logical update field names to expansion-specific wire indices.
+ * Loaded from JSON (e.g. Data/expansions/wotlk/update_fields.json).
+ */
+class UpdateFieldTable {
+public:
+    /** Load from JSON file. Returns true if successful. */
+    bool loadFromJson(const std::string& path);
+
+    /** Load built-in WotLK 3.3.5a defaults. */
+    void loadWotlkDefaults();
+
+    /** Get the wire index for a logical field. Returns 0xFFFF if unknown. */
+    uint16_t index(UF field) const;
+
+    /** Check if a field is mapped. */
+    bool hasField(UF field) const;
+
+    /** Number of mapped fields. */
+    size_t size() const { return fieldMap_.size(); }
+
+private:
+    std::unordered_map<uint16_t, uint16_t> fieldMap_;  // UF enum → wire index
+};
+
+/**
+ * Global active update field table (set by Application at startup).
+ */
+void setActiveUpdateFieldTable(const UpdateFieldTable* table);
+const UpdateFieldTable* getActiveUpdateFieldTable();
+
+/** Convenience: get wire index for a logical field. */
+inline uint16_t fieldIndex(UF field) {
+    const auto* t = getActiveUpdateFieldTable();
+    return t ? t->index(field) : 0xFFFF;
+}
+
+} // namespace game
+} // namespace wowee

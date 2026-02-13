@@ -27,6 +27,7 @@
 #include <algorithm>
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/adt_loader.hpp"
@@ -156,11 +157,16 @@ static void loadEmotesFromDbc() {
         return;
     }
 
+    const auto* activeLayout = pipeline::getActiveDBCLayout();
+    const auto* etdL = activeLayout ? activeLayout->getLayout("EmotesTextData") : nullptr;
+    const auto* emL  = activeLayout ? activeLayout->getLayout("Emotes") : nullptr;
+    const auto* etL  = activeLayout ? activeLayout->getLayout("EmotesText") : nullptr;
+
     std::unordered_map<uint32_t, std::string> textData;
     textData.reserve(emotesTextDataDbc->getRecordCount());
     for (uint32_t r = 0; r < emotesTextDataDbc->getRecordCount(); ++r) {
-        uint32_t id = emotesTextDataDbc->getUInt32(r, 0);
-        std::string text = emotesTextDataDbc->getString(r, 1);
+        uint32_t id = emotesTextDataDbc->getUInt32(r, etdL ? (*etdL)["ID"] : 0);
+        std::string text = emotesTextDataDbc->getString(r, etdL ? (*etdL)["Text"] : 1);
         if (!text.empty()) textData.emplace(id, std::move(text));
     }
 
@@ -168,8 +174,8 @@ static void loadEmotesFromDbc() {
     if (auto emotesDbc = assetManager->loadDBC("Emotes.dbc"); emotesDbc && emotesDbc->isLoaded()) {
         emoteIdToAnim.reserve(emotesDbc->getRecordCount());
         for (uint32_t r = 0; r < emotesDbc->getRecordCount(); ++r) {
-            uint32_t emoteId = emotesDbc->getUInt32(r, 0);
-            uint32_t animId = emotesDbc->getUInt32(r, 2);
+            uint32_t emoteId = emotesDbc->getUInt32(r, emL ? (*emL)["ID"] : 0);
+            uint32_t animId = emotesDbc->getUInt32(r, emL ? (*emL)["AnimID"] : 2);
             if (animId != 0) emoteIdToAnim[emoteId] = animId;
         }
     }
@@ -177,10 +183,10 @@ static void loadEmotesFromDbc() {
     EMOTE_TABLE.clear();
     EMOTE_TABLE.reserve(emotesTextDbc->getRecordCount());
     for (uint32_t r = 0; r < emotesTextDbc->getRecordCount(); ++r) {
-        std::string cmdRaw = emotesTextDbc->getString(r, 1);
+        std::string cmdRaw = emotesTextDbc->getString(r, etL ? (*etL)["Command"] : 1);
         if (cmdRaw.empty()) continue;
 
-        uint32_t emoteRef = emotesTextDbc->getUInt32(r, 2);
+        uint32_t emoteRef = emotesTextDbc->getUInt32(r, etL ? (*etL)["EmoteRef"] : 2);
         uint32_t animId = 0;
         auto animIt = emoteIdToAnim.find(emoteRef);
         if (animIt != emoteIdToAnim.end()) {
@@ -189,8 +195,8 @@ static void loadEmotesFromDbc() {
             animId = emoteRef;  // fallback if EmotesText stores animation id directly
         }
 
-        uint32_t senderTargetTextId = emotesTextDbc->getUInt32(r, 5);  // unisex, target, sender
-        uint32_t senderNoTargetTextId = emotesTextDbc->getUInt32(r, 9); // unisex, no target, sender
+        uint32_t senderTargetTextId = emotesTextDbc->getUInt32(r, etL ? (*etL)["SenderTargetTextID"] : 5);  // unisex, target, sender
+        uint32_t senderNoTargetTextId = emotesTextDbc->getUInt32(r, etL ? (*etL)["SenderNoTargetTextID"] : 9); // unisex, no target, sender
 
         std::string textTarget;
         std::string textNoTarget;

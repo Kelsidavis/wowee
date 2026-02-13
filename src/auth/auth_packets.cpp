@@ -19,8 +19,8 @@ network::Packet LogonChallengePacket::build(const std::string& account, const Cl
 
     network::Packet packet(static_cast<uint16_t>(AuthOpcode::LOGON_CHALLENGE));
 
-    // Protocol version (WoW 3.3.5a build 12340 uses protocol version 8)
-    packet.writeUInt8(0x08);
+    // Protocol version (e.g. 8 for WoW 3.3.5a build 12340)
+    packet.writeUInt8(info.protocolVersion);
 
     // Payload size
     packet.writeUInt16(payloadSize);

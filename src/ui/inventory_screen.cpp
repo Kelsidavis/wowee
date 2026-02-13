@@ -7,6 +7,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/blp_loader.hpp"
+#include "pipeline/dbc_layout.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -60,7 +61,8 @@ GLuint InventoryScreen::getItemIcon(uint32_t displayInfoId) {
     }
 
     // Field 5 = inventoryIcon_1
-    std::string iconName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), 5);
+    const auto* dispL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
+    std::string iconName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), dispL ? (*dispL)["InventoryIcon"] : 5);
     if (iconName.empty()) {
         iconCache_[displayInfoId] = 0;
         return 0;

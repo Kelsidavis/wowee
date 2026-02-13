@@ -37,7 +37,11 @@
 #include "game/game_handler.hpp"
 #include "game/transport_manager.hpp"
 #include "game/world.hpp"
+#include "game/expansion_profile.hpp"
+#include "game/packet_parsers.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "pipeline/hd_pack_manager.hpp"
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
 #include <chrono>
@@ -48,6 +52,7 @@
 #include <optional>
 #include <sstream>
 #include <set>
+#include <filesystem>
 
 namespace wowee {
 namespace core {
@@ -118,6 +123,15 @@ bool Application::initialize() {
     gameHandler = std::make_unique<game::GameHandler>();
     world = std::make_unique<game::World>();
 
+    // Create and initialize expansion registry
+    expansionRegistry_ = std::make_unique<game::ExpansionRegistry>();
+
+    // Create DBC layout
+    dbcLayout_ = std::make_unique<pipeline::DBCLayout>();
+
+    // Create HD pack manager
+    hdPackManager_ = std::make_unique<pipeline::HDPackManager>();
+
     // Create asset manager
     assetManager = std::make_unique<pipeline::AssetManager>();
 
@@ -125,8 +139,56 @@ bool Application::initialize() {
     const char* dataPathEnv = std::getenv("WOW_DATA_PATH");
     std::string dataPath = dataPathEnv ? dataPathEnv : "./Data";
 
-    LOG_INFO("Attempting to load WoW assets from: ", dataPath);
-    if (assetManager->initialize(dataPath)) {
+    // Scan for available expansion profiles
+    expansionRegistry_->initialize(dataPath);
+
+    // Load expansion-specific opcode table
+    if (gameHandler && expansionRegistry_) {
+        auto* profile = expansionRegistry_->getActive();
+        if (profile) {
+            std::string opcodesPath = profile->dataPath + "/opcodes.json";
+            if (!gameHandler->getOpcodeTable().loadFromJson(opcodesPath)) {
+                LOG_INFO("Using built-in WotLK opcode defaults");
+            }
+            game::setActiveOpcodeTable(&gameHandler->getOpcodeTable());
+
+            // Load expansion-specific update field table
+            std::string updateFieldsPath = profile->dataPath + "/update_fields.json";
+            if (!gameHandler->getUpdateFieldTable().loadFromJson(updateFieldsPath)) {
+                LOG_INFO("Using built-in WotLK update field defaults");
+            }
+            game::setActiveUpdateFieldTable(&gameHandler->getUpdateFieldTable());
+
+            // Create expansion-specific packet parsers
+            gameHandler->setPacketParsers(game::createPacketParsers(profile->id));
+
+            // Load expansion-specific DBC layouts
+            if (dbcLayout_) {
+                std::string dbcLayoutsPath = profile->dataPath + "/dbc_layouts.json";
+                if (!dbcLayout_->loadFromJson(dbcLayoutsPath)) {
+                    dbcLayout_->loadWotlkDefaults();
+                    LOG_INFO("Using built-in WotLK DBC layout defaults");
+                }
+                pipeline::setActiveDBCLayout(dbcLayout_.get());
+            }
+        }
+    }
+
+    // Try expansion-specific asset path first, fall back to base Data/
+    std::string assetPath = dataPath;
+    if (expansionRegistry_) {
+        auto* profile = expansionRegistry_->getActive();
+        if (profile && !profile->dataPath.empty()) {
+            std::string expansionManifest = profile->dataPath + "/manifest.json";
+            if (std::filesystem::exists(expansionManifest)) {
+                assetPath = profile->dataPath;
+                LOG_INFO("Using expansion-specific asset path: ", assetPath);
+            }
+        }
+    }
+
+    LOG_INFO("Attempting to load WoW assets from: ", assetPath);
+    if (assetManager->initialize(assetPath)) {
         LOG_INFO("Asset manager initialized successfully");
         // Eagerly load creature display DBC lookups so first spawn doesn't stall
         buildCreatureDisplayLookups();
@@ -141,6 +203,28 @@ bool Application::initialize() {
         // Load transport paths from TransportAnimation.dbc
         if (gameHandler && gameHandler->getTransportManager()) {
             gameHandler->getTransportManager()->loadTransportAnimationDBC(assetManager.get());
+        }
+
+        // Initialize HD texture packs
+        if (hdPackManager_) {
+            std::string hdPath = dataPath + "/hd";
+            std::string settingsDir;
+            const char* xdg = std::getenv("XDG_DATA_HOME");
+            if (xdg && *xdg) {
+                settingsDir = std::string(xdg) + "/wowee";
+            } else {
+                const char* home = std::getenv("HOME");
+                settingsDir = std::string(home ? home : ".") + "/.local/share/wowee";
+            }
+            hdPackManager_->loadSettings(settingsDir + "/settings.cfg");
+            hdPackManager_->initialize(hdPath);
+
+            // Apply enabled packs as overlays
+            std::string expansionId = "wotlk";
+            if (expansionRegistry_ && expansionRegistry_->getActive()) {
+                expansionId = expansionRegistry_->getActive()->id;
+            }
+            hdPackManager_->applyToAssetManager(assetManager.get(), expansionId);
         }
     } else {
         LOG_WARNING("Failed to initialize asset manager - asset loading will be unavailable");
@@ -805,7 +889,12 @@ void Application::setupUICallbacks() {
             accountName = "TESTACCOUNT";
         }
 
-        if (gameHandler->connect(host, port, sessionKey, accountName)) {
+        uint32_t clientBuild = 12340; // default WotLK
+        if (expansionRegistry_) {
+            auto* profile = expansionRegistry_->getActive();
+            if (profile) clientBuild = profile->build;
+        }
+        if (gameHandler->connect(host, port, sessionKey, accountName, clientBuild)) {
             LOG_INFO("Connected to world server, transitioning to character selection");
             setState(AppState::CHARACTER_SELECTION);
         } else {
@@ -1643,22 +1732,24 @@ void Application::spawnPlayerCharacter() {
                     auto charSectionsDbc = assetManager->loadDBC("CharSections.dbc");
                     if (charSectionsDbc) {
                         LOG_INFO("CharSections.dbc loaded: ", charSectionsDbc->getRecordCount(), " records");
+                        const auto* csL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CharSections") : nullptr;
                         bool foundSkin = false;
                         bool foundUnderwear = false;
                         bool foundFaceLower = false;
                         bool foundHair = false;
                         for (uint32_t r = 0; r < charSectionsDbc->getRecordCount(); r++) {
-                            uint32_t raceId = charSectionsDbc->getUInt32(r, 1);
-                            uint32_t sexId = charSectionsDbc->getUInt32(r, 2);
-                            uint32_t baseSection = charSectionsDbc->getUInt32(r, 3);
-                            uint32_t variationIndex = charSectionsDbc->getUInt32(r, 8);
-                            uint32_t colorIndex = charSectionsDbc->getUInt32(r, 9);
+                            uint32_t raceId = charSectionsDbc->getUInt32(r, csL ? (*csL)["RaceID"] : 1);
+                            uint32_t sexId = charSectionsDbc->getUInt32(r, csL ? (*csL)["SexID"] : 2);
+                            uint32_t baseSection = charSectionsDbc->getUInt32(r, csL ? (*csL)["BaseSection"] : 3);
+                            uint32_t variationIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 8);
+                            uint32_t colorIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 9);
 
                             if (raceId != targetRaceId || sexId != targetSexId) continue;
 
                             // Section 0 = skin: match by colorIndex = skin byte
+                            const uint32_t csTex1 = csL ? (*csL)["Texture1"] : 4;
                             if (baseSection == 0 && !foundSkin && colorIndex == charSkinId) {
-                                std::string tex1 = charSectionsDbc->getString(r, 4);
+                                std::string tex1 = charSectionsDbc->getString(r, csTex1);
                                 if (!tex1.empty()) {
                                     bodySkinPath = tex1;
                                     foundSkin = true;
@@ -1668,7 +1759,7 @@ void Application::spawnPlayerCharacter() {
                             // Section 3 = hair: match variation=hairStyle, color=hairColor
                             else if (baseSection == 3 && !foundHair &&
                                      variationIndex == charHairStyleId && colorIndex == charHairColorId) {
-                                hairTexturePath = charSectionsDbc->getString(r, 4);
+                                hairTexturePath = charSectionsDbc->getString(r, csTex1);
                                 if (!hairTexturePath.empty()) {
                                     foundHair = true;
                                     LOG_INFO("  DBC hair texture: ", hairTexturePath,
@@ -1678,7 +1769,7 @@ void Application::spawnPlayerCharacter() {
                             // Section 1 = face lower: match variation=faceId
                             else if (baseSection == 1 && !foundFaceLower &&
                                      variationIndex == charFaceId && colorIndex == charSkinId) {
-                                std::string tex1 = charSectionsDbc->getString(r, 4);
+                                std::string tex1 = charSectionsDbc->getString(r, csTex1);
                                 if (!tex1.empty()) {
                                     faceLowerTexturePath = tex1;
                                     foundFaceLower = true;
@@ -1687,7 +1778,7 @@ void Application::spawnPlayerCharacter() {
                             }
                             // Section 4 = underwear
                             else if (baseSection == 4 && !foundUnderwear && colorIndex == charSkinId) {
-                                for (int f = 4; f <= 6; f++) {
+                                for (uint32_t f = csTex1; f <= csTex1 + 2; f++) {
                                     std::string tex = charSectionsDbc->getString(r, f);
                                     if (!tex.empty()) {
                                         underwearPaths.push_back(tex);
@@ -1988,10 +2079,9 @@ void Application::loadEquippedWeapons() {
             continue;
         }
 
-        // DBC field 1 = modelName_1 (e.g. "Sword_1H_Short_A_02.mdx")
-        std::string modelName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), 1);
-        // DBC field 3 = modelTexture_1 (e.g. "Sword_1H_Short_A_02Rusty")
-        std::string textureName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), 3);
+        const auto* idiL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
+        std::string modelName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), idiL ? (*idiL)["LeftModel"] : 1);
+        std::string textureName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), idiL ? (*idiL)["LeftModelTexture"] : 3);
 
         if (modelName.empty()) {
             LOG_WARNING("loadEquippedWeapons: empty model name for displayInfoId ", displayInfoId);
@@ -2099,14 +2189,19 @@ void Application::buildFactionHostilityMap(uint8_t playerRace) {
     }
 
     // Build set of hostile parent faction IDs from Faction.dbc base reputation
+    const auto* facL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Faction") : nullptr;
+    const auto* ftL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("FactionTemplate") : nullptr;
     std::unordered_set<uint32_t> hostileParentFactions;
     if (fDbc && fDbc->isLoaded()) {
+        const uint32_t facID = facL ? (*facL)["ID"] : 0;
+        const uint32_t facRaceMask0 = facL ? (*facL)["ReputationRaceMask0"] : 2;
+        const uint32_t facBase0 = facL ? (*facL)["ReputationBase0"] : 10;
         for (uint32_t i = 0; i < fDbc->getRecordCount(); i++) {
-            uint32_t factionId = fDbc->getUInt32(i, 0);
+            uint32_t factionId = fDbc->getUInt32(i, facID);
             for (int slot = 0; slot < 4; slot++) {
-                uint32_t raceMask = fDbc->getUInt32(i, 2 + slot);  // ReputationRaceMask[4] at fields 2-5
+                uint32_t raceMask = fDbc->getUInt32(i, facRaceMask0 + slot);
                 if (raceMask & playerRaceMask) {
-                    int32_t baseRep = fDbc->getInt32(i, 10 + slot);  // ReputationBase[4] at fields 10-13
+                    int32_t baseRep = fDbc->getInt32(i, facBase0 + slot);
                     if (baseRep < 0) {
                         hostileParentFactions.insert(factionId);
                     }
@@ -2118,14 +2213,20 @@ void Application::buildFactionHostilityMap(uint8_t playerRace) {
     }
 
     // Get player faction template data
+    const uint32_t ftID = ftL ? (*ftL)["ID"] : 0;
+    const uint32_t ftFaction = ftL ? (*ftL)["Faction"] : 1;
+    const uint32_t ftFG = ftL ? (*ftL)["FactionGroup"] : 3;
+    const uint32_t ftFriend = ftL ? (*ftL)["FriendGroup"] : 4;
+    const uint32_t ftEnemy = ftL ? (*ftL)["EnemyGroup"] : 5;
+    const uint32_t ftEnemy0 = ftL ? (*ftL)["Enemy0"] : 6;
     uint32_t playerFriendGroup = 0;
     uint32_t playerEnemyGroup = 0;
     uint32_t playerFactionId = 0;
     for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
-        if (ftDbc->getUInt32(i, 0) == playerFtId) {
-            playerFriendGroup = ftDbc->getUInt32(i, 4) | ftDbc->getUInt32(i, 3);
-            playerEnemyGroup = ftDbc->getUInt32(i, 5);
-            playerFactionId = ftDbc->getUInt32(i, 1);
+        if (ftDbc->getUInt32(i, ftID) == playerFtId) {
+            playerFriendGroup = ftDbc->getUInt32(i, ftFriend) | ftDbc->getUInt32(i, ftFG);
+            playerEnemyGroup = ftDbc->getUInt32(i, ftEnemy);
+            playerFactionId = ftDbc->getUInt32(i, ftFaction);
             break;
         }
     }
@@ -2133,11 +2234,11 @@ void Application::buildFactionHostilityMap(uint8_t playerRace) {
     // Build hostility map for each faction template
     std::unordered_map<uint32_t, bool> factionMap;
     for (uint32_t i = 0; i < ftDbc->getRecordCount(); i++) {
-        uint32_t id = ftDbc->getUInt32(i, 0);
-        uint32_t parentFaction = ftDbc->getUInt32(i, 1);
-        uint32_t factionGroup = ftDbc->getUInt32(i, 3);
-        uint32_t friendGroup = ftDbc->getUInt32(i, 4);
-        uint32_t enemyGroup = ftDbc->getUInt32(i, 5);
+        uint32_t id = ftDbc->getUInt32(i, ftID);
+        uint32_t parentFaction = ftDbc->getUInt32(i, ftFaction);
+        uint32_t factionGroup = ftDbc->getUInt32(i, ftFG);
+        uint32_t friendGroup = ftDbc->getUInt32(i, ftFriend);
+        uint32_t enemyGroup = ftDbc->getUInt32(i, ftEnemy);
 
         // 1. Symmetric group check
         bool hostile = (enemyGroup & playerFriendGroup) != 0
@@ -2148,9 +2249,9 @@ void Application::buildFactionHostilityMap(uint8_t playerRace) {
             hostile = true;
         }
 
-        // 3. Individual enemy faction IDs (fields 6-9)
+        // 3. Individual enemy faction IDs
         if (!hostile && playerFactionId > 0) {
-            for (int e = 6; e <= 9; e++) {
+            for (uint32_t e = ftEnemy0; e <= ftEnemy0 + 3; e++) {
                 if (ftDbc->getUInt32(i, e) == playerFactionId) {
                     hostile = true;
                     break;
@@ -2227,9 +2328,10 @@ void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         mapNameCacheLoaded = true;
         if (auto mapDbc = assetManager->loadDBC("Map.dbc"); mapDbc && mapDbc->isLoaded()) {
             mapNameById.reserve(mapDbc->getRecordCount());
+            const auto* mapL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Map") : nullptr;
             for (uint32_t i = 0; i < mapDbc->getRecordCount(); i++) {
-                uint32_t id = mapDbc->getUInt32(i, 0);
-                std::string internalName = mapDbc->getString(i, 1);
+                uint32_t id = mapDbc->getUInt32(i, mapL ? (*mapL)["ID"] : 0);
+                std::string internalName = mapDbc->getString(i, mapL ? (*mapL)["InternalName"] : 1);
                 if (!internalName.empty()) {
                     mapNameById[id] = std::move(internalName);
                 }
@@ -2509,14 +2611,15 @@ void Application::buildCreatureDisplayLookups() {
     // Col 7: Skin2
     // Col 8: Skin3
     if (auto cdi = assetManager->loadDBC("CreatureDisplayInfo.dbc"); cdi && cdi->isLoaded()) {
+        const auto* cdiL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureDisplayInfo") : nullptr;
         for (uint32_t i = 0; i < cdi->getRecordCount(); i++) {
             CreatureDisplayData data;
-            data.modelId = cdi->getUInt32(i, 1);
-            data.extraDisplayId = cdi->getUInt32(i, 3);
-            data.skin1 = cdi->getString(i, 6);
-            data.skin2 = cdi->getString(i, 7);
-            data.skin3 = cdi->getString(i, 8);
-            displayDataMap_[cdi->getUInt32(i, 0)] = data;
+            data.modelId = cdi->getUInt32(i, cdiL ? (*cdiL)["ModelID"] : 1);
+            data.extraDisplayId = cdi->getUInt32(i, cdiL ? (*cdiL)["ExtraDisplayId"] : 3);
+            data.skin1 = cdi->getString(i, cdiL ? (*cdiL)["Skin1"] : 6);
+            data.skin2 = cdi->getString(i, cdiL ? (*cdiL)["Skin2"] : 7);
+            data.skin3 = cdi->getString(i, cdiL ? (*cdiL)["Skin3"] : 8);
+            displayDataMap_[cdi->getUInt32(i, cdiL ? (*cdiL)["ID"] : 0)] = data;
         }
         LOG_INFO("Loaded ", displayDataMap_.size(), " display→model mappings");
     }
@@ -2534,37 +2637,38 @@ void Application::buildCreatureDisplayLookups() {
     // Col 19: Flags
     // Col 20: BakeName (pre-baked texture path)
     if (auto cdie = assetManager->loadDBC("CreatureDisplayInfoExtra.dbc"); cdie && cdie->isLoaded()) {
+        const auto* cdieL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureDisplayInfoExtra") : nullptr;
+        const uint32_t cdieEquip0 = cdieL ? (*cdieL)["EquipDisplay0"] : 8;
         uint32_t withBakeName = 0;
         for (uint32_t i = 0; i < cdie->getRecordCount(); i++) {
             HumanoidDisplayExtra extra;
-            extra.raceId = static_cast<uint8_t>(cdie->getUInt32(i, 1));
-            extra.sexId = static_cast<uint8_t>(cdie->getUInt32(i, 2));
-            extra.skinId = static_cast<uint8_t>(cdie->getUInt32(i, 3));
-            extra.faceId = static_cast<uint8_t>(cdie->getUInt32(i, 4));
-            extra.hairStyleId = static_cast<uint8_t>(cdie->getUInt32(i, 5));
-            extra.hairColorId = static_cast<uint8_t>(cdie->getUInt32(i, 6));
-            extra.facialHairId = static_cast<uint8_t>(cdie->getUInt32(i, 7));
-            // Equipment display IDs (columns 8-18)
+            extra.raceId = static_cast<uint8_t>(cdie->getUInt32(i, cdieL ? (*cdieL)["RaceID"] : 1));
+            extra.sexId = static_cast<uint8_t>(cdie->getUInt32(i, cdieL ? (*cdieL)["SexID"] : 2));
+            extra.skinId = static_cast<uint8_t>(cdie->getUInt32(i, cdieL ? (*cdieL)["SkinID"] : 3));
+            extra.faceId = static_cast<uint8_t>(cdie->getUInt32(i, cdieL ? (*cdieL)["FaceID"] : 4));
+            extra.hairStyleId = static_cast<uint8_t>(cdie->getUInt32(i, cdieL ? (*cdieL)["HairStyleID"] : 5));
+            extra.hairColorId = static_cast<uint8_t>(cdie->getUInt32(i, cdieL ? (*cdieL)["HairColorID"] : 6));
+            extra.facialHairId = static_cast<uint8_t>(cdie->getUInt32(i, cdieL ? (*cdieL)["FacialHairID"] : 7));
             for (int eq = 0; eq < 11; eq++) {
-                extra.equipDisplayId[eq] = cdie->getUInt32(i, 8 + eq);
+                extra.equipDisplayId[eq] = cdie->getUInt32(i, cdieEquip0 + eq);
             }
-            extra.bakeName = cdie->getString(i, 20);
+            extra.bakeName = cdie->getString(i, cdieL ? (*cdieL)["BakeName"] : 20);
             if (!extra.bakeName.empty()) withBakeName++;
-            humanoidExtraMap_[cdie->getUInt32(i, 0)] = extra;
+            humanoidExtraMap_[cdie->getUInt32(i, cdieL ? (*cdieL)["ID"] : 0)] = extra;
         }
         LOG_INFO("Loaded ", humanoidExtraMap_.size(), " humanoid display extra entries (", withBakeName, " with baked textures)");
     }
 
     // CreatureModelData.dbc: modelId (col 0) → modelPath (col 2, .mdx → .m2)
     if (auto cmd = assetManager->loadDBC("CreatureModelData.dbc"); cmd && cmd->isLoaded()) {
+        const auto* cmdL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureModelData") : nullptr;
         for (uint32_t i = 0; i < cmd->getRecordCount(); i++) {
-            std::string mdx = cmd->getString(i, 2);
+            std::string mdx = cmd->getString(i, cmdL ? (*cmdL)["ModelPath"] : 2);
             if (mdx.empty()) continue;
-            // Convert .mdx to .m2
             if (mdx.size() >= 4) {
                 mdx = mdx.substr(0, mdx.size() - 4) + ".m2";
             }
-            modelIdToPath_[cmd->getUInt32(i, 0)] = mdx;
+            modelIdToPath_[cmd->getUInt32(i, cmdL ? (*cmdL)["ID"] : 0)] = mdx;
         }
         LOG_INFO("Loaded ", modelIdToPath_.size(), " model→path mappings");
     }
@@ -2612,11 +2716,12 @@ void Application::buildCreatureDisplayLookups() {
     // CharHairGeosets.dbc: maps (race, sex, hairStyleId) → skinSectionId for hair mesh
     // Col 0: ID, Col 1: RaceID, Col 2: SexID, Col 3: VariationID, Col 4: GeosetID, Col 5: Showscalp
     if (auto chg = assetManager->loadDBC("CharHairGeosets.dbc"); chg && chg->isLoaded()) {
+        const auto* chgL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CharHairGeosets") : nullptr;
         for (uint32_t i = 0; i < chg->getRecordCount(); i++) {
-            uint32_t raceId = chg->getUInt32(i, 1);
-            uint32_t sexId = chg->getUInt32(i, 2);
-            uint32_t variation = chg->getUInt32(i, 3);
-            uint32_t geosetId = chg->getUInt32(i, 4);
+            uint32_t raceId = chg->getUInt32(i, chgL ? (*chgL)["RaceID"] : 1);
+            uint32_t sexId = chg->getUInt32(i, chgL ? (*chgL)["SexID"] : 2);
+            uint32_t variation = chg->getUInt32(i, chgL ? (*chgL)["Variation"] : 3);
+            uint32_t geosetId = chg->getUInt32(i, chgL ? (*chgL)["GeosetID"] : 4);
             uint32_t key = (raceId << 16) | (sexId << 8) | variation;
             hairGeosetMap_[key] = static_cast<uint16_t>(geosetId);
         }
@@ -2634,15 +2739,16 @@ void Application::buildCreatureDisplayLookups() {
     // No ID column: Col 0: RaceID, Col 1: SexID, Col 2: VariationID
     // Col 3: Geoset100, Col 4: Geoset300, Col 5: Geoset200
     if (auto cfh = assetManager->loadDBC("CharacterFacialHairStyles.dbc"); cfh && cfh->isLoaded()) {
+        const auto* cfhL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CharacterFacialHairStyles") : nullptr;
         for (uint32_t i = 0; i < cfh->getRecordCount(); i++) {
-            uint32_t raceId = cfh->getUInt32(i, 0);
-            uint32_t sexId = cfh->getUInt32(i, 1);
-            uint32_t variation = cfh->getUInt32(i, 2);
+            uint32_t raceId = cfh->getUInt32(i, cfhL ? (*cfhL)["RaceID"] : 0);
+            uint32_t sexId = cfh->getUInt32(i, cfhL ? (*cfhL)["SexID"] : 1);
+            uint32_t variation = cfh->getUInt32(i, cfhL ? (*cfhL)["Variation"] : 2);
             uint32_t key = (raceId << 16) | (sexId << 8) | variation;
             FacialHairGeosets fhg;
-            fhg.geoset100 = static_cast<uint16_t>(cfh->getUInt32(i, 3));
-            fhg.geoset300 = static_cast<uint16_t>(cfh->getUInt32(i, 4));
-            fhg.geoset200 = static_cast<uint16_t>(cfh->getUInt32(i, 5));
+            fhg.geoset100 = static_cast<uint16_t>(cfh->getUInt32(i, cfhL ? (*cfhL)["Geoset100"] : 3));
+            fhg.geoset300 = static_cast<uint16_t>(cfh->getUInt32(i, cfhL ? (*cfhL)["Geoset300"] : 4));
+            fhg.geoset200 = static_cast<uint16_t>(cfh->getUInt32(i, cfhL ? (*cfhL)["Geoset200"] : 5));
             facialHairGeosetMap_[key] = fhg;
         }
         LOG_INFO("Loaded ", facialHairGeosetMap_.size(), " facial hair geoset mappings from CharacterFacialHairStyles.dbc");
@@ -2722,9 +2828,10 @@ void Application::buildGameObjectDisplayLookups() {
     // Col 0: ID (displayId)
     // Col 1: ModelName
     if (auto godi = assetManager->loadDBC("GameObjectDisplayInfo.dbc"); godi && godi->isLoaded()) {
+        const auto* godiL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("GameObjectDisplayInfo") : nullptr;
         for (uint32_t i = 0; i < godi->getRecordCount(); i++) {
-            uint32_t displayId = godi->getUInt32(i, 0);
-            std::string modelName = godi->getString(i, 1);
+            uint32_t displayId = godi->getUInt32(i, godiL ? (*godiL)["ID"] : 0);
+            std::string modelName = godi->getString(i, godiL ? (*godiL)["ModelName"] : 1);
             if (modelName.empty()) continue;
             if (modelName.size() >= 4) {
                 std::string ext = modelName.substr(modelName.size() - 4);
@@ -2913,23 +3020,24 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                 // Load hair texture from CharSections.dbc (section 3)
                 auto charSectionsDbc = assetManager->loadDBC("CharSections.dbc");
                 if (charSectionsDbc) {
+                    const auto* csL2 = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CharSections") : nullptr;
                     uint32_t targetRace = static_cast<uint32_t>(extra.raceId);
                     uint32_t targetSex = static_cast<uint32_t>(extra.sexId);
                     std::string hairTexPath;
 
                     for (uint32_t r = 0; r < charSectionsDbc->getRecordCount(); r++) {
-                        uint32_t raceId = charSectionsDbc->getUInt32(r, 1);
-                        uint32_t sexId = charSectionsDbc->getUInt32(r, 2);
-                        uint32_t section = charSectionsDbc->getUInt32(r, 3);
-                        uint32_t variation = charSectionsDbc->getUInt32(r, 8);
-                        uint32_t colorIdx = charSectionsDbc->getUInt32(r, 9);
+                        uint32_t raceId = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["RaceID"] : 1);
+                        uint32_t sexId = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["SexID"] : 2);
+                        uint32_t section = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["BaseSection"] : 3);
+                        uint32_t variation = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["VariationIndex"] : 8);
+                        uint32_t colorIdx = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["ColorIndex"] : 9);
 
                         if (raceId != targetRace || sexId != targetSex) continue;
                         if (section != 3) continue;  // Section 3 = hair
                         if (variation != static_cast<uint32_t>(extra.hairStyleId)) continue;
                         if (colorIdx != static_cast<uint32_t>(extra.hairColorId)) continue;
 
-                        hairTexPath = charSectionsDbc->getString(r, 4);
+                        hairTexPath = charSectionsDbc->getString(r, csL2 ? (*csL2)["Texture1"] : 4);
                         break;
                     }
 
@@ -3058,8 +3166,11 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
             // Load equipment geosets from ItemDisplayInfo.dbc
             // DBC columns: 7=GeosetGroup[0], 8=GeosetGroup[1], 9=GeosetGroup[2]
             auto itemDisplayDbc = assetManager->loadDBC("ItemDisplayInfo.dbc");
+            const auto* idiL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
             if (itemDisplayDbc) {
                 // Equipment slots: 0=helm, 1=shoulder, 2=shirt, 3=chest, 4=belt, 5=legs, 6=feet, 7=wrist, 8=hands, 9=tabard, 10=cape
+                const uint32_t fGG1 = idiL ? (*idiL)["GeosetGroup1"] : 7;
+                const uint32_t fGG3 = idiL ? (*idiL)["GeosetGroup3"] : 9;
 
                 // Helm (slot 0) - noted for helmet model attachment below
 
@@ -3067,10 +3178,10 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                 if (extra.equipDisplayId[3] != 0) {
                     int32_t idx = itemDisplayDbc->findRecordById(extra.equipDisplayId[3]);
                     if (idx >= 0) {
-                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), 7);
+                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), fGG1);
                         if (gg > 0) geosetChest = static_cast<uint16_t>(501 + gg);
                         // Robes: GeosetGroup[2] > 0 shows kilt legs
-                        uint32_t gg3 = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), 9);
+                        uint32_t gg3 = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), fGG3);
                         if (gg3 > 0) geosetPants = static_cast<uint16_t>(1301 + gg3);
                     }
                 }
@@ -3079,7 +3190,7 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                 if (extra.equipDisplayId[5] != 0) {
                     int32_t idx = itemDisplayDbc->findRecordById(extra.equipDisplayId[5]);
                     if (idx >= 0) {
-                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), 7);
+                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), fGG1);
                         if (gg > 0) geosetPants = static_cast<uint16_t>(1301 + gg);
                     }
                 }
@@ -3088,7 +3199,7 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                 if (extra.equipDisplayId[6] != 0) {
                     int32_t idx = itemDisplayDbc->findRecordById(extra.equipDisplayId[6]);
                     if (idx >= 0) {
-                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), 7);
+                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), fGG1);
                         if (gg > 0) geosetBoots = static_cast<uint16_t>(401 + gg);
                     }
                 }
@@ -3097,7 +3208,7 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                 if (extra.equipDisplayId[8] != 0) {
                     int32_t idx = itemDisplayDbc->findRecordById(extra.equipDisplayId[8]);
                     if (idx >= 0) {
-                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), 7);
+                        uint32_t gg = itemDisplayDbc->getUInt32(static_cast<uint32_t>(idx), fGG1);
                         if (gg > 0) geosetGloves = static_cast<uint16_t>(301 + gg);
                     }
                 }
@@ -3162,8 +3273,8 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
             if (extra.equipDisplayId[0] != 0 && itemDisplayDbc) {
                 int32_t helmIdx = itemDisplayDbc->findRecordById(extra.equipDisplayId[0]);
                 if (helmIdx >= 0) {
-                    // Get helmet model name from ItemDisplayInfo.dbc (col 1 = LeftModel)
-                    std::string helmModelName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), 1);
+                    // Get helmet model name from ItemDisplayInfo.dbc (LeftModel)
+                    std::string helmModelName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), idiL ? (*idiL)["LeftModel"] : 1);
                     if (!helmModelName.empty()) {
                         // Convert .mdx to .m2
                         size_t dotPos = helmModelName.rfind('.');
@@ -3209,8 +3320,8 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                             if (helmModel.isValid()) {
                                 // Attachment point 11 = Head
                                 uint32_t helmModelId = nextCreatureModelId_++;
-                                // Get texture from ItemDisplayInfo (col 3 = LeftModelTexture)
-                                std::string helmTexName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), 3);
+                                // Get texture from ItemDisplayInfo (LeftModelTexture)
+                                std::string helmTexName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), idiL ? (*idiL)["LeftModelTexture"] : 3);
                                 std::string helmTexPath;
                                 if (!helmTexName.empty()) {
                                     // Try race/gender suffixed texture first
@@ -3245,10 +3356,11 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
             const auto& extra = itExtra->second;
             if (extra.equipDisplayId[0] != 0) { // Helm slot
                 auto itemDisplayDbc = assetManager->loadDBC("ItemDisplayInfo.dbc");
+                const auto* idiL2 = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
                 if (itemDisplayDbc) {
                     int32_t helmIdx = itemDisplayDbc->findRecordById(extra.equipDisplayId[0]);
                     if (helmIdx >= 0) {
-                        std::string helmModelName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), 1);
+                        std::string helmModelName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), idiL2 ? (*idiL2)["LeftModel"] : 1);
                         if (!helmModelName.empty()) {
                             size_t dotPos = helmModelName.rfind('.');
                             if (dotPos != std::string::npos) {
@@ -3287,7 +3399,7 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
 
                                 if (helmModel.isValid()) {
                                     uint32_t helmModelId = nextCreatureModelId_++;
-                                    std::string helmTexName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), 3);
+                                    std::string helmTexName = itemDisplayDbc->getString(static_cast<uint32_t>(helmIdx), idiL2 ? (*idiL2)["LeftModelTexture"] : 3);
                                     std::string helmTexPath;
                                     if (!helmTexName.empty()) {
                                         if (!raceSuffix.empty()) {

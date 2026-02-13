@@ -1,0 +1,93 @@
+{
+  "Spell": {
+    "ID": 0, "Attributes": 5, "IconID": 124,
+    "Name": 127, "Tooltip": 154, "Rank": 136
+  },
+  "ItemDisplayInfo": {
+    "ID": 0, "LeftModel": 1, "LeftModelTexture": 3,
+    "InventoryIcon": 5, "GeosetGroup1": 7, "GeosetGroup3": 9
+  },
+  "CharSections": {
+    "RaceID": 1, "SexID": 2, "BaseSection": 3,
+    "Texture1": 4, "Texture2": 5, "Texture3": 6,
+    "VariationIndex": 8, "ColorIndex": 9
+  },
+  "SpellIcon": { "ID": 0, "Path": 1 },
+  "FactionTemplate": {
+    "ID": 0, "Faction": 1, "FactionGroup": 3,
+    "FriendGroup": 4, "EnemyGroup": 5,
+    "Enemy0": 6, "Enemy1": 7, "Enemy2": 8, "Enemy3": 9
+  },
+  "Faction": {
+    "ID": 0, "ReputationRaceMask0": 2, "ReputationRaceMask1": 3,
+    "ReputationRaceMask2": 4, "ReputationRaceMask3": 5,
+    "ReputationBase0": 10, "ReputationBase1": 11,
+    "ReputationBase2": 12, "ReputationBase3": 13
+  },
+  "AreaTable": { "ID": 0, "ExploreFlag": 3 },
+  "CreatureDisplayInfoExtra": {
+    "ID": 0, "RaceID": 1, "SexID": 2, "SkinID": 3, "FaceID": 4,
+    "HairStyleID": 5, "HairColorID": 6, "FacialHairID": 7,
+    "EquipDisplay0": 8, "EquipDisplay1": 9, "EquipDisplay2": 10,
+    "EquipDisplay3": 11, "EquipDisplay4": 12, "EquipDisplay5": 13,
+    "EquipDisplay6": 14, "EquipDisplay7": 15, "EquipDisplay8": 16,
+    "EquipDisplay9": 17, "EquipDisplay10": 18, "BakeName": 20
+  },
+  "CreatureDisplayInfo": {
+    "ID": 0, "ModelID": 1, "ExtraDisplayId": 3,
+    "Skin1": 6, "Skin2": 7, "Skin3": 8
+  },
+  "TaxiNodes": {
+    "ID": 0, "MapID": 1, "X": 2, "Y": 3, "Z": 4, "Name": 5,
+    "MountDisplayIdAllianceFallback": 12, "MountDisplayIdHordeFallback": 13,
+    "MountDisplayIdAlliance": 14, "MountDisplayIdHorde": 15
+  },
+  "TaxiPath": { "ID": 0, "FromNode": 1, "ToNode": 2, "Cost": 3 },
+  "TaxiPathNode": {
+    "ID": 0, "PathID": 1, "NodeIndex": 2, "MapID": 3,
+    "X": 4, "Y": 5, "Z": 6
+  },
+  "TalentTab": {
+    "ID": 0, "Name": 1, "ClassMask": 12,
+    "OrderIndex": 14, "BackgroundFile": 15
+  },
+  "Talent": {
+    "ID": 0, "TabID": 1, "Row": 2, "Column": 3,
+    "RankSpell0": 4, "PrereqTalent0": 9, "PrereqRank0": 12
+  },
+  "SkillLineAbility": { "SkillLineID": 1, "SpellID": 2 },
+  "SkillLine": { "ID": 0, "Category": 1, "Name": 3 },
+  "Map": { "ID": 0, "InternalName": 1 },
+  "CreatureModelData": { "ID": 0, "ModelPath": 2 },
+  "CharHairGeosets": {
+    "RaceID": 1, "SexID": 2, "Variation": 3, "GeosetID": 4
+  },
+  "CharacterFacialHairStyles": {
+    "RaceID": 0, "SexID": 1, "Variation": 2,
+    "Geoset100": 3, "Geoset300": 4, "Geoset200": 5
+  },
+  "GameObjectDisplayInfo": { "ID": 0, "ModelName": 1 },
+  "Emotes": { "ID": 0, "AnimID": 2 },
+  "EmotesText": {
+    "Command": 1, "EmoteRef": 2,
+    "SenderTargetTextID": 5, "SenderNoTargetTextID": 9
+  },
+  "EmotesTextData": { "ID": 0, "Text": 1 },
+  "Light": {
+    "ID": 0, "MapID": 1, "X": 2, "Z": 3, "Y": 4,
+    "InnerRadius": 5, "OuterRadius": 6, "LightParamsID": 7,
+    "LightParamsIDRain": 8, "LightParamsIDUnderwater": 9
+  },
+  "LightParams": { "LightParamsID": 0 },
+  "LightIntBand": {
+    "BlockIndex": 1, "NumKeyframes": 2, "TimeKey0": 3, "Value0": 19
+  },
+  "LightFloatBand": {
+    "BlockIndex": 1, "NumKeyframes": 2, "TimeKey0": 3, "Value0": 19
+  },
+  "WorldMapArea": {
+    "ID": 0, "MapID": 1, "AreaID": 2, "AreaName": 3,
+    "LocLeft": 4, "LocRight": 5, "LocTop": 6, "LocBottom": 7,
+    "DisplayMapID": 8, "ParentWorldMapID": 10
+  }
+}

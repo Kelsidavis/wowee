@@ -15,8 +15,8 @@ namespace wowee {
 namespace rendering { class Renderer; }
 namespace ui { class UIManager; }
 namespace auth { class AuthHandler; }
-namespace game { class GameHandler; class World; }
-namespace pipeline { class AssetManager; }
+namespace game { class GameHandler; class World; class ExpansionRegistry; }
+namespace pipeline { class AssetManager; class DBCLayout; class HDPackManager; }
 namespace audio { enum class VoiceType; }
 
 namespace core {
@@ -54,6 +54,9 @@ public:
     game::GameHandler* getGameHandler() { return gameHandler.get(); }
     game::World* getWorld() { return world.get(); }
     pipeline::AssetManager* getAssetManager() { return assetManager.get(); }
+    game::ExpansionRegistry* getExpansionRegistry() { return expansionRegistry_.get(); }
+    pipeline::DBCLayout* getDBCLayout() { return dbcLayout_.get(); }
+    pipeline::HDPackManager* getHDPackManager() { return hdPackManager_.get(); }
 
     // Singleton access
     static Application& getInstance() { return *instance; }
@@ -104,6 +107,9 @@ private:
     std::unique_ptr<game::GameHandler> gameHandler;
     std::unique_ptr<game::World> world;
     std::unique_ptr<pipeline::AssetManager> assetManager;
+    std::unique_ptr<game::ExpansionRegistry> expansionRegistry_;
+    std::unique_ptr<pipeline::DBCLayout> dbcLayout_;
+    std::unique_ptr<pipeline::HDPackManager> hdPackManager_;
 
     AppState state = AppState::AUTHENTICATION;
     bool running = false;

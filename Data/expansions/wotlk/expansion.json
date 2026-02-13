@@ -1,0 +1,11 @@
+{
+  "id": "wotlk",
+  "name": "Wrath of the Lich King",
+  "shortName": "WotLK",
+  "version": { "major": 3, "minor": 3, "patch": 5 },
+  "build": 12340,
+  "protocolVersion": 8,
+  "maxLevel": 80,
+  "races": [1, 2, 3, 4, 5, 6, 7, 8, 10, 11],
+  "classes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 11]
+}
