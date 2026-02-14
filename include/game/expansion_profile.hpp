@@ -19,8 +19,9 @@ struct ExpansionProfile {
     uint8_t majorVersion = 0;
     uint8_t minorVersion = 0;
     uint8_t patchVersion = 0;
-    uint16_t build = 0;
-    uint8_t protocolVersion = 0; // SRP auth protocol version byte
+    uint16_t build = 0;           // Realm build (sent in LOGON_CHALLENGE)
+    uint16_t worldBuild = 0;      // World build (sent in CMSG_AUTH_SESSION, defaults to build)
+    uint8_t protocolVersion = 0;  // SRP auth protocol version byte
     // Client header fields used in LOGON_CHALLENGE.
     // Defaults match a typical Windows x86 client.
     std::string game = "WoW";

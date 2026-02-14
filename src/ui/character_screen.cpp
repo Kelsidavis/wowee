@@ -246,8 +246,7 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
                     (previewAppearanceBytes_ != character.appearanceBytes) ||
                     (previewFacialFeatures_ != character.facialFeatures) ||
                     (previewUseFemaleModel_ != character.useFemaleModel) ||
-                    (previewEquipHash_ != equipHash) ||
-                    (!preview_->isModelLoaded());
+                    (previewEquipHash_ != equipHash);
 
                 if (changed) {
                     uint8_t skin = character.appearanceBytes & 0xFF;

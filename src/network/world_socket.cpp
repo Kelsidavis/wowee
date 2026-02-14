@@ -115,6 +115,7 @@ void WorldSocket::disconnect() {
     }
     connected = false;
     encryptionEnabled = false;
+    useVanillaCrypt = false;
     receiveBuffer.clear();
     headerBytesDecrypted = 0;
     LOG_INFO("Disconnected from world server");
@@ -214,7 +215,11 @@ void WorldSocket::send(const Packet& packet) {
 
     // Encrypt header if encryption is enabled (all 6 bytes)
     if (encryptionEnabled) {
-        encryptCipher.process(sendData.data(), 6);
+        if (useVanillaCrypt) {
+            vanillaCrypt.encrypt(sendData.data(), 6);
+        } else {
+            encryptCipher.process(sendData.data(), 6);
+        }
     }
 
     // Add payload (unencrypted)
@@ -291,17 +296,26 @@ void WorldSocket::update() {
     }
 
     if (receivedAny) {
-        LOG_DEBUG("World socket read ", bytesReadThisTick, " bytes in ", readOps,
-                  " recv call(s), buffered=", receiveBuffer.size());
+        LOG_INFO("World socket read ", bytesReadThisTick, " bytes in ", readOps,
+                 " recv call(s), buffered=", receiveBuffer.size());
+        // Hex dump received bytes for auth debugging
+        if (bytesReadThisTick <= 128) {
+            std::string hex;
+            for (size_t i = 0; i < receiveBuffer.size(); ++i) {
+                char buf[4]; snprintf(buf, sizeof(buf), "%02x ", receiveBuffer[i]); hex += buf;
+            }
+            LOG_INFO("World socket raw bytes: ", hex);
+        }
         tryParsePackets();
         if (connected && !receiveBuffer.empty()) {
-            LOG_DEBUG("World socket parse left ", receiveBuffer.size(),
-                      " bytes buffered (awaiting complete packet)");
+            LOG_INFO("World socket parse left ", receiveBuffer.size(),
+                     " bytes buffered (awaiting complete packet)");
         }
     }
 
     if (sawClose) {
-        LOG_INFO("World server connection closed");
+        LOG_INFO("World server connection closed (receivedAny=", receivedAny,
+                 " buffered=", receiveBuffer.size(), ")");
         disconnect();
         return;
     }
@@ -317,7 +331,11 @@ void WorldSocket::tryParsePackets() {
         // Only decrypt bytes we haven't already decrypted
         if (encryptionEnabled && headerBytesDecrypted < 4) {
             size_t toDecrypt = 4 - headerBytesDecrypted;
-            decryptCipher.process(receiveBuffer.data() + headerBytesDecrypted, toDecrypt);
+            if (useVanillaCrypt) {
+                vanillaCrypt.decrypt(receiveBuffer.data() + headerBytesDecrypted, toDecrypt);
+            } else {
+                decryptCipher.process(receiveBuffer.data() + headerBytesDecrypted, toDecrypt);
+            }
             headerBytesDecrypted = 4;
         }
 
@@ -402,33 +420,36 @@ void WorldSocket::tryParsePackets() {
     }
 }
 
-void WorldSocket::initEncryption(const std::vector<uint8_t>& sessionKey) {
+void WorldSocket::initEncryption(const std::vector<uint8_t>& sessionKey, uint32_t build) {
     if (sessionKey.size() != 40) {
         LOG_ERROR("Invalid session key size: ", sessionKey.size(), " (expected 40)");
         return;
     }
 
-    LOG_INFO(">>> ENABLING ENCRYPTION - encryptionEnabled will become true <<<");
+    // Vanilla/TBC (build <= 8606) uses XOR+addition cipher with raw session key
+    // WotLK (build > 8606) uses HMAC-SHA1 derived RC4 with 1024-byte drop
+    useVanillaCrypt = (build <= 8606);
 
-    // Convert hardcoded keys to vectors
-    std::vector<uint8_t> encryptKey(ENCRYPT_KEY, ENCRYPT_KEY + 16);
-    std::vector<uint8_t> decryptKey(DECRYPT_KEY, DECRYPT_KEY + 16);
+    LOG_INFO(">>> ENABLING ENCRYPTION (", useVanillaCrypt ? "vanilla XOR" : "WotLK RC4",
+             ") build=", build, " <<<");
 
-    // Compute HMAC-SHA1(seed, sessionKey) for each cipher
-    // The 16-byte seed is the HMAC key, session key is the message
-    std::vector<uint8_t> encryptHash = auth::Crypto::hmacSHA1(encryptKey, sessionKey);
-    std::vector<uint8_t> decryptHash = auth::Crypto::hmacSHA1(decryptKey, sessionKey);
+    if (useVanillaCrypt) {
+        vanillaCrypt.init(sessionKey);
+    } else {
+        // WotLK: HMAC-SHA1(hardcoded seed, sessionKey) → RC4 key
+        std::vector<uint8_t> encryptKey(ENCRYPT_KEY, ENCRYPT_KEY + 16);
+        std::vector<uint8_t> decryptKey(DECRYPT_KEY, DECRYPT_KEY + 16);
 
-    LOG_DEBUG("Encrypt hash: ", encryptHash.size(), " bytes");
-    LOG_DEBUG("Decrypt hash: ", decryptHash.size(), " bytes");
+        std::vector<uint8_t> encryptHash = auth::Crypto::hmacSHA1(encryptKey, sessionKey);
+        std::vector<uint8_t> decryptHash = auth::Crypto::hmacSHA1(decryptKey, sessionKey);
 
-    // Initialize RC4 ciphers with HMAC results
-    encryptCipher.init(encryptHash);
-    decryptCipher.init(decryptHash);
+        encryptCipher.init(encryptHash);
+        decryptCipher.init(decryptHash);
 
-    // Drop first 1024 bytes of keystream (WoW protocol requirement)
-    encryptCipher.drop(1024);
-    decryptCipher.drop(1024);
+        // Drop first 1024 bytes of keystream (WoW WotLK protocol requirement)
+        encryptCipher.drop(1024);
+        decryptCipher.drop(1024);
+    }
 
     encryptionEnabled = true;
     headerTracePacketsLeft = 24;

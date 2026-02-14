@@ -4,6 +4,7 @@
 #include "network/packet.hpp"
 #include "network/net_platform.hpp"
 #include "auth/rc4.hpp"
+#include "auth/vanilla_crypt.hpp"
 #include <functional>
 #include <vector>
 #include <cstdint>
@@ -14,12 +15,13 @@ namespace network {
 /**
  * World Server Socket
  *
- * Handles WoW 3.3.5a world server protocol with RC4 header encryption.
+ * Handles WoW world server protocol with header encryption.
+ * Supports both vanilla/TBC (XOR+addition cipher) and WotLK (RC4).
  *
  * Key Differences from Auth Server:
  * - Outgoing: 6-byte header (2 bytes size + 4 bytes opcode, big-endian)
  * - Incoming: 4-byte header (2 bytes size + 2 bytes opcode)
- * - Headers are RC4-encrypted after CMSG_AUTH_SESSION
+ * - Headers are encrypted after CMSG_AUTH_SESSION
  * - Packet bodies remain unencrypted
  * - Size field includes opcode bytes (payloadLen = size - 2)
  */
@@ -56,12 +58,13 @@ public:
     }
 
     /**
-     * Initialize RC4 encryption for packet headers
+     * Initialize header encryption for packet headers
      * Must be called after CMSG_AUTH_SESSION before further communication
      *
      * @param sessionKey 40-byte session key from auth server
+     * @param build Client build number (determines cipher: <= 8606 = XOR, > 8606 = RC4)
      */
-    void initEncryption(const std::vector<uint8_t>& sessionKey);
+    void initEncryption(const std::vector<uint8_t>& sessionKey, uint32_t build = 12340);
 
     /**
      * Check if header encryption is enabled
@@ -77,10 +80,14 @@ private:
     socket_t sockfd = INVALID_SOCK;
     bool connected = false;
     bool encryptionEnabled = false;
+    bool useVanillaCrypt = false;  // true = XOR cipher, false = RC4
 
-    // RC4 ciphers for header encryption/decryption
-    auth::RC4 encryptCipher;  // For outgoing headers
-    auth::RC4 decryptCipher;  // For incoming headers
+    // WotLK RC4 ciphers for header encryption/decryption
+    auth::RC4 encryptCipher;
+    auth::RC4 decryptCipher;
+
+    // Vanilla/TBC XOR+addition cipher
+    auth::VanillaCrypt vanillaCrypt;
 
     // Receive buffer
     std::vector<uint8_t> receiveBuffer;

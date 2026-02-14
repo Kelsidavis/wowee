@@ -130,7 +130,8 @@ struct RealmListResponse {
 // REALM_LIST response parser
 class RealmListResponseParser {
 public:
-    static bool parse(network::Packet& packet, RealmListResponse& response);
+    // protocolVersion: 3 = vanilla (uint8 realmCount, uint32 icon), 8 = WotLK (uint16 realmCount, uint8 icon)
+    static bool parse(network::Packet& packet, RealmListResponse& response, uint8_t protocolVersion = 8);
 };
 
 } // namespace auth

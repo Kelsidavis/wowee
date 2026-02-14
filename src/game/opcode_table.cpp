@@ -572,6 +572,10 @@ bool OpcodeTable::loadFromJson(const std::string& path) {
 
     std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
+    // Save old tables so we can restore on failure
+    auto savedLogicalToWire = logicalToWire_;
+    auto savedWireToLogical = wireToLogical_;
+
     logicalToWire_.clear();
     wireToLogical_.clear();
 
@@ -624,8 +628,15 @@ bool OpcodeTable::loadFromJson(const std::string& path) {
         pos = valEnd + 1;
     }
 
+    if (loaded == 0) {
+        LOG_WARNING("OpcodeTable: no opcodes loaded from ", path, ", restoring previous tables");
+        logicalToWire_ = std::move(savedLogicalToWire);
+        wireToLogical_ = std::move(savedWireToLogical);
+        return false;
+    }
+
     LOG_INFO("OpcodeTable: loaded ", loaded, " opcodes from ", path);
-    return loaded > 0;
+    return true;
 }
 
 uint16_t OpcodeTable::toWire(LogicalOpcode op) const {

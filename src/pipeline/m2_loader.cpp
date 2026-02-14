@@ -138,7 +138,7 @@ struct FBlockDisk {
     uint32_t ofsKeys;
 };
 
-// Full M2 bone structure (on-disk, 88 bytes)
+// Full M2 bone structure (on-disk, 88 bytes for WotLK)
 struct M2BoneDisk {
     int32_t keyBoneId;          // 4
     uint32_t flags;             // 4
@@ -151,11 +151,54 @@ struct M2BoneDisk {
     float pivot[3];             // 12
 };                              // Total: 88
 
-// M2 animation sequence structure
+// Vanilla M2 animation track header (on-disk, 28 bytes — has extra ranges M2Array)
+struct M2TrackDiskVanilla {
+    uint16_t interpolationType; // 2
+    int16_t globalSequence;     // 2
+    uint32_t nRanges;           // 4 — extra in vanilla (animation sequence ranges)
+    uint32_t ofsRanges;         // 4 — extra in vanilla
+    uint32_t nTimestamps;       // 4
+    uint32_t ofsTimestamps;     // 4
+    uint32_t nKeys;             // 4
+    uint32_t ofsKeys;           // 4
+};                              // Total: 28
+
+// Vanilla M2 bone structure (on-disk, 108 bytes — no boneNameCRC, 28-byte tracks)
+struct M2BoneDiskVanilla {
+    int32_t keyBoneId;              // 4
+    uint32_t flags;                 // 4
+    int16_t parentBone;             // 2
+    uint16_t submeshId;             // 2
+    M2TrackDiskVanilla translation; // 28
+    M2TrackDiskVanilla rotation;    // 28
+    M2TrackDiskVanilla scale;       // 28
+    float pivot[3];                 // 12
+};                                  // Total: 108
+
+// M2 animation sequence structure (WotLK, 64 bytes)
 struct M2SequenceDisk {
     uint16_t id;
     uint16_t variationIndex;
     uint32_t duration;
+    float movingSpeed;
+    uint32_t flags;
+    int16_t frequency;
+    uint16_t padding;
+    uint32_t replayMin;
+    uint32_t replayMax;
+    uint32_t blendTime;
+    float bounds[6];
+    float boundRadius;
+    int16_t nextAnimation;
+    uint16_t aliasNext;
+};
+
+// Vanilla M2 animation sequence (68 bytes — has start_timestamp before duration)
+struct M2SequenceDiskVanilla {
+    uint16_t id;
+    uint16_t variationIndex;
+    uint32_t startTimestamp;    // Extra field in vanilla (removed in WotLK)
+    uint32_t endTimestamp;      // Becomes 'duration' in WotLK
     float movingSpeed;
     uint32_t flags;
     int16_t frequency;
@@ -208,6 +251,36 @@ struct M2SkinSubmesh {
     float centerPosition[3];
     float sortCenterPosition[3];
     float sortRadius;
+};
+
+// Vanilla M2 skin submesh (32 bytes, version < 264 — no sortCenter/sortRadius)
+struct M2SkinSubmeshVanilla {
+    uint16_t id;
+    uint16_t level;
+    uint16_t vertexStart;
+    uint16_t vertexCount;
+    uint16_t indexStart;
+    uint16_t indexCount;
+    uint16_t boneCount;
+    uint16_t boneStart;
+    uint16_t boneInfluences;
+    uint16_t centerBoneIndex;
+    float centerPosition[3];
+};
+
+// Embedded skin profile for vanilla M2 (no 'SKIN' magic, offsets are M2-file-relative)
+struct M2SkinProfileEmbedded {
+    uint32_t nIndices;
+    uint32_t ofsIndices;
+    uint32_t nTriangles;
+    uint32_t ofsTriangles;
+    uint32_t nVertexProperties;
+    uint32_t ofsVertexProperties;
+    uint32_t nSubmeshes;
+    uint32_t ofsSubmeshes;
+    uint32_t nBatches;
+    uint32_t ofsBatches;
+    uint32_t nBones;
 };
 
 // Skin batch structure (24 bytes on disk)
@@ -443,19 +516,132 @@ void parseFBlock(const std::vector<uint8_t>& data, uint32_t offset,
 M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     M2Model model;
 
-    if (m2Data.size() < sizeof(M2Header)) {
+    // Read header with version-aware field parsing.
+    // Vanilla M2 (version < 264) has 3 extra fields totaling +20 bytes:
+    //   +8: playableAnimLookup M2Array (after animationLookup)
+    //   +4: ofsViews (after nViews, making it a full M2Array)
+    //   +8: unknown extra M2Array (after texReplace, before renderFlags)
+    // Also: vanilla bones are 84 bytes (no boneNameCRC), sequences are 68 bytes.
+    constexpr size_t COMMON_PREFIX_SIZE = 0x2C; // magic through ofsAnimationLookup
+
+    if (m2Data.size() < COMMON_PREFIX_SIZE + 16) { // Need at least some fields after prefix
         core::Logger::getInstance().error("M2 data too small");
         return model;
     }
 
-    // Read header
     M2Header header;
-    std::memcpy(&header, m2Data.data(), sizeof(M2Header));
+    std::memset(&header, 0, sizeof(header));
+    // Read common prefix (magic through ofsAnimationLookup) — same for all versions
+    std::memcpy(&header, m2Data.data(), COMMON_PREFIX_SIZE);
 
     // Verify magic
     if (std::strncmp(header.magic, "MD20", 4) != 0) {
         core::Logger::getInstance().error("Invalid M2 magic: expected MD20");
         return model;
+    }
+
+    uint32_t ofsViews = 0;
+
+    if (header.version < 264) {
+        // Vanilla M2: read remaining header fields using cursor, skipping extra fields
+        size_t c = COMMON_PREFIX_SIZE;
+
+        auto r32 = [&]() -> uint32_t {
+            if (c + 4 > m2Data.size()) return 0;
+            uint32_t v;
+            std::memcpy(&v, m2Data.data() + c, 4);
+            c += 4;
+            return v;
+        };
+
+        // Skip playableAnimLookup M2Array (8 bytes)
+        c += 8;
+
+        // Bones through ofsVertices (same field order as WotLK, just shifted)
+        header.nBones = r32();
+        header.ofsBones = r32();
+        header.nKeyBoneLookup = r32();
+        header.ofsKeyBoneLookup = r32();
+        header.nVertices = r32();
+        header.ofsVertices = r32();
+
+        // nViews + ofsViews (vanilla has both, WotLK has only nViews)
+        header.nViews = r32();
+        ofsViews = r32();
+
+        // nColors through ofsTexReplace
+        header.nColors = r32();
+        header.ofsColors = r32();
+        header.nTextures = r32();
+        header.ofsTextures = r32();
+        header.nTransparency = r32();
+        header.ofsTransparency = r32();
+        header.nUVAnimation = r32();
+        header.ofsUVAnimation = r32();
+        header.nTexReplace = r32();
+        header.ofsTexReplace = r32();
+
+        // Skip unknown extra M2Array (8 bytes)
+        c += 8;
+
+        // nRenderFlags through ofsUVAnimLookup
+        header.nRenderFlags = r32();
+        header.ofsRenderFlags = r32();
+        header.nBoneLookupTable = r32();
+        header.ofsBoneLookupTable = r32();
+        header.nTexLookup = r32();
+        header.ofsTexLookup = r32();
+        header.nTexUnits = r32();
+        header.ofsTexUnits = r32();
+        header.nTransLookup = r32();
+        header.ofsTransLookup = r32();
+        header.nUVAnimLookup = r32();
+        header.ofsUVAnimLookup = r32();
+
+        // Float sections (vertexBox, vertexRadius, boundingBox, boundingRadius)
+        if (c + 56 <= m2Data.size()) {
+            std::memcpy(header.vertexBox, m2Data.data() + c, 24); c += 24;
+            std::memcpy(&header.vertexRadius, m2Data.data() + c, 4); c += 4;
+            std::memcpy(header.boundingBox, m2Data.data() + c, 24); c += 24;
+            std::memcpy(&header.boundingRadius, m2Data.data() + c, 4); c += 4;
+        } else { c += 56; }
+
+        // Remaining M2Array pairs
+        header.nBoundingTriangles = r32();
+        header.ofsBoundingTriangles = r32();
+        header.nBoundingVertices = r32();
+        header.ofsBoundingVertices = r32();
+        header.nBoundingNormals = r32();
+        header.ofsBoundingNormals = r32();
+        header.nAttachments = r32();
+        header.ofsAttachments = r32();
+        header.nAttachmentLookup = r32();
+        header.ofsAttachmentLookup = r32();
+        header.nEvents = r32();
+        header.ofsEvents = r32();
+        header.nLights = r32();
+        header.ofsLights = r32();
+        header.nCameras = r32();
+        header.ofsCameras = r32();
+        header.nCameraLookup = r32();
+        header.ofsCameraLookup = r32();
+        header.nRibbonEmitters = r32();
+        header.ofsRibbonEmitters = r32();
+        header.nParticleEmitters = r32();
+        header.ofsParticleEmitters = r32();
+
+        core::Logger::getInstance().info("Vanilla M2 (version ", header.version,
+            "): nVerts=", header.nVertices, " nViews=", header.nViews,
+            " ofsViews=", ofsViews, " nTex=", header.nTextures);
+    } else {
+        // WotLK: read remaining header with simple memcpy (no extra fields)
+        size_t wotlkSize = sizeof(M2Header) - COMMON_PREFIX_SIZE;
+        if (m2Data.size() < COMMON_PREFIX_SIZE + wotlkSize) {
+            core::Logger::getInstance().error("M2 data too small for WotLK header");
+            return model;
+        }
+        std::memcpy(reinterpret_cast<uint8_t*>(&header) + COMMON_PREFIX_SIZE,
+                    m2Data.data() + COMMON_PREFIX_SIZE, wotlkSize);
     }
 
     core::Logger::getInstance().debug("Loading M2 model (version ", header.version, ")");
@@ -494,27 +680,51 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
 
     // Read animation sequences (needed before bones to know sequence count)
     if (header.nAnimations > 0 && header.ofsAnimations > 0) {
-        auto diskSeqs = readArray<M2SequenceDisk>(m2Data, header.ofsAnimations, header.nAnimations);
-        model.sequences.reserve(diskSeqs.size());
+        model.sequences.reserve(header.nAnimations);
 
-        for (const auto& ds : diskSeqs) {
-            M2Sequence seq;
-            seq.id = ds.id;
-            seq.variationIndex = ds.variationIndex;
-            seq.duration = ds.duration;
-            seq.movingSpeed = ds.movingSpeed;
-            seq.flags = ds.flags;
-            seq.frequency = ds.frequency;
-            seq.replayMin = ds.replayMin;
-            seq.replayMax = ds.replayMax;
-            seq.blendTime = ds.blendTime;
-            seq.boundMin = glm::vec3(ds.bounds[0], ds.bounds[1], ds.bounds[2]);
-            seq.boundMax = glm::vec3(ds.bounds[3], ds.bounds[4], ds.bounds[5]);
-            seq.boundRadius = ds.boundRadius;
-            seq.nextAnimation = ds.nextAnimation;
-            seq.aliasNext = ds.aliasNext;
-
-            model.sequences.push_back(seq);
+        if (header.version < 264) {
+            // Vanilla: 68-byte sequence struct (has startTimestamp + endTimestamp)
+            auto diskSeqs = readArray<M2SequenceDiskVanilla>(m2Data, header.ofsAnimations, header.nAnimations);
+            for (const auto& ds : diskSeqs) {
+                M2Sequence seq;
+                seq.id = ds.id;
+                seq.variationIndex = ds.variationIndex;
+                seq.duration = (ds.endTimestamp > ds.startTimestamp)
+                    ? (ds.endTimestamp - ds.startTimestamp) : ds.endTimestamp;
+                seq.movingSpeed = ds.movingSpeed;
+                seq.flags = ds.flags;
+                seq.frequency = ds.frequency;
+                seq.replayMin = ds.replayMin;
+                seq.replayMax = ds.replayMax;
+                seq.blendTime = ds.blendTime;
+                seq.boundMin = glm::vec3(ds.bounds[0], ds.bounds[1], ds.bounds[2]);
+                seq.boundMax = glm::vec3(ds.bounds[3], ds.bounds[4], ds.bounds[5]);
+                seq.boundRadius = ds.boundRadius;
+                seq.nextAnimation = ds.nextAnimation;
+                seq.aliasNext = ds.aliasNext;
+                model.sequences.push_back(seq);
+            }
+        } else {
+            // WotLK: 64-byte sequence struct
+            auto diskSeqs = readArray<M2SequenceDisk>(m2Data, header.ofsAnimations, header.nAnimations);
+            for (const auto& ds : diskSeqs) {
+                M2Sequence seq;
+                seq.id = ds.id;
+                seq.variationIndex = ds.variationIndex;
+                seq.duration = ds.duration;
+                seq.movingSpeed = ds.movingSpeed;
+                seq.flags = ds.flags;
+                seq.frequency = ds.frequency;
+                seq.replayMin = ds.replayMin;
+                seq.replayMax = ds.replayMax;
+                seq.blendTime = ds.blendTime;
+                seq.boundMin = glm::vec3(ds.bounds[0], ds.bounds[1], ds.bounds[2]);
+                seq.boundMax = glm::vec3(ds.bounds[3], ds.bounds[4], ds.bounds[5]);
+                seq.boundRadius = ds.boundRadius;
+                seq.nextAnimation = ds.nextAnimation;
+                seq.aliasNext = ds.aliasNext;
+                model.sequences.push_back(seq);
+            }
         }
 
         core::Logger::getInstance().debug("  Animation sequences: ", model.sequences.size());
@@ -529,8 +739,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
 
     // Read bones with full animation track data
     if (header.nBones > 0 && header.ofsBones > 0) {
-        // Verify we have enough data for the full bone structures
-        uint32_t expectedBoneSize = header.nBones * sizeof(M2BoneDisk);
+        size_t boneStructSize = (header.version < 264) ? sizeof(M2BoneDiskVanilla) : sizeof(M2BoneDisk);
+        uint64_t expectedBoneSize = static_cast<uint64_t>(header.nBones) * boneStructSize;
         if (header.ofsBones + expectedBoneSize > m2Data.size()) {
             core::Logger::getInstance().warning("M2 bone data extends beyond file, loading with fallback");
         }
@@ -546,8 +756,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         }
 
         for (uint32_t boneIdx = 0; boneIdx < header.nBones; boneIdx++) {
-            uint32_t boneOffset = header.ofsBones + boneIdx * sizeof(M2BoneDisk);
-            if (boneOffset + sizeof(M2BoneDisk) > m2Data.size()) {
+            uint32_t boneOffset = header.ofsBones + boneIdx * boneStructSize;
+            if (boneOffset + boneStructSize > m2Data.size()) {
                 // Fallback: create identity bone
                 M2Bone bone;
                 bone.keyBoneId = -1;
@@ -559,19 +769,46 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 continue;
             }
 
-            M2BoneDisk db = readValue<M2BoneDisk>(m2Data, boneOffset);
-
             M2Bone bone;
-            bone.keyBoneId = db.keyBoneId;
-            bone.flags = db.flags;
-            bone.parentBone = db.parentBone;
-            bone.submeshId = db.submeshId;
-            bone.pivot = glm::vec3(db.pivot[0], db.pivot[1], db.pivot[2]);
+            M2TrackDisk translation, rotation, scale;
 
-            // Parse animation tracks (skip sequences with external .anim data)
-            parseAnimTrack(m2Data, db.translation, bone.translation, TrackType::VEC3, seqFlags);
-            parseAnimTrack(m2Data, db.rotation, bone.rotation, TrackType::QUAT_COMPRESSED, seqFlags);
-            parseAnimTrack(m2Data, db.scale, bone.scale, TrackType::VEC3, seqFlags);
+            if (header.version < 264) {
+                // Vanilla: 108-byte bone (no boneNameCRC, 28-byte tracks with ranges)
+                M2BoneDiskVanilla db = readValue<M2BoneDiskVanilla>(m2Data, boneOffset);
+                bone.keyBoneId = db.keyBoneId;
+                bone.flags = db.flags;
+                bone.parentBone = db.parentBone;
+                bone.submeshId = db.submeshId;
+                bone.pivot = glm::vec3(db.pivot[0], db.pivot[1], db.pivot[2]);
+                // Convert vanilla 28-byte tracks to WotLK 20-byte format (drop ranges)
+                translation = {db.translation.interpolationType, db.translation.globalSequence,
+                               db.translation.nTimestamps, db.translation.ofsTimestamps,
+                               db.translation.nKeys, db.translation.ofsKeys};
+                rotation = {db.rotation.interpolationType, db.rotation.globalSequence,
+                            db.rotation.nTimestamps, db.rotation.ofsTimestamps,
+                            db.rotation.nKeys, db.rotation.ofsKeys};
+                scale = {db.scale.interpolationType, db.scale.globalSequence,
+                         db.scale.nTimestamps, db.scale.ofsTimestamps,
+                         db.scale.nKeys, db.scale.ofsKeys};
+            } else {
+                // WotLK: 88-byte bone
+                M2BoneDisk db = readValue<M2BoneDisk>(m2Data, boneOffset);
+                bone.keyBoneId = db.keyBoneId;
+                bone.flags = db.flags;
+                bone.parentBone = db.parentBone;
+                bone.submeshId = db.submeshId;
+                bone.pivot = glm::vec3(db.pivot[0], db.pivot[1], db.pivot[2]);
+                translation = db.translation;
+                rotation = db.rotation;
+                scale = db.scale;
+            }
+
+            // Parse animation tracks (skip for vanilla — flat array format differs from WotLK)
+            if (header.version >= 264) {
+                parseAnimTrack(m2Data, translation, bone.translation, TrackType::VEC3, seqFlags);
+                parseAnimTrack(m2Data, rotation, bone.rotation, TrackType::QUAT_COMPRESSED, seqFlags);
+                parseAnimTrack(m2Data, scale, bone.scale, TrackType::VEC3, seqFlags);
+            }
 
             if (bone.translation.hasData() || bone.rotation.hasData() || bone.scale.hasData()) {
                 bonesWithKeyframes++;
@@ -623,8 +860,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         core::Logger::getInstance().debug("  Materials: ", model.materials.size());
     }
 
-    // Read texture transforms (UV animation data)
-    if (header.nUVAnimation > 0 && header.ofsUVAnimation > 0) {
+    // Read texture transforms (UV animation data) — skip for vanilla (different track format)
+    if (header.nUVAnimation > 0 && header.ofsUVAnimation > 0 && header.version >= 264) {
         // Build per-sequence flags for skipping external .anim data
         std::vector<uint32_t> seqFlags;
         seqFlags.reserve(model.sequences.size());
@@ -672,8 +909,10 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     }
 
     // Parse particle emitters (WotLK M2ParticleOld: 0x1DC = 476 bytes per emitter)
+    // Skip for vanilla — emitter struct size differs
     static constexpr uint32_t EMITTER_STRUCT_SIZE = 0x1DC;
-    if (header.nParticleEmitters > 0 && header.ofsParticleEmitters > 0 &&
+    if (header.version >= 264 &&
+        header.nParticleEmitters > 0 && header.ofsParticleEmitters > 0 &&
         header.nParticleEmitters < 256 &&
         static_cast<size_t>(header.ofsParticleEmitters) +
             static_cast<size_t>(header.nParticleEmitters) * EMITTER_STRUCT_SIZE <= m2Data.size()) {
@@ -756,6 +995,113 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         core::Logger::getInstance().debug("  Collision mesh: ", model.collisionVertices.size(),
             " verts, ", model.collisionIndices.size() / 3, " tris, ",
             model.collisionNormals.size(), " normals");
+    }
+
+    // Load embedded skin for vanilla M2 (version < 264)
+    // Vanilla M2 files contain skin profiles directly, no external .skin files.
+    if (header.version < 264 && header.nViews > 0 && ofsViews > 0 &&
+        ofsViews + sizeof(M2SkinProfileEmbedded) <= m2Data.size()) {
+
+        M2SkinProfileEmbedded skinProfile;
+        std::memcpy(&skinProfile, m2Data.data() + ofsViews, sizeof(skinProfile));
+
+        // Read vertex lookup table (maps skin-local indices to global vertex indices)
+        std::vector<uint16_t> vertexLookup;
+        if (skinProfile.nIndices > 0 && skinProfile.ofsIndices > 0) {
+            vertexLookup = readArray<uint16_t>(m2Data, skinProfile.ofsIndices, skinProfile.nIndices);
+        }
+
+        // Read triangle indices (indices into the vertex lookup table)
+        std::vector<uint16_t> triangles;
+        if (skinProfile.nTriangles > 0 && skinProfile.ofsTriangles > 0) {
+            triangles = readArray<uint16_t>(m2Data, skinProfile.ofsTriangles, skinProfile.nTriangles);
+        }
+
+        // Resolve two-level indirection: triangle index -> lookup table -> global vertex
+        model.indices.clear();
+        model.indices.reserve(triangles.size());
+        for (uint16_t triIdx : triangles) {
+            if (triIdx < vertexLookup.size()) {
+                uint16_t globalIdx = vertexLookup[triIdx];
+                if (globalIdx < model.vertices.size()) {
+                    model.indices.push_back(globalIdx);
+                } else {
+                    model.indices.push_back(0);
+                }
+            } else {
+                model.indices.push_back(0);
+            }
+        }
+
+        // Read submeshes (vanilla: 32 bytes each, no sortCenter/sortRadius)
+        std::vector<M2SkinSubmesh> submeshes;
+        if (skinProfile.nSubmeshes > 0 && skinProfile.ofsSubmeshes > 0) {
+            auto vanillaSubmeshes = readArray<M2SkinSubmeshVanilla>(m2Data,
+                skinProfile.ofsSubmeshes, skinProfile.nSubmeshes);
+            submeshes.reserve(vanillaSubmeshes.size());
+            for (const auto& vs : vanillaSubmeshes) {
+                M2SkinSubmesh sm;
+                sm.id = vs.id;
+                sm.level = vs.level;
+                sm.vertexStart = vs.vertexStart;
+                sm.vertexCount = vs.vertexCount;
+                sm.indexStart = vs.indexStart;
+                sm.indexCount = vs.indexCount;
+                sm.boneCount = vs.boneCount;
+                sm.boneStart = vs.boneStart;
+                sm.boneInfluences = vs.boneInfluences;
+                sm.centerBoneIndex = vs.centerBoneIndex;
+                std::memcpy(sm.centerPosition, vs.centerPosition, 12);
+                std::memset(sm.sortCenterPosition, 0, 12);
+                sm.sortRadius = 0;
+                submeshes.push_back(sm);
+            }
+        }
+
+        // Read batches
+        if (skinProfile.nBatches > 0 && skinProfile.ofsBatches > 0) {
+            auto diskBatches = readArray<M2BatchDisk>(m2Data,
+                skinProfile.ofsBatches, skinProfile.nBatches);
+            model.batches.clear();
+            model.batches.reserve(diskBatches.size());
+
+            for (size_t i = 0; i < diskBatches.size(); i++) {
+                const auto& db = diskBatches[i];
+                M2Batch batch;
+                batch.flags = db.flags;
+                batch.priorityPlane = db.priorityPlane;
+                batch.shader = db.shader;
+                batch.skinSectionIndex = db.skinSectionIndex;
+                batch.colorIndex = db.colorIndex;
+                batch.materialIndex = db.materialIndex;
+                batch.materialLayer = db.materialLayer;
+                batch.textureCount = db.textureCount;
+                batch.textureIndex = db.textureComboIndex;
+                batch.textureUnit = db.textureCoordIndex;
+                batch.transparencyIndex = db.textureWeightIndex;
+                batch.textureAnimIndex = db.textureTransformIndex;
+
+                if (db.skinSectionIndex < submeshes.size()) {
+                    const auto& sm = submeshes[db.skinSectionIndex];
+                    batch.indexStart = sm.indexStart;
+                    batch.indexCount = sm.indexCount;
+                    batch.vertexStart = sm.vertexStart;
+                    batch.vertexCount = sm.vertexCount;
+                    batch.submeshId = sm.id;
+                    batch.submeshLevel = sm.level;
+                } else {
+                    batch.indexStart = 0;
+                    batch.indexCount = model.indices.size();
+                    batch.vertexStart = 0;
+                    batch.vertexCount = model.vertices.size();
+                }
+
+                model.batches.push_back(batch);
+            }
+        }
+
+        core::Logger::getInstance().info("Vanilla M2: embedded skin loaded — ",
+            model.indices.size(), " indices, ", model.batches.size(), " batches");
     }
 
     static int m2LoadLogBudget = 200;

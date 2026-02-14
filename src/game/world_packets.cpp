@@ -59,11 +59,11 @@ network::Packet AuthSessionPacket::build(uint32_t build,
         packet.writeString(upperAccount);
         packet.writeUInt32(0);                 // LoginServerType
         packet.writeUInt32(clientSeed);
-        // Some private cores validate these fields against realmlist/worldserver settings.
-        // Default to 1/1 and realmId (falling back to 1) rather than all zeros.
-        packet.writeUInt32(1);                 // RegionID
-        packet.writeUInt32(1);                 // BattlegroupID
-        packet.writeUInt32(realmId ? realmId : 1);  // RealmID
+        // AzerothCore ignores these fields; other cores may validate them.
+        // Use 0 for maximum compatibility.
+        packet.writeUInt32(0);                 // RegionID
+        packet.writeUInt32(0);                 // BattlegroupID
+        packet.writeUInt32(realmId);           // RealmID
         LOG_DEBUG("  Realm ID: ", realmId);
         packet.writeUInt32(0);                 // DOS response (uint64)
         packet.writeUInt32(0);
@@ -148,10 +148,36 @@ std::vector<uint8_t> AuthSessionPacket::computeAuthHash(
     // Session key (40 bytes)
     hashInput.insert(hashInput.end(), sessionKey.begin(), sessionKey.end());
 
-    LOG_DEBUG("Auth hash input: ", hashInput.size(), " bytes");
+    // Diagnostic: dump auth hash inputs for debugging AUTH_REJECT
+    {
+        auto toHex = [](const uint8_t* data, size_t len) {
+            std::string s;
+            for (size_t i = 0; i < len; ++i) {
+                char buf[4]; snprintf(buf, sizeof(buf), "%02x", data[i]); s += buf;
+            }
+            return s;
+        };
+        LOG_INFO("AUTH HASH: account='", accountName, "' clientSeed=0x", std::hex, clientSeed,
+                 " serverSeed=0x", serverSeed, std::dec);
+        LOG_INFO("AUTH HASH: sessionKey=", toHex(sessionKey.data(), sessionKey.size()));
+        LOG_INFO("AUTH HASH: input(", hashInput.size(), ")=", toHex(hashInput.data(), hashInput.size()));
+    }
 
     // Compute SHA1 hash
-    return auth::Crypto::sha1(hashInput);
+    auto result = auth::Crypto::sha1(hashInput);
+
+    {
+        auto toHex = [](const uint8_t* data, size_t len) {
+            std::string s;
+            for (size_t i = 0; i < len; ++i) {
+                char buf[4]; snprintf(buf, sizeof(buf), "%02x", data[i]); s += buf;
+            }
+            return s;
+        };
+        LOG_INFO("AUTH HASH: digest=", toHex(result.data(), result.size()));
+    }
+
+    return result;
 }
 
 bool AuthChallengeParser::parse(network::Packet& packet, AuthChallengeData& data) {

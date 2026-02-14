@@ -96,6 +96,7 @@ void AuthScreen::selectServerProfile(int index) {
             for (int i = 0; i < static_cast<int>(profiles.size()); ++i) {
                 if (profiles[i].id == s.expansionId) { expansionIndex = i; break; }
             }
+            core::Application::getInstance().reloadExpansionData();
         }
     }
 }
@@ -311,6 +312,7 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
                 if (ImGui::Selectable(label.c_str(), selected)) {
                     expansionIndex = i;
                     registry->setActive(profiles[i].id);
+                    core::Application::getInstance().reloadExpansionData();
                 }
                 if (selected) ImGui::SetItemDefaultFocus();
             }

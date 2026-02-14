@@ -131,6 +131,11 @@ public:
      */
     void clearCache();
 
+    /**
+     * Clear only DBC cache (forces reload on next loadDBC call)
+     */
+    void clearDBCCache();
+
 private:
     bool initialized = false;
     std::string dataPath;

@@ -1,4 +1,5 @@
 #include "game/warden_crypto.hpp"
+#include "auth/crypto.hpp"
 #include "core/logger.hpp"
 #include <cstring>
 #include <algorithm>
@@ -6,63 +7,107 @@
 namespace wowee {
 namespace game {
 
-// Warden module keys for WoW 3.3.5a (from client analysis)
-// These are the standard keys used by most 3.3.5a servers
-static const uint8_t WARDEN_MODULE_KEY[16] = {
-    0xC5, 0x35, 0xB2, 0x1E, 0xF8, 0xE7, 0x9F, 0x4B,
-    0x91, 0xB6, 0xD1, 0x34, 0xA7, 0x2F, 0x58, 0x8C
-};
-
 WardenCrypto::WardenCrypto()
     : initialized_(false)
-    , inputRC4_i_(0)
-    , inputRC4_j_(0)
-    , outputRC4_i_(0)
-    , outputRC4_j_(0) {
+    , decryptRC4_i_(0)
+    , decryptRC4_j_(0)
+    , encryptRC4_i_(0)
+    , encryptRC4_j_(0) {
 }
 
 WardenCrypto::~WardenCrypto() {
 }
 
-bool WardenCrypto::initialize(const std::vector<uint8_t>& moduleData) {
-    if (moduleData.empty()) {
-        LOG_ERROR("Warden: Cannot initialize with empty module data");
+void WardenCrypto::sha1RandxGenerate(const std::vector<uint8_t>& seed,
+                                      uint8_t* outputEncryptKey,
+                                      uint8_t* outputDecryptKey) {
+    // SHA1Randx / WardenKeyGenerator algorithm (from MaNGOS/VMaNGOS)
+    // Split the 40-byte session key in half
+    size_t half = seed.size() / 2;
+
+    // o1 = SHA1(first half of session key)
+    std::vector<uint8_t> firstHalf(seed.begin(), seed.begin() + half);
+    auto o1 = auth::Crypto::sha1(firstHalf);
+
+    // o2 = SHA1(second half of session key)
+    std::vector<uint8_t> secondHalf(seed.begin() + half, seed.end());
+    auto o2 = auth::Crypto::sha1(secondHalf);
+
+    // o0 = 20 zero bytes initially
+    std::vector<uint8_t> o0(20, 0);
+
+    uint32_t taken = 20; // Force FillUp on first Generate
+
+    // Lambda: FillUp - compute o0 = SHA1(o1 || o0 || o2)
+    auto fillUp = [&]() {
+        std::vector<uint8_t> combined;
+        combined.reserve(60);
+        combined.insert(combined.end(), o1.begin(), o1.end());
+        combined.insert(combined.end(), o0.begin(), o0.end());
+        combined.insert(combined.end(), o2.begin(), o2.end());
+        o0 = auth::Crypto::sha1(combined);
+        taken = 0;
+    };
+
+    // Generate first 16 bytes → encrypt key (client→server)
+    for (int i = 0; i < 16; ++i) {
+        if (taken == 20) fillUp();
+        outputEncryptKey[i] = o0[taken++];
+    }
+
+    // Generate next 16 bytes → decrypt key (server→client)
+    for (int i = 0; i < 16; ++i) {
+        if (taken == 20) fillUp();
+        outputDecryptKey[i] = o0[taken++];
+    }
+}
+
+bool WardenCrypto::initFromSessionKey(const std::vector<uint8_t>& sessionKey) {
+    if (sessionKey.size() != 40) {
+        LOG_ERROR("Warden: Session key must be 40 bytes, got ", sessionKey.size());
         return false;
     }
 
-    LOG_INFO("Warden: Initializing crypto with ", moduleData.size(), " byte module");
+    uint8_t encryptKey[16];
+    uint8_t decryptKey[16];
+    sha1RandxGenerate(sessionKey, encryptKey, decryptKey);
 
-    // Warden 3.3.5a module format (typically):
-    // [1 byte opcode][16 bytes seed/key][remaining bytes = encrypted module data]
-
-    if (moduleData.size() < 17) {
-        LOG_WARNING("Warden: Module too small (", moduleData.size(), " bytes), using default keys");
-        // Use default keys
-        inputKey_.assign(WARDEN_MODULE_KEY, WARDEN_MODULE_KEY + 16);
-        outputKey_.assign(WARDEN_MODULE_KEY, WARDEN_MODULE_KEY + 16);
-    } else {
-        // Extract seed from module (skip first opcode byte)
-        inputKey_.assign(moduleData.begin() + 1, moduleData.begin() + 17);
-        outputKey_ = inputKey_;
-
-        // XOR with module key for output
-        for (size_t i = 0; i < 16; ++i) {
-            outputKey_[i] ^= WARDEN_MODULE_KEY[i];
+    // Log derived keys
+    {
+        std::string hex;
+        for (int i = 0; i < 16; ++i) {
+            char b[4]; snprintf(b, sizeof(b), "%02x ", encryptKey[i]); hex += b;
         }
-
-        LOG_INFO("Warden: Extracted 16-byte seed from module");
+        LOG_INFO("Warden: Encrypt key (C→S): ", hex);
+        hex.clear();
+        for (int i = 0; i < 16; ++i) {
+            char b[4]; snprintf(b, sizeof(b), "%02x ", decryptKey[i]); hex += b;
+        }
+        LOG_INFO("Warden: Decrypt key (S→C): ", hex);
     }
 
     // Initialize RC4 ciphers
-    inputRC4State_.resize(256);
-    outputRC4State_.resize(256);
+    std::vector<uint8_t> ek(encryptKey, encryptKey + 16);
+    std::vector<uint8_t> dk(decryptKey, decryptKey + 16);
 
-    initRC4(inputKey_, inputRC4State_, inputRC4_i_, inputRC4_j_);
-    initRC4(outputKey_, outputRC4State_, outputRC4_i_, outputRC4_j_);
+    encryptRC4State_.resize(256);
+    decryptRC4State_.resize(256);
+
+    initRC4(ek, encryptRC4State_, encryptRC4_i_, encryptRC4_j_);
+    initRC4(dk, decryptRC4State_, decryptRC4_i_, decryptRC4_j_);
 
     initialized_ = true;
-    LOG_INFO("Warden: Crypto initialized successfully");
+    LOG_INFO("Warden: Crypto initialized from session key");
     return true;
+}
+
+void WardenCrypto::replaceKeys(const std::vector<uint8_t>& newEncryptKey,
+                                const std::vector<uint8_t>& newDecryptKey) {
+    encryptRC4State_.resize(256);
+    decryptRC4State_.resize(256);
+    initRC4(newEncryptKey, encryptRC4State_, encryptRC4_i_, encryptRC4_j_);
+    initRC4(newDecryptKey, decryptRC4State_, decryptRC4_i_, decryptRC4_j_);
+    LOG_INFO("Warden: RC4 keys replaced (module-specific keys)");
 }
 
 std::vector<uint8_t> WardenCrypto::decrypt(const std::vector<uint8_t>& data) {
@@ -73,7 +118,7 @@ std::vector<uint8_t> WardenCrypto::decrypt(const std::vector<uint8_t>& data) {
 
     std::vector<uint8_t> result(data.size());
     processRC4(data.data(), result.data(), data.size(),
-               inputRC4State_, inputRC4_i_, inputRC4_j_);
+               decryptRC4State_, decryptRC4_i_, decryptRC4_j_);
     return result;
 }
 
@@ -85,19 +130,17 @@ std::vector<uint8_t> WardenCrypto::encrypt(const std::vector<uint8_t>& data) {
 
     std::vector<uint8_t> result(data.size());
     processRC4(data.data(), result.data(), data.size(),
-               outputRC4State_, outputRC4_i_, outputRC4_j_);
+               encryptRC4State_, encryptRC4_i_, encryptRC4_j_);
     return result;
 }
 
 void WardenCrypto::initRC4(const std::vector<uint8_t>& key,
                             std::vector<uint8_t>& state,
                             uint8_t& i, uint8_t& j) {
-    // Initialize permutation
     for (int idx = 0; idx < 256; ++idx) {
         state[idx] = static_cast<uint8_t>(idx);
     }
 
-    // Key scheduling algorithm (KSA)
     j = 0;
     for (int idx = 0; idx < 256; ++idx) {
         j = (j + state[idx] + key[idx % key.size()]) & 0xFF;

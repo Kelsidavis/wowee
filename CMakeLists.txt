@@ -95,6 +95,7 @@ set(WOWEE_SOURCES
     src/auth/big_num.cpp
     src/auth/crypto.cpp
     src/auth/rc4.cpp
+    src/auth/vanilla_crypt.cpp
 
     # Game
     src/game/expansion_profile.cpp

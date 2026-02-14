@@ -1214,6 +1214,19 @@ private:
     std::unique_ptr<WardenCrypto> wardenCrypto_;
     std::unique_ptr<WardenModuleManager> wardenModuleManager_;
 
+    // Warden module download state
+    enum class WardenState {
+        WAIT_MODULE_USE,     // Waiting for first SMSG (MODULE_USE)
+        WAIT_MODULE_CACHE,   // Sent MODULE_MISSING, receiving module chunks
+        WAIT_HASH_REQUEST,   // Module received, waiting for HASH_REQUEST
+        WAIT_CHECKS,         // Hash sent, waiting for check requests
+    };
+    WardenState wardenState_ = WardenState::WAIT_MODULE_USE;
+    std::vector<uint8_t> wardenModuleHash_;    // 16 bytes MD5
+    std::vector<uint8_t> wardenModuleKey_;     // 16 bytes RC4
+    uint32_t wardenModuleSize_ = 0;
+    std::vector<uint8_t> wardenModuleData_;    // Downloaded module chunks
+
     // ---- XP tracking ----
     uint32_t playerXp_ = 0;
     uint32_t playerNextLevelXp_ = 0;

@@ -26,7 +26,7 @@ struct AuthChallengeData {
     uint32_t serverSeed;    // Random seed from server
     // Note: 3.3.5a has additional data after this
 
-    bool isValid() const { return unknown1 != 0; }
+    bool isValid() const { return true; }
 };
 
 /**

@@ -148,6 +148,7 @@ bool Application::initialize() {
         if (profile) {
             std::string opcodesPath = profile->dataPath + "/opcodes.json";
             if (!gameHandler->getOpcodeTable().loadFromJson(opcodesPath)) {
+                gameHandler->getOpcodeTable().loadWotlkDefaults();
                 LOG_INFO("Using built-in WotLK opcode defaults");
             }
             game::setActiveOpcodeTable(&gameHandler->getOpcodeTable());
@@ -155,6 +156,7 @@ bool Application::initialize() {
             // Load expansion-specific update field table
             std::string updateFieldsPath = profile->dataPath + "/update_fields.json";
             if (!gameHandler->getUpdateFieldTable().loadFromJson(updateFieldsPath)) {
+                gameHandler->getUpdateFieldTable().loadWotlkDefaults();
                 LOG_INFO("Using built-in WotLK update field defaults");
             }
             game::setActiveUpdateFieldTable(&gameHandler->getUpdateFieldTable());
@@ -455,6 +457,42 @@ void Application::setState(AppState newState) {
         case AppState::DISCONNECTED:
             // Back to auth
             break;
+    }
+}
+
+void Application::reloadExpansionData() {
+    if (!expansionRegistry_ || !gameHandler) return;
+    auto* profile = expansionRegistry_->getActive();
+    if (!profile) return;
+
+    LOG_INFO("Reloading expansion data for: ", profile->name);
+
+    std::string opcodesPath = profile->dataPath + "/opcodes.json";
+    if (!gameHandler->getOpcodeTable().loadFromJson(opcodesPath)) {
+        gameHandler->getOpcodeTable().loadWotlkDefaults();
+    }
+    game::setActiveOpcodeTable(&gameHandler->getOpcodeTable());
+
+    std::string updateFieldsPath = profile->dataPath + "/update_fields.json";
+    if (!gameHandler->getUpdateFieldTable().loadFromJson(updateFieldsPath)) {
+        gameHandler->getUpdateFieldTable().loadWotlkDefaults();
+    }
+    game::setActiveUpdateFieldTable(&gameHandler->getUpdateFieldTable());
+
+    gameHandler->setPacketParsers(game::createPacketParsers(profile->id));
+
+    if (dbcLayout_) {
+        std::string dbcLayoutsPath = profile->dataPath + "/dbc_layouts.json";
+        if (!dbcLayout_->loadFromJson(dbcLayoutsPath)) {
+            dbcLayout_->loadWotlkDefaults();
+        }
+        pipeline::setActiveDBCLayout(dbcLayout_.get());
+    }
+
+    // Update expansion data path for CSV DBC lookups and clear DBC cache
+    if (assetManager && !profile->dataPath.empty()) {
+        assetManager->setExpansionDataPath(profile->dataPath);
+        assetManager->clearDBCCache();
     }
 }
 
@@ -908,7 +946,7 @@ void Application::setupUICallbacks() {
         uint32_t clientBuild = 12340; // default WotLK
         if (expansionRegistry_) {
             auto* profile = expansionRegistry_->getActive();
-            if (profile) clientBuild = profile->build;
+            if (profile) clientBuild = profile->worldBuild;
         }
         if (gameHandler->connect(host, port, sessionKey, accountName, clientBuild, realmId)) {
             LOG_INFO("Connected to world server, transitioning to character selection");

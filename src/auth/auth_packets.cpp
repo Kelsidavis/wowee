@@ -25,30 +25,26 @@ network::Packet LogonChallengePacket::build(const std::string& account, const Cl
     // Payload size
     packet.writeUInt16(payloadSize);
 
-    // Write a 4-byte ASCII field (FourCC-ish): bytes are sent in-order and null-padded.
-    // Auth servers expect literal "x86\\0", "Win\\0", "enUS"/"enGB", etc.
+    // Write a 4-byte FourCC field with reversed string characters.
+    // The auth server reads these as a C-string (stops at first null), then
+    // reverses the string.  So we must send the characters reversed and
+    // null-padded on the right.  E.g. "Win" → bytes ['n','i','W',0x00].
+    // Server reads "niW", reverses → "Win", stores "Win".
     auto writeFourCC = [&packet](const std::string& str) {
         uint8_t buf[4] = {0, 0, 0, 0};
         size_t len = std::min<size_t>(4, str.length());
+        // Write string characters in reverse order, then null-pad
         for (size_t i = 0; i < len; ++i) {
-            buf[i] = static_cast<uint8_t>(str[i]);
+            buf[i] = static_cast<uint8_t>(str[len - 1 - i]);
         }
         for (int i = 0; i < 4; ++i) {
             packet.writeUInt8(buf[i]);
         }
     };
 
-    // Game name (4 bytes, big-endian FourCC — NOT reversed)
-    // "WoW" → "WoW\0" on the wire
-    {
-        uint8_t buf[4] = {0, 0, 0, 0};
-        for (size_t i = 0; i < std::min<size_t>(4, info.game.length()); ++i) {
-            buf[i] = static_cast<uint8_t>(info.game[i]);
-        }
-        for (int i = 0; i < 4; ++i) {
-            packet.writeUInt8(buf[i]);
-        }
-    }
+    // Game name (4 bytes, reversed FourCC)
+    // "WoW" → bytes ['W','o','W',0x00] on the wire
+    writeFourCC(info.game);
 
     // Version (3 bytes)
     packet.writeUInt8(info.majorVersion);
@@ -189,6 +185,7 @@ network::Packet LogonProofPacket::buildLegacy(const std::vector<uint8_t>& A,
         for (int i = 0; i < 20; ++i) packet.writeUInt8(0); // CRC hash
     }
     packet.writeUInt8(0); // number of keys
+    packet.writeUInt8(0); // security flags
     return packet;
 }
 
@@ -292,8 +289,9 @@ network::Packet RealmListPacket::build() {
     return packet;
 }
 
-bool RealmListResponseParser::parse(network::Packet& packet, RealmListResponse& response) {
+bool RealmListResponseParser::parse(network::Packet& packet, RealmListResponse& response, uint8_t protocolVersion) {
     // Note: opcode byte already consumed by handlePacket()
+    const bool isVanilla = (protocolVersion < 8);
 
     // Packet size (2 bytes) - we already know the size, skip it
     uint16_t packetSize = packet.readUInt16();
@@ -302,8 +300,13 @@ bool RealmListResponseParser::parse(network::Packet& packet, RealmListResponse& 
     // Unknown uint32
     packet.readUInt32();
 
-    // Realm count
-    uint16_t realmCount = packet.readUInt16();
+    // Realm count: uint8 for vanilla/classic, uint16 for WotLK+
+    uint16_t realmCount;
+    if (isVanilla) {
+        realmCount = packet.readUInt8();
+    } else {
+        realmCount = packet.readUInt16();
+    }
     LOG_INFO("REALM_LIST response: ", realmCount, " realms");
 
     response.realms.clear();
@@ -312,11 +315,19 @@ bool RealmListResponseParser::parse(network::Packet& packet, RealmListResponse& 
     for (uint16_t i = 0; i < realmCount; ++i) {
         Realm realm;
 
-        // Icon
-        realm.icon = packet.readUInt8();
+        // Icon/type: uint32 for vanilla, uint8 for WotLK
+        if (isVanilla) {
+            realm.icon = static_cast<uint8_t>(packet.readUInt32());
+        } else {
+            realm.icon = packet.readUInt8();
+        }
 
-        // Lock
-        realm.lock = packet.readUInt8();
+        // Lock: not present in vanilla (added in TBC)
+        if (!isVanilla) {
+            realm.lock = packet.readUInt8();
+        } else {
+            realm.lock = 0;
+        }
 
         // Flags
         realm.flags = packet.readUInt8();

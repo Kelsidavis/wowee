@@ -57,6 +57,7 @@ public:
     game::ExpansionRegistry* getExpansionRegistry() { return expansionRegistry_.get(); }
     pipeline::DBCLayout* getDBCLayout() { return dbcLayout_.get(); }
     pipeline::HDPackManager* getHDPackManager() { return hdPackManager_.get(); }
+    void reloadExpansionData(); // Reload DBC layouts, opcodes, etc. after expansion change
 
     // Singleton access
     static Application& getInstance() { return *instance; }

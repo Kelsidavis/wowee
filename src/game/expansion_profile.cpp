@@ -165,6 +165,7 @@ bool ExpansionRegistry::loadProfile(const std::string& jsonPath, const std::stri
     }
 
     p.build = static_cast<uint16_t>(jsonInt(json, "build"));
+    p.worldBuild = static_cast<uint16_t>(jsonInt(json, "worldBuild", p.build));
     p.protocolVersion = static_cast<uint8_t>(jsonInt(json, "protocolVersion"));
     // Optional client header fields (LOGON_CHALLENGE)
     {

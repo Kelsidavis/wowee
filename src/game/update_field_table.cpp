@@ -95,6 +95,7 @@ bool UpdateFieldTable::loadFromJson(const std::string& path) {
 
     std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
+    auto savedFieldMap = fieldMap_;
     fieldMap_.clear();
     size_t loaded = 0;
     size_t pos = 0;
@@ -139,8 +140,14 @@ bool UpdateFieldTable::loadFromJson(const std::string& path) {
         pos = valEnd + 1;
     }
 
+    if (loaded == 0) {
+        LOG_WARNING("UpdateFieldTable: no fields loaded from ", path, ", restoring previous table");
+        fieldMap_ = std::move(savedFieldMap);
+        return false;
+    }
+
     LOG_INFO("UpdateFieldTable: loaded ", loaded, " fields from ", path);
-    return loaded > 0;
+    return true;
 }
 
 uint16_t UpdateFieldTable::index(UF field) const {

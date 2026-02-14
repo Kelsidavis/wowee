@@ -396,6 +396,12 @@ std::vector<uint8_t> AssetManager::readFileOptional(const std::string& path) con
     return readFile(path);
 }
 
+void AssetManager::clearDBCCache() {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    dbcCache.clear();
+    LOG_INFO("Cleared DBC cache");
+}
+
 void AssetManager::clearCache() {
     std::lock_guard<std::mutex> lock(cacheMutex);
     dbcCache.clear();

@@ -220,8 +220,14 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
         }
     }
 
+    LOG_INFO("CharPreview tex lookup: bodySkin=", bodySkinPath_, " faceLower=", faceLowerPath,
+        " faceUpper=", faceUpperPath, " hairScalp=", hairScalpPath,
+        " underwear=", underwearPaths.size());
+
     // Assign texture filenames on model before GPU upload
-    for (auto& tex : model.textures) {
+    for (size_t ti = 0; ti < model.textures.size(); ti++) {
+        auto& tex = model.textures[ti];
+        LOG_INFO("  model.textures[", ti, "]: type=", tex.type, " filename=", tex.filename);
         if (tex.type == 1 && tex.filename.empty() && !bodySkinPath_.empty()) {
             tex.filename = bodySkinPath_;
         } else if (tex.type == 6 && tex.filename.empty() && !hairScalpPath.empty()) {
@@ -250,6 +256,8 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
         LOG_WARNING("CharacterPreview: failed to load model to GPU");
         return false;
     }
+    LOG_INFO("CharPreview: model loaded to GPU, textureLookup size=", model.textureLookup.size(),
+        " materials=", model.materials.size(), " batches=", model.batches.size());
 
     // Composite body skin + face + underwear overlays
     if (!bodySkinPath_.empty()) {
@@ -311,8 +319,8 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
 
     // Set default geosets (naked character)
     std::unordered_set<uint16_t> activeGeosets;
-    // Body parts (group 0: IDs 0-18)
-    for (uint16_t i = 0; i <= 18; i++) {
+    // Body parts (group 0: IDs 0-99, vanilla models use up to 27)
+    for (uint16_t i = 0; i <= 99; i++) {
         activeGeosets.insert(i);
     }
     // Hair style geoset: group 1 = 100 + variation + 1
@@ -393,7 +401,7 @@ bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& eq
 
     // --- Geosets ---
     std::unordered_set<uint16_t> geosets;
-    for (uint16_t i = 0; i <= 18; i++) geosets.insert(i);
+    for (uint16_t i = 0; i <= 99; i++) geosets.insert(i);
     geosets.insert(static_cast<uint16_t>(100 + hairStyle_ + 1));    // Hair style
     geosets.insert(static_cast<uint16_t>(200 + facialHair_ + 1));  // Facial hair
     geosets.insert(701);   // Ears
