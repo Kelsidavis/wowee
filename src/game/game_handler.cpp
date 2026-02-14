@@ -1558,14 +1558,10 @@ void GameHandler::handleCharEnum(network::Packet& packet) {
     LOG_INFO("Handling SMSG_CHAR_ENUM");
 
     CharEnumResponse response;
-    bool parsed = false;
-    if (build <= 6005) {
-        // Vanilla 1.12.x format (different equipment layout, no customization flag)
-        ClassicPacketParsers classicParser;
-        parsed = classicParser.parseCharEnum(packet, response);
-    } else {
-        parsed = CharEnumParser::parse(packet, response);
-    }
+    // IMPORTANT: Do not infer packet formats from numeric build alone.
+    // Turtle WoW uses a "high" build but classic-era world packet formats.
+    bool parsed = packetParsers_ ? packetParsers_->parseCharEnum(packet, response)
+                                 : CharEnumParser::parse(packet, response);
     if (!parsed) {
         fail("Failed to parse SMSG_CHAR_ENUM");
         return;
@@ -2688,6 +2684,87 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
         return;
     }
 
+    auto extractPlayerAppearance = [&](const std::map<uint16_t, uint32_t>& fields,
+                                       uint8_t& outRace,
+                                       uint8_t& outGender,
+                                       uint32_t& outAppearanceBytes,
+                                       uint8_t& outFacial) -> bool {
+        outRace = 0;
+        outGender = 0;
+        outAppearanceBytes = 0;
+        outFacial = 0;
+
+        auto readField = [&](uint16_t idx, uint32_t& out) -> bool {
+            if (idx == 0xFFFF) return false;
+            auto it = fields.find(idx);
+            if (it == fields.end()) return false;
+            out = it->second;
+            return true;
+        };
+
+        uint32_t bytes0 = 0;
+        uint32_t pbytes = 0;
+        uint32_t pbytes2 = 0;
+
+        const uint16_t ufBytes0 = fieldIndex(UF::UNIT_FIELD_BYTES_0);
+        const uint16_t ufPbytes = fieldIndex(UF::PLAYER_BYTES);
+        const uint16_t ufPbytes2 = fieldIndex(UF::PLAYER_BYTES_2);
+
+        bool haveBytes0 = readField(ufBytes0, bytes0);
+        bool havePbytes = readField(ufPbytes, pbytes);
+        bool havePbytes2 = readField(ufPbytes2, pbytes2);
+
+        // Heuristic fallback: Turtle can run with unusual build numbers; if the JSON table is missing,
+        // try to locate plausible packed fields by scanning.
+        if (!haveBytes0) {
+            for (const auto& [idx, v] : fields) {
+                uint8_t race = static_cast<uint8_t>(v & 0xFF);
+                uint8_t cls = static_cast<uint8_t>((v >> 8) & 0xFF);
+                uint8_t gender = static_cast<uint8_t>((v >> 16) & 0xFF);
+                uint8_t power = static_cast<uint8_t>((v >> 24) & 0xFF);
+                if (race >= 1 && race <= 20 &&
+                    cls >= 1 && cls <= 20 &&
+                    gender <= 1 &&
+                    power <= 10) {
+                    bytes0 = v;
+                    haveBytes0 = true;
+                    break;
+                }
+            }
+        }
+        if (!havePbytes) {
+            for (const auto& [idx, v] : fields) {
+                uint8_t skin = static_cast<uint8_t>(v & 0xFF);
+                uint8_t face = static_cast<uint8_t>((v >> 8) & 0xFF);
+                uint8_t hair = static_cast<uint8_t>((v >> 16) & 0xFF);
+                uint8_t color = static_cast<uint8_t>((v >> 24) & 0xFF);
+                if (skin <= 50 && face <= 50 && hair <= 100 && color <= 50) {
+                    pbytes = v;
+                    havePbytes = true;
+                    break;
+                }
+            }
+        }
+        if (!havePbytes2) {
+            for (const auto& [idx, v] : fields) {
+                uint8_t facial = static_cast<uint8_t>(v & 0xFF);
+                if (facial <= 100) {
+                    pbytes2 = v;
+                    havePbytes2 = true;
+                    break;
+                }
+            }
+        }
+
+        if (!haveBytes0 || !havePbytes) return false;
+
+        outRace = static_cast<uint8_t>(bytes0 & 0xFF);
+        outGender = static_cast<uint8_t>((bytes0 >> 16) & 0xFF);
+        outAppearanceBytes = pbytes;
+        outFacial = havePbytes2 ? static_cast<uint8_t>(pbytes2 & 0xFF) : 0;
+        return true;
+    };
+
     // Process out-of-range objects first
     for (uint64_t guid : data.outOfRangeGuids) {
         if (entityManager.hasEntity(guid)) {
@@ -2713,6 +2790,8 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
             if (entity) {
                 if (entity->getType() == ObjectType::UNIT && creatureDespawnCallback_) {
                     creatureDespawnCallback_(guid);
+                } else if (entity->getType() == ObjectType::PLAYER && playerDespawnCallback_) {
+                    playerDespawnCallback_(guid);
                 } else if (entity->getType() == ObjectType::GAMEOBJECT && gameObjectDespawnCallback_) {
                     gameObjectDespawnCallback_(guid);
                 }
@@ -2903,9 +2982,20 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     if (unit->getFactionTemplate() != 0) {
                         unit->setHostile(isHostileFaction(unit->getFactionTemplate()));
                     }
-                    // Trigger creature spawn callback for units/players with displayId
+                // Trigger creature spawn callback for units/players with displayId
                     if ((block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) && unit->getDisplayId() != 0) {
-                        if (creatureSpawnCallback_) {
+                        if (block.objectType == ObjectType::PLAYER && block.guid != playerGuid) {
+                            if (playerSpawnCallback_) {
+                                uint8_t race = 0, gender = 0, facial = 0;
+                                uint32_t appearanceBytes = 0;
+                                // Use the entity's accumulated field state, not just this block's changed fields.
+                                if (extractPlayerAppearance(entity->getFields(), race, gender, appearanceBytes, facial)) {
+                                    playerSpawnCallback_(block.guid, unit->getDisplayId(), race, gender,
+                                                        appearanceBytes, facial,
+                                                        unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
+                                }
+                            }
+                        } else if (creatureSpawnCallback_) {
                             creatureSpawnCallback_(block.guid, unit->getDisplayId(),
                                 unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
                         }
@@ -3238,7 +3328,18 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             displayIdChanged &&
                             unit->getDisplayId() != 0 &&
                             unit->getDisplayId() != oldDisplayId) {
-                            if (creatureSpawnCallback_) {
+                            if (entity->getType() == ObjectType::PLAYER && block.guid != playerGuid) {
+                                if (playerSpawnCallback_) {
+                                    uint8_t race = 0, gender = 0, facial = 0;
+                                    uint32_t appearanceBytes = 0;
+                                    // Use the entity's accumulated field state, not just this block's changed fields.
+                                    if (extractPlayerAppearance(entity->getFields(), race, gender, appearanceBytes, facial)) {
+                                        playerSpawnCallback_(block.guid, unit->getDisplayId(), race, gender,
+                                                            appearanceBytes, facial,
+                                                            unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
+                                    }
+                                }
+                            } else if (creatureSpawnCallback_) {
                                 creatureSpawnCallback_(block.guid, unit->getDisplayId(),
                                     unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
                             }
@@ -5332,14 +5433,11 @@ void GameHandler::handleOtherPlayerMovement(network::Packet& packet) {
     // For classic: moveFlags(u32) + time(u32) + pos(4xf32) + [transport] + [pitch] + fallTime(u32) + [jump] + [splineElev]
     MovementInfo info = {};
     info.flags = packet.readUInt32();
-    // WotLK has uint16 flags2, classic/TBC don't
-    if (build >= 8606) { // TBC+
-        if (build >= 12340) {
-            info.flags2 = packet.readUInt16();
-        } else {
-            info.flags2 = packet.readUInt8();
-        }
-    }
+    // WotLK has u16 flags2, TBC has u8, Classic has none.
+    // Do NOT use build-number thresholds here (Turtle uses classic formats with a high build).
+    uint8_t flags2Size = packetParsers_ ? packetParsers_->movementFlags2Size() : 2;
+    if (flags2Size == 2) info.flags2 = packet.readUInt16();
+    else if (flags2Size == 1) info.flags2 = packet.readUInt8();
     info.time = packet.readUInt32();
     info.x = packet.readFloat();
     info.y = packet.readFloat();

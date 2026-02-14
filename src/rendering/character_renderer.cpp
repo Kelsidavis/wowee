@@ -1291,7 +1291,7 @@ void CharacterRenderer::render(const Camera& camera, const glm::mat4& view, cons
 	                }
 	            }
 
-	            auto resolveBatchTexture = [&](const M2ModelGPU& gm, const pipeline::M2Batch& b) -> GLuint {
+	            auto resolveBatchTexture = [&](const CharacterInstance& inst, const M2ModelGPU& gm, const pipeline::M2Batch& b) -> GLuint {
 	                // A skin batch can reference multiple textures (b.textureCount) starting at b.textureIndex.
 	                // We currently bind only a single texture, so pick the most appropriate one.
 	                //
@@ -1316,6 +1316,10 @@ void CharacterRenderer::render(const Camera& camera, const glm::mat4& view, cons
 	                    if (texSlot >= gm.textureIds.size()) continue;
 
 	                    GLuint texId = gm.textureIds[texSlot];
+                        auto itO = inst.textureSlotOverrides.find(texSlot);
+                        if (itO != inst.textureSlotOverrides.end() && itO->second != 0) {
+                            texId = itO->second;
+                        }
 	                    uint32_t texType = (texSlot < gm.data.textures.size()) ? gm.data.textures[texSlot].type : 0;
 
 	                    if (!hasFirst) {
@@ -1353,7 +1357,7 @@ void CharacterRenderer::render(const Camera& camera, const glm::mat4& view, cons
                         (b.submeshId / 100 != 0) &&
                         instance.activeGeosets.find(b.submeshId) == instance.activeGeosets.end();
 
-	                    GLuint resolvedTex = resolveBatchTexture(gpuModel, b);
+	                    GLuint resolvedTex = resolveBatchTexture(instance, gpuModel, b);
 	                    std::string texInfo = "GL" + std::to_string(resolvedTex);
 
 	                    if (filtered) skipped++; else rendered++;
@@ -1383,7 +1387,7 @@ void CharacterRenderer::render(const Camera& camera, const glm::mat4& view, cons
                 }
 
 	                // Resolve texture for this batch (prefer hair textures for hair geosets).
-	                GLuint texId = resolveBatchTexture(gpuModel, batch);
+	                GLuint texId = resolveBatchTexture(instance, gpuModel, batch);
 
                 // For body parts with white/fallback texture, use skin (type 1) texture
                 // This handles humanoid models where some body parts use different texture slots
@@ -1404,11 +1408,16 @@ void CharacterRenderer::render(const Camera& camera, const glm::mat4& view, cons
                         // Do NOT apply skin composite to hair (type 6) batches
                         if (texType != 6) {
                             for (size_t ti = 0; ti < gpuModel.textureIds.size(); ti++) {
-                                if (gpuModel.textureIds[ti] != whiteTexture && gpuModel.textureIds[ti] != 0) {
+                                GLuint candidate = gpuModel.textureIds[ti];
+                                auto itO = instance.textureSlotOverrides.find(static_cast<uint16_t>(ti));
+                                if (itO != instance.textureSlotOverrides.end() && itO->second != 0) {
+                                    candidate = itO->second;
+                                }
+                                if (candidate != whiteTexture && candidate != 0) {
                                     // Only use type 1 (skin) textures as fallback
                                     if (ti < gpuModel.data.textures.size() &&
                                         (gpuModel.data.textures[ti].type == 1 || gpuModel.data.textures[ti].type == 11)) {
-                                        texId = gpuModel.textureIds[ti];
+                                        texId = candidate;
                                         break;
                                     }
                                 }
@@ -1489,6 +1498,10 @@ void CharacterRenderer::renderShadow(const glm::mat4& lightSpaceMatrix) {
                     uint16_t lookupIdx = gpuModel.data.textureLookup[batch.textureIndex];
                     if (lookupIdx < gpuModel.textureIds.size()) {
                         texId = gpuModel.textureIds[lookupIdx];
+                        auto itO = instance.textureSlotOverrides.find(lookupIdx);
+                        if (itO != instance.textureSlotOverrides.end() && itO->second != 0) {
+                            texId = itO->second;
+                        }
                     }
                 }
 
@@ -1610,6 +1623,20 @@ void CharacterRenderer::setGroupTextureOverride(uint32_t instanceId, uint16_t ge
     auto it = instances.find(instanceId);
     if (it != instances.end()) {
         it->second.groupTextureOverrides[geosetGroup] = textureId;
+    }
+}
+
+void CharacterRenderer::setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, GLuint textureId) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) {
+        it->second.textureSlotOverrides[textureSlot] = textureId;
+    }
+}
+
+void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) {
+        it->second.textureSlotOverrides.erase(textureSlot);
     }
 }
 

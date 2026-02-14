@@ -22,6 +22,10 @@ class PacketParsers {
 public:
     virtual ~PacketParsers() = default;
 
+    // Size of MovementInfo.flags2 in bytes for MSG_MOVE_* payloads.
+    // Classic: none, TBC: u8, WotLK: u16.
+    virtual uint8_t movementFlags2Size() const { return 2; }
+
     // --- Movement ---
 
     /** Parse movement block from SMSG_UPDATE_OBJECT */
@@ -145,6 +149,7 @@ class WotlkPacketParsers : public PacketParsers {
  */
 class TbcPacketParsers : public PacketParsers {
 public:
+    uint8_t movementFlags2Size() const override { return 1; }
     bool parseMovementBlock(network::Packet& packet, UpdateBlock& block) override;
     void writeMovementPayload(network::Packet& packet, const MovementInfo& info) override;
     network::Packet buildMovementPacket(LogicalOpcode opcode,
@@ -171,6 +176,7 @@ public:
  */
 class ClassicPacketParsers : public TbcPacketParsers {
 public:
+    uint8_t movementFlags2Size() const override { return 0; }
     bool parseCharEnum(network::Packet& packet, CharEnumResponse& response) override;
     bool parseMovementBlock(network::Packet& packet, UpdateBlock& block) override;
     void writeMovementPayload(network::Packet& packet, const MovementInfo& info) override;

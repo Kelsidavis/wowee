@@ -590,6 +590,7 @@ void Application::update(float deltaTime) {
             worldTime += std::chrono::duration<float, std::milli>(w2 - w1).count();
 
             auto cq1 = std::chrono::high_resolution_clock::now();
+            processPlayerSpawnQueue();
             // Process deferred online creature spawns (throttled)
             processCreatureSpawnQueue();
             auto cq2 = std::chrono::high_resolution_clock::now();
@@ -1199,9 +1200,27 @@ void Application::setupUICallbacks() {
         pendingCreatureSpawnGuids_.insert(guid);
     });
 
+    // Player spawn callback (online mode) - spawn player models with correct textures
+    gameHandler->setPlayerSpawnCallback([this](uint64_t guid,
+                                              uint32_t /*displayId*/,
+                                              uint8_t raceId,
+                                              uint8_t genderId,
+                                              uint32_t appearanceBytes,
+                                              uint8_t facialFeatures,
+                                              float x, float y, float z, float orientation) {
+        if (playerInstances_.count(guid)) return;
+        if (pendingPlayerSpawnGuids_.count(guid)) return;
+        pendingPlayerSpawns_.push_back({guid, raceId, genderId, appearanceBytes, facialFeatures, x, y, z, orientation});
+        pendingPlayerSpawnGuids_.insert(guid);
+    });
+
     // Creature despawn callback (online mode) - remove creature models
     gameHandler->setCreatureDespawnCallback([this](uint64_t guid) {
         despawnOnlineCreature(guid);
+    });
+
+    gameHandler->setPlayerDespawnCallback([this](uint64_t guid) {
+        despawnOnlinePlayer(guid);
     });
 
     // GameObject spawn callback (online mode) - spawn static models (mailboxes, etc.)
@@ -1309,11 +1328,18 @@ void Application::setupUICallbacks() {
 
     // Creature move callback (online mode) - update creature positions
     gameHandler->setCreatureMoveCallback([this](uint64_t guid, float x, float y, float z, uint32_t durationMs) {
-        auto it = creatureInstances_.find(guid);
-        if (it != creatureInstances_.end() && renderer && renderer->getCharacterRenderer()) {
+        if (!renderer || !renderer->getCharacterRenderer()) return;
+        uint32_t instanceId = 0;
+        auto pit = playerInstances_.find(guid);
+        if (pit != playerInstances_.end()) instanceId = pit->second;
+        else {
+            auto it = creatureInstances_.find(guid);
+            if (it != creatureInstances_.end()) instanceId = it->second;
+        }
+        if (instanceId != 0) {
             glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
             float durationSec = static_cast<float>(durationMs) / 1000.0f;
-            renderer->getCharacterRenderer()->moveInstanceTo(it->second, renderPos, durationSec);
+            renderer->getCharacterRenderer()->moveInstanceTo(instanceId, renderPos, durationSec);
         }
     });
 
@@ -2916,6 +2942,10 @@ bool Application::getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, fl
         instanceId = renderer->getCharacterInstanceId();
     }
     if (instanceId == 0) {
+        auto pit = playerInstances_.find(guid);
+        if (pit != playerInstances_.end()) instanceId = pit->second;
+    }
+    if (instanceId == 0) {
         auto it = creatureInstances_.find(guid);
         if (it != creatureInstances_.end()) instanceId = it->second;
     }
@@ -3488,6 +3518,240 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
              " displayId=", displayId, " at (", x, ", ", y, ", ", z, ")");
 }
 
+void Application::spawnOnlinePlayer(uint64_t guid,
+                                    uint8_t raceId,
+                                    uint8_t genderId,
+                                    uint32_t appearanceBytes,
+                                    uint8_t facialFeatures,
+                                    float x, float y, float z, float orientation) {
+    if (!renderer || !renderer->getCharacterRenderer() || !assetManager || !assetManager->isInitialized()) return;
+    if (playerInstances_.count(guid)) return;
+
+    auto* charRenderer = renderer->getCharacterRenderer();
+
+    // Base geometry model: cache by (race, gender)
+    uint32_t cacheKey = (static_cast<uint32_t>(raceId) << 8) | static_cast<uint32_t>(genderId & 0xFF);
+    uint32_t modelId = 0;
+    auto itCache = playerModelCache_.find(cacheKey);
+    if (itCache != playerModelCache_.end()) {
+        modelId = itCache->second;
+    } else {
+        game::Race race = static_cast<game::Race>(raceId);
+        game::Gender gender = (genderId == 1) ? game::Gender::FEMALE : game::Gender::MALE;
+        std::string m2Path = game::getPlayerModelPath(race, gender);
+        if (m2Path.empty()) {
+            LOG_WARNING("spawnOnlinePlayer: unknown race/gender for guid 0x", std::hex, guid, std::dec,
+                        " race=", (int)raceId, " gender=", (int)genderId);
+            return;
+        }
+
+        // Parse modelDir/baseName for skin/anim loading
+        std::string modelDir;
+        std::string baseName;
+        {
+            size_t slash = m2Path.rfind('\\');
+            if (slash != std::string::npos) {
+                modelDir = m2Path.substr(0, slash + 1);
+                baseName = m2Path.substr(slash + 1);
+            } else {
+                baseName = m2Path;
+            }
+            size_t dot = baseName.rfind('.');
+            if (dot != std::string::npos) baseName = baseName.substr(0, dot);
+        }
+
+        auto m2Data = assetManager->readFile(m2Path);
+        if (m2Data.empty()) {
+            LOG_WARNING("spawnOnlinePlayer: failed to read M2: ", m2Path);
+            return;
+        }
+
+        pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
+        if (!model.isValid() || model.vertices.empty()) {
+            LOG_WARNING("spawnOnlinePlayer: failed to parse M2: ", m2Path);
+            return;
+        }
+
+        // Skin file
+        std::string skinPath = modelDir + baseName + "00.skin";
+        auto skinData = assetManager->readFile(skinPath);
+        if (!skinData.empty()) {
+            pipeline::M2Loader::loadSkin(skinData, model);
+        }
+
+        // Load only core external animations (stand/walk/run) to avoid stalls
+        for (uint32_t si = 0; si < model.sequences.size(); si++) {
+            if (!(model.sequences[si].flags & 0x20)) {
+                uint32_t animId = model.sequences[si].id;
+                if (animId != 0 && animId != 4 && animId != 5) continue;
+                char animFileName[256];
+                snprintf(animFileName, sizeof(animFileName),
+                         "%s%s%04u-%02u.anim",
+                         modelDir.c_str(),
+                         baseName.c_str(),
+                         animId,
+                         model.sequences[si].variationIndex);
+                auto animData = assetManager->readFileOptional(animFileName);
+                if (!animData.empty()) {
+                    pipeline::M2Loader::loadAnimFile(m2Data, animData, si, model);
+                }
+            }
+        }
+
+        modelId = nextPlayerModelId_++;
+        if (!charRenderer->loadModel(model, modelId)) {
+            LOG_WARNING("spawnOnlinePlayer: failed to load model to GPU: ", m2Path);
+            return;
+        }
+
+        playerModelCache_[cacheKey] = modelId;
+    }
+
+    // Determine texture slots once per model
+    if (!playerTextureSlotsByModelId_.count(modelId)) {
+        PlayerTextureSlots slots;
+        if (const auto* md = charRenderer->getModelData(modelId)) {
+            for (size_t ti = 0; ti < md->textures.size(); ti++) {
+                uint32_t t = md->textures[ti].type;
+                if (t == 1 && slots.skin < 0) slots.skin = (int)ti;
+                else if (t == 6 && slots.hair < 0) slots.hair = (int)ti;
+                else if (t == 8 && slots.underwear < 0) slots.underwear = (int)ti;
+            }
+        }
+        playerTextureSlotsByModelId_[modelId] = slots;
+    }
+
+    // Create instance at server position
+    glm::vec3 renderPos = core::coords::canonicalToRender(glm::vec3(x, y, z));
+    float renderYaw = orientation + glm::radians(90.0f);
+    uint32_t instanceId = charRenderer->createInstance(modelId, renderPos, glm::vec3(0.0f, 0.0f, renderYaw), 1.0f);
+    if (instanceId == 0) return;
+
+    // Resolve skin/hair texture paths via CharSections, then apply as per-instance overrides
+    const char* raceFolderName = "Human";
+    switch (static_cast<game::Race>(raceId)) {
+        case game::Race::HUMAN: raceFolderName = "Human"; break;
+        case game::Race::ORC: raceFolderName = "Orc"; break;
+        case game::Race::DWARF: raceFolderName = "Dwarf"; break;
+        case game::Race::NIGHT_ELF: raceFolderName = "NightElf"; break;
+        case game::Race::UNDEAD: raceFolderName = "Scourge"; break;
+        case game::Race::TAUREN: raceFolderName = "Tauren"; break;
+        case game::Race::GNOME: raceFolderName = "Gnome"; break;
+        case game::Race::TROLL: raceFolderName = "Troll"; break;
+        case game::Race::BLOOD_ELF: raceFolderName = "BloodElf"; break;
+        case game::Race::DRAENEI: raceFolderName = "Draenei"; break;
+        default: break;
+    }
+    const char* genderFolder = (genderId == 1) ? "Female" : "Male";
+    std::string raceGender = std::string(raceFolderName) + genderFolder;
+    std::string bodySkinPath = std::string("Character\\") + raceFolderName + "\\" + genderFolder + "\\" + raceGender + "Skin00_00.blp";
+    std::string pelvisPath = std::string("Character\\") + raceFolderName + "\\" + genderFolder + "\\" + raceGender + "NakedPelvisSkin00_00.blp";
+    std::vector<std::string> underwearPaths;
+    std::string hairTexturePath;
+
+    uint8_t skinId = appearanceBytes & 0xFF;
+    uint8_t faceId = (appearanceBytes >> 8) & 0xFF;
+    uint8_t hairStyleId = (appearanceBytes >> 16) & 0xFF;
+    uint8_t hairColorId = (appearanceBytes >> 24) & 0xFF;
+
+    if (auto charSectionsDbc = assetManager->loadDBC("CharSections.dbc"); charSectionsDbc && charSectionsDbc->isLoaded()) {
+        const auto* csL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CharSections") : nullptr;
+        uint32_t targetRaceId = raceId;
+        uint32_t targetSexId = genderId;
+        const uint32_t csTex1 = csL ? (*csL)["Texture1"] : 4;
+
+        bool foundSkin = false;
+        bool foundUnderwear = false;
+        bool foundHair = false;
+        bool foundFaceLower = false;
+        (void)faceId; // face lower not yet applied as separate layer
+
+        for (uint32_t r = 0; r < charSectionsDbc->getRecordCount(); r++) {
+            uint32_t rRace = charSectionsDbc->getUInt32(r, csL ? (*csL)["RaceID"] : 1);
+            uint32_t rSex = charSectionsDbc->getUInt32(r, csL ? (*csL)["SexID"] : 2);
+            uint32_t baseSection = charSectionsDbc->getUInt32(r, csL ? (*csL)["BaseSection"] : 3);
+            uint32_t variationIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 8);
+            uint32_t colorIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 9);
+
+            if (rRace != targetRaceId || rSex != targetSexId) continue;
+
+            if (baseSection == 0 && !foundSkin && colorIndex == skinId) {
+                std::string tex1 = charSectionsDbc->getString(r, csTex1);
+                if (!tex1.empty()) { bodySkinPath = tex1; foundSkin = true; }
+            } else if (baseSection == 3 && !foundHair &&
+                       variationIndex == hairStyleId && colorIndex == hairColorId) {
+                hairTexturePath = charSectionsDbc->getString(r, csTex1);
+                if (!hairTexturePath.empty()) foundHair = true;
+            } else if (baseSection == 4 && !foundUnderwear && colorIndex == skinId) {
+                for (uint32_t f = csTex1; f <= csTex1 + 2; f++) {
+                    std::string tex = charSectionsDbc->getString(r, f);
+                    if (!tex.empty()) underwearPaths.push_back(tex);
+                }
+                foundUnderwear = true;
+            } else if (baseSection == 1 && !foundFaceLower &&
+                       variationIndex == faceId && colorIndex == skinId) {
+                foundFaceLower = true;
+            }
+
+            if (foundSkin && foundUnderwear && foundHair && foundFaceLower) break;
+        }
+    }
+
+    // Composite base skin + underwear overlays (same as local character logic)
+    GLuint compositeTex = 0;
+    if (!underwearPaths.empty()) {
+        std::vector<std::string> layers;
+        layers.push_back(bodySkinPath);
+        for (const auto& up : underwearPaths) layers.push_back(up);
+        compositeTex = charRenderer->compositeTextures(layers);
+    } else {
+        compositeTex = charRenderer->loadTexture(bodySkinPath);
+    }
+
+    GLuint hairTex = 0;
+    if (!hairTexturePath.empty()) {
+        hairTex = charRenderer->loadTexture(hairTexturePath);
+    }
+    GLuint underwearTex = 0;
+    if (!underwearPaths.empty()) underwearTex = charRenderer->loadTexture(underwearPaths[0]);
+    else underwearTex = charRenderer->loadTexture(pelvisPath);
+
+    const PlayerTextureSlots& slots = playerTextureSlotsByModelId_[modelId];
+    if (slots.skin >= 0 && compositeTex != 0) {
+        charRenderer->setTextureSlotOverride(instanceId, static_cast<uint16_t>(slots.skin), compositeTex);
+    }
+    if (slots.hair >= 0 && hairTex != 0) {
+        charRenderer->setTextureSlotOverride(instanceId, static_cast<uint16_t>(slots.hair), hairTex);
+    }
+    if (slots.underwear >= 0 && underwearTex != 0) {
+        charRenderer->setTextureSlotOverride(instanceId, static_cast<uint16_t>(slots.underwear), underwearTex);
+    }
+
+    // Geosets: body + hair/facial hair selections
+    std::unordered_set<uint16_t> activeGeosets;
+    for (uint16_t i = 0; i <= 18; i++) activeGeosets.insert(i);
+    activeGeosets.insert(static_cast<uint16_t>(100 + hairStyleId + 1));
+    activeGeosets.insert(static_cast<uint16_t>(200 + facialFeatures + 1));
+    activeGeosets.insert(301);
+    activeGeosets.insert(401);
+    activeGeosets.insert(501);
+    activeGeosets.insert(701);
+    activeGeosets.insert(1301);
+    activeGeosets.insert(1501);
+    charRenderer->setActiveGeosets(instanceId, activeGeosets);
+
+    charRenderer->playAnimation(instanceId, 0, true);
+    playerInstances_[guid] = instanceId;
+}
+
+void Application::despawnOnlinePlayer(uint64_t guid) {
+    if (!renderer || !renderer->getCharacterRenderer()) return;
+    auto it = playerInstances_.find(guid);
+    if (it == playerInstances_.end()) return;
+    renderer->getCharacterRenderer()->removeInstance(it->second);
+    playerInstances_.erase(it);
+}
+
 void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation) {
     if (!renderer || !assetManager) return;
 
@@ -3818,6 +4082,27 @@ void Application::processCreatureSpawnQueue() {
     }
 }
 
+void Application::processPlayerSpawnQueue() {
+    if (pendingPlayerSpawns_.empty()) return;
+    if (!assetManager || !assetManager->isInitialized()) return;
+
+    int processed = 0;
+    while (!pendingPlayerSpawns_.empty() && processed < MAX_SPAWNS_PER_FRAME) {
+        PendingPlayerSpawn s = pendingPlayerSpawns_.front();
+        pendingPlayerSpawns_.erase(pendingPlayerSpawns_.begin());
+        pendingPlayerSpawnGuids_.erase(s.guid);
+
+        // Skip if already spawned (could have been spawned by a previous update this frame)
+        if (playerInstances_.count(s.guid)) {
+            processed++;
+            continue;
+        }
+
+        spawnOnlinePlayer(s.guid, s.raceId, s.genderId, s.appearanceBytes, s.facialFeatures, s.x, s.y, s.z, s.orientation);
+        processed++;
+    }
+}
+
 void Application::processGameObjectSpawnQueue() {
     if (pendingGameObjectSpawns_.empty()) return;
 
@@ -4083,6 +4368,13 @@ void Application::processPendingMount() {
 }
 
 void Application::despawnOnlineCreature(uint64_t guid) {
+    // If this guid is a PLAYER, it will be tracked in playerInstances_.
+    // Route to the correct despawn path so we don't leak instances.
+    if (playerInstances_.count(guid)) {
+        despawnOnlinePlayer(guid);
+        return;
+    }
+
     pendingCreatureSpawnGuids_.erase(guid);
     creatureSpawnRetryCounts_.erase(guid);
     creaturePermanentFailureGuids_.erase(guid);

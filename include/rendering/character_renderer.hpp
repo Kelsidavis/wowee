@@ -66,6 +66,8 @@ public:
     const pipeline::M2Model* getModelData(uint32_t modelId) const;
     void setActiveGeosets(uint32_t instanceId, const std::unordered_set<uint16_t>& geosets);
     void setGroupTextureOverride(uint32_t instanceId, uint16_t geosetGroup, GLuint textureId);
+    void setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, GLuint textureId);
+    void clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot);
     void setInstanceVisible(uint32_t instanceId, bool visible);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
@@ -150,6 +152,9 @@ private:
 
         // Per-geoset-group texture overrides (group → GL texture ID)
         std::unordered_map<uint16_t, GLuint> groupTextureOverrides;
+
+        // Per-texture-slot overrides (slot → GL texture ID)
+        std::unordered_map<uint16_t, GLuint> textureSlotOverrides;
 
         // Weapon attachments (weapons parented to this instance's bones)
         std::vector<WeaponAttachment> weaponAttachments;

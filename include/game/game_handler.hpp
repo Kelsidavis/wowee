@@ -480,6 +480,20 @@ public:
     using CreatureDespawnCallback = std::function<void(uint64_t guid)>;
     void setCreatureDespawnCallback(CreatureDespawnCallback cb) { creatureDespawnCallback_ = std::move(cb); }
 
+    // Player spawn callback (online mode - triggered when a player enters view).
+    // Players need appearance data so the renderer can build the right body/hair textures.
+    using PlayerSpawnCallback = std::function<void(uint64_t guid,
+                                                   uint32_t displayId,
+                                                   uint8_t raceId,
+                                                   uint8_t genderId,
+                                                   uint32_t appearanceBytes,
+                                                   uint8_t facialFeatures,
+                                                   float x, float y, float z, float orientation)>;
+    void setPlayerSpawnCallback(PlayerSpawnCallback cb) { playerSpawnCallback_ = std::move(cb); }
+
+    using PlayerDespawnCallback = std::function<void(uint64_t guid)>;
+    void setPlayerDespawnCallback(PlayerDespawnCallback cb) { playerDespawnCallback_ = std::move(cb); }
+
     // GameObject spawn callback (online mode - triggered when gameobject enters view)
     // Parameters: guid, entry, displayId, x, y, z (canonical), orientation
     using GameObjectSpawnCallback = std::function<void(uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation)>;
@@ -1065,6 +1079,8 @@ private:
     BindPointCallback bindPointCallback_;
     CreatureSpawnCallback creatureSpawnCallback_;
     CreatureDespawnCallback creatureDespawnCallback_;
+    PlayerSpawnCallback playerSpawnCallback_;
+    PlayerDespawnCallback playerDespawnCallback_;
     CreatureMoveCallback creatureMoveCallback_;
     TransportMoveCallback transportMoveCallback_;
     TransportSpawnCallback transportSpawnCallback_;

@@ -90,6 +90,13 @@ private:
     void buildFactionHostilityMap(uint8_t playerRace);
     void spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation);
     void despawnOnlineCreature(uint64_t guid);
+    void spawnOnlinePlayer(uint64_t guid,
+                           uint8_t raceId,
+                           uint8_t genderId,
+                           uint32_t appearanceBytes,
+                           uint8_t facialFeatures,
+                           float x, float y, float z, float orientation);
+    void despawnOnlinePlayer(uint64_t guid);
     void buildCreatureDisplayLookups();
     std::string getModelPathForDisplayId(uint32_t displayId) const;
     void spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation);
@@ -218,6 +225,25 @@ private:
     std::unordered_set<uint64_t> pendingCreatureSpawnGuids_;
     std::unordered_map<uint64_t, uint16_t> creatureSpawnRetryCounts_;
     std::unordered_set<uint32_t> nonRenderableCreatureDisplayIds_;
+
+    // Online player instances (separate from creatures so we can apply per-player skin/hair textures).
+    std::unordered_map<uint64_t, uint32_t> playerInstances_;  // guid → render instanceId
+    // Cache base player model geometry by (raceId, genderId)
+    std::unordered_map<uint32_t, uint32_t> playerModelCache_; // key=(race<<8)|gender → modelId
+    struct PlayerTextureSlots { int skin = -1; int hair = -1; int underwear = -1; };
+    std::unordered_map<uint32_t, PlayerTextureSlots> playerTextureSlotsByModelId_;
+    uint32_t nextPlayerModelId_ = 60000;
+    struct PendingPlayerSpawn {
+        uint64_t guid;
+        uint8_t raceId;
+        uint8_t genderId;
+        uint32_t appearanceBytes;
+        uint8_t facialFeatures;
+        float x, y, z, orientation;
+    };
+    std::vector<PendingPlayerSpawn> pendingPlayerSpawns_;
+    std::unordered_set<uint64_t> pendingPlayerSpawnGuids_;
+    void processPlayerSpawnQueue();
     std::unordered_set<uint64_t> creaturePermanentFailureGuids_;
     void processCreatureSpawnQueue();
 

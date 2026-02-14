@@ -18,6 +18,7 @@ enum class UF : uint16_t {
     // Unit fields
     UNIT_FIELD_TARGET_LO,
     UNIT_FIELD_TARGET_HI,
+    UNIT_FIELD_BYTES_0,
     UNIT_FIELD_HEALTH,
     UNIT_FIELD_POWER1,
     UNIT_FIELD_MAXHEALTH,
@@ -34,6 +35,8 @@ enum class UF : uint16_t {
 
     // Player fields
     PLAYER_FLAGS,
+    PLAYER_BYTES,
+    PLAYER_BYTES_2,
     PLAYER_XP,
     PLAYER_NEXT_LEVEL_XP,
     PLAYER_FIELD_COINAGE,
