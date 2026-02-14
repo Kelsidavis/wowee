@@ -135,10 +135,10 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
 
     auto model = pipeline::M2Loader::load(m2Data);
 
-    // Load skin file
+    // Load skin file (only for WotLK M2s - vanilla has embedded skin)
     std::string skinPath = modelDir + baseName + "00.skin";
     auto skinData = assetManager_->readFile(skinPath);
-    if (!skinData.empty()) {
+    if (!skinData.empty() && model.version >= 264) {
         pipeline::M2Loader::loadSkin(skinData, model);
     }
 

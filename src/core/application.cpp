@@ -1790,7 +1790,7 @@ void Application::spawnPlayerCharacter() {
             // Load skin file for submesh/batch data
             std::string skinPath = modelDir + baseName + "00.skin";
             auto skinData = assetManager->readFile(skinPath);
-            if (!skinData.empty()) {
+            if (!skinData.empty() && model.version >= 264) {
                 pipeline::M2Loader::loadSkin(skinData, model);
             }
 
@@ -2241,7 +2241,7 @@ void Application::loadEquippedWeapons() {
         // Try same directory as m2
         std::string skinDir = m2Path.substr(0, m2Path.rfind('\\') + 1);
         auto skinData = assetManager->readFile(skinDir + skinFile);
-        if (!skinData.empty()) {
+        if (!skinData.empty() && weaponModel.version >= 264) {
             pipeline::M2Loader::loadSkin(skinData, weaponModel);
         }
 
@@ -3039,10 +3039,10 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
             return;
         }
 
-        // Load skin file
+        // Load skin file (only for WotLK M2s - vanilla has embedded skin)
         std::string skinPath = m2Path.substr(0, m2Path.size() - 3) + "00.skin";
         auto skinData = assetManager->readFile(skinPath);
-        if (!skinData.empty()) {
+        if (!skinData.empty() && model.version >= 264) {
             pipeline::M2Loader::loadSkin(skinData, model);
         }
 
@@ -3429,10 +3429,10 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
 
                         if (!helmData.empty()) {
                             auto helmModel = pipeline::M2Loader::load(helmData);
-                            // Load skin
+                            // Load skin (only for WotLK M2s)
                             std::string skinPath = helmPath.substr(0, helmPath.size() - 3) + "00.skin";
                             auto skinData = assetManager->readFile(skinPath);
-                            if (!skinData.empty()) {
+                            if (!skinData.empty() && helmModel.version >= 264) {
                                 pipeline::M2Loader::loadSkin(skinData, helmModel);
                             }
 
@@ -3512,7 +3512,7 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                                 auto helmModel = pipeline::M2Loader::load(helmData);
                                 std::string skinPath = helmPath.substr(0, helmPath.size() - 3) + "00.skin";
                                 auto skinData = assetManager->readFile(skinPath);
-                                if (!skinData.empty()) {
+                                if (!skinData.empty() && helmModel.version >= 264) {
                                     pipeline::M2Loader::loadSkin(skinData, helmModel);
                                 }
 
@@ -3607,10 +3607,10 @@ void Application::spawnOnlinePlayer(uint64_t guid,
             return;
         }
 
-        // Skin file
+        // Skin file (only for WotLK M2s - vanilla has embedded skin)
         std::string skinPath = modelDir + baseName + "00.skin";
         auto skinData = assetManager->readFile(skinPath);
-        if (!skinData.empty()) {
+        if (!skinData.empty() && model.version >= 264) {
             pipeline::M2Loader::loadSkin(skinData, model);
         }
 
@@ -4145,7 +4145,7 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t 
                         pipeline::M2Model m2Model = pipeline::M2Loader::load(m2Data);
                         std::string skinPath = doodadTemplate.m2Path.substr(0, doodadTemplate.m2Path.size() - 3) + "00.skin";
                         std::vector<uint8_t> skinData = assetManager->readFile(skinPath);
-                        if (!skinData.empty()) {
+                        if (!skinData.empty() && m2Model.version >= 264) {
                             pipeline::M2Loader::loadSkin(skinData, m2Model);
                         }
                         if (!m2Model.isValid()) continue;
@@ -4217,7 +4217,7 @@ void Application::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t 
 
             std::string skinPath = modelPath.substr(0, modelPath.size() - 3) + "00.skin";
             auto skinData = assetManager->readFile(skinPath);
-            if (!skinData.empty()) {
+            if (!skinData.empty() && model.version >= 264) {
                 pipeline::M2Loader::loadSkin(skinData, model);
             }
 
@@ -4359,10 +4359,10 @@ void Application::processPendingMount() {
             return;
         }
 
-        // Load skin file
+        // Load skin file (only for WotLK M2s - vanilla has embedded skin)
         std::string skinPath = m2Path.substr(0, m2Path.size() - 3) + "00.skin";
         auto skinData = assetManager->readFile(skinPath);
-        if (!skinData.empty()) {
+        if (!skinData.empty() && model.version >= 264) {
             pipeline::M2Loader::loadSkin(skinData, model);
         }
 

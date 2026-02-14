@@ -303,12 +303,12 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                 if (!m2Data.empty()) {
                     pipeline::M2Model m2Model = pipeline::M2Loader::load(m2Data);
 
-                    // Try to load skin file
+                    // Try to load skin file (only for WotLK M2s - vanilla has embedded skin)
                     std::string skinPath = m2Path.substr(0, m2Path.size() - 3) + "00.skin";
                     std::vector<uint8_t> skinData = assetManager->readFile(skinPath);
-                    if (!skinData.empty()) {
+                    if (!skinData.empty() && m2Model.version >= 264) {
                         pipeline::M2Loader::loadSkin(skinData, m2Model);
-                    } else {
+                    } else if (skinData.empty() && m2Model.version >= 264) {
                         skippedSkinNotFound++;
                         LOG_WARNING("M2 skin not found: ", skinPath);
                     }
@@ -447,7 +447,7 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                         pipeline::M2Model m2Model = pipeline::M2Loader::load(m2Data);
                         std::string skinPath = m2Path.substr(0, m2Path.size() - 3) + "00.skin";
                         std::vector<uint8_t> skinData = assetManager->readFile(skinPath);
-                        if (!skinData.empty()) {
+                        if (!skinData.empty() && m2Model.version >= 264) {
                             pipeline::M2Loader::loadSkin(skinData, m2Model);
                         }
                         if (!m2Model.isValid()) continue;
