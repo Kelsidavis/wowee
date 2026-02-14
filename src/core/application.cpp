@@ -3116,7 +3116,57 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                 // Type 6 (hair) needs its own texture from CharSections.dbc
                 if (!extra.bakeName.empty()) {
                     std::string bakePath = "Textures\\BakedNpcTextures\\" + extra.bakeName;
-                    GLuint finalTex = charRenderer->loadTexture(bakePath);
+
+                    // Build equipment texture region layers from NPC equipment display IDs
+                    // (texture-only compositing — no geoset changes to avoid invisibility bugs)
+                    std::vector<std::pair<int, std::string>> npcRegionLayers;
+                    auto npcItemDisplayDbc = assetManager->loadDBC("ItemDisplayInfo.dbc");
+                    if (npcItemDisplayDbc) {
+                        static const char* npcComponentDirs[] = {
+                            "ArmUpperTexture", "ArmLowerTexture", "HandTexture",
+                            "TorsoUpperTexture", "TorsoLowerTexture",
+                            "LegUpperTexture", "LegLowerTexture", "FootTexture",
+                        };
+                        const bool npcIsFemale = (extra.sexId == 1);
+
+                        // Iterate all 11 NPC equipment slots; let DBC lookup filter which have textures
+                        for (int eqSlot = 0; eqSlot < 11; eqSlot++) {
+                            uint32_t did = extra.equipDisplayId[eqSlot];
+                            if (did == 0) continue;
+                            int32_t recIdx = npcItemDisplayDbc->findRecordById(did);
+                            if (recIdx < 0) continue;
+
+                            for (int region = 0; region < 8; region++) {
+                                std::string texName = npcItemDisplayDbc->getString(
+                                    static_cast<uint32_t>(recIdx), 14 + region);
+                                if (texName.empty())
+                                    texName = npcItemDisplayDbc->getString(
+                                        static_cast<uint32_t>(recIdx), 15 + region);
+                                if (texName.empty()) continue;
+
+                                std::string base = "Item\\TextureComponents\\" +
+                                    std::string(npcComponentDirs[region]) + "\\" + texName;
+                                std::string genderPath = base + (npcIsFemale ? "_F.blp" : "_M.blp");
+                                std::string unisexPath = base + "_U.blp";
+                                std::string fullPath;
+                                if (assetManager->fileExists(genderPath)) fullPath = genderPath;
+                                else if (assetManager->fileExists(unisexPath)) fullPath = unisexPath;
+                                else fullPath = base + ".blp";
+
+                                npcRegionLayers.emplace_back(region, fullPath);
+                            }
+                        }
+                    }
+
+                    // Composite equipment textures over baked NPC texture, or just load baked texture
+                    GLuint finalTex = 0;
+                    if (!npcRegionLayers.empty()) {
+                        finalTex = charRenderer->compositeWithRegions(bakePath, {}, npcRegionLayers);
+                        LOG_DEBUG("Composited NPC baked texture with ", npcRegionLayers.size(),
+                                  " equipment regions: ", bakePath);
+                    } else {
+                        finalTex = charRenderer->loadTexture(bakePath);
+                    }
 
                     if (finalTex != 0 && modelData) {
                         for (size_t ti = 0; ti < modelData->textures.size(); ti++) {

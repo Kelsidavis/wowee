@@ -5681,7 +5681,7 @@ void GameHandler::rebuildOnlineInventory() {
 }
 
 void GameHandler::maybeDetectVisibleItemLayout() {
-    if (visibleItemEntryBase_ >= 0) return;
+    if (visibleItemLayoutVerified_) return;
     if (lastPlayerFields_.empty()) return;
 
     std::array<uint32_t, 19> equipEntries{};
@@ -5746,21 +5746,22 @@ void GameHandler::maybeDetectVisibleItemLayout() {
         }
     }
 
-    if (bestMatches < 2 || bestBase < 0 || bestStride <= 0) return;
-    if (bestMismatches > 1) return;
+    if (bestMatches >= 2 && bestBase >= 0 && bestStride > 0 && bestMismatches <= 1) {
+        visibleItemEntryBase_ = bestBase;
+        visibleItemStride_ = bestStride;
+        visibleItemLayoutVerified_ = true;
+        LOG_INFO("Detected PLAYER_VISIBLE_ITEM entry layout: base=", visibleItemEntryBase_,
+                 " stride=", visibleItemStride_, " (matches=", bestMatches,
+                 " mismatches=", bestMismatches, " score=", bestScore, ")");
 
-    visibleItemEntryBase_ = bestBase;
-    visibleItemStride_ = bestStride;
-    LOG_INFO("Detected PLAYER_VISIBLE_ITEM entry layout: base=", visibleItemEntryBase_,
-             " stride=", visibleItemStride_, " (matches=", bestMatches,
-             " mismatches=", bestMismatches, " score=", bestScore, ")");
-
-    // Backfill existing player entities already in view.
-    for (const auto& [guid, ent] : entityManager.getEntities()) {
-        if (!ent || ent->getType() != ObjectType::PLAYER) continue;
-        if (guid == playerGuid) continue;
-        updateOtherPlayerVisibleItems(guid, ent->getFields());
+        // Backfill existing player entities already in view.
+        for (const auto& [guid, ent] : entityManager.getEntities()) {
+            if (!ent || ent->getType() != ObjectType::PLAYER) continue;
+            if (guid == playerGuid) continue;
+            updateOtherPlayerVisibleItems(guid, ent->getFields());
+        }
     }
+    // If heuristic didn't find a match, keep using the default WotLK layout (base=284, stride=2).
 }
 
 void GameHandler::updateOtherPlayerVisibleItems(uint64_t guid, const std::map<uint16_t, uint32_t>& fields) {

@@ -1132,8 +1132,11 @@ private:
 
     // Visible equipment for other players: detect the update-field layout (base + stride)
     // using the local player's own equipped items, then decode other players by index.
-    int visibleItemEntryBase_ = -1;
+    // Default to known WotLK 3.3.5a layout: UNIT_END(148) + 0x0088 = 284, stride 2.
+    // The heuristic in maybeDetectVisibleItemLayout() can still override if needed.
+    int visibleItemEntryBase_ = 284;
     int visibleItemStride_ = 2;
+    bool visibleItemLayoutVerified_ = false;  // true once heuristic confirms/overrides default
     std::unordered_map<uint64_t, std::array<uint32_t, 19>> otherPlayerVisibleItemEntries_;
     std::unordered_set<uint64_t> otherPlayerVisibleDirty_;
     std::unordered_map<uint64_t, uint32_t> otherPlayerMoveTimeMs_;
