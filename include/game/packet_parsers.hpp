@@ -102,6 +102,11 @@ public:
         return MessageChatParser::parse(packet, data);
     }
 
+    /** Parse SMSG_NAME_QUERY_RESPONSE */
+    virtual bool parseNameQueryResponse(network::Packet& packet, NameQueryResponseData& data) {
+        return NameQueryResponseParser::parse(packet, data);
+    }
+
     // --- Destroy Object ---
 
     /** Parse SMSG_DESTROY_OBJECT */
@@ -158,6 +163,7 @@ public:
     bool parseUpdateObject(network::Packet& packet, UpdateObjectData& data) override;
     bool parseCharEnum(network::Packet& packet, CharEnumResponse& response) override;
     bool parseAuraUpdate(network::Packet& packet, AuraUpdateData& data, bool isAll = false) override;
+    bool parseNameQueryResponse(network::Packet& packet, NameQueryResponseData& data) override;
 };
 
 /**

@@ -995,8 +995,10 @@ void GameHandler::handlePacket(network::Packet& packet) {
         case Opcode::SMSG_PERIODICAURALOG:
         case Opcode::SMSG_SPELLENERGIZELOG:
         case Opcode::SMSG_ENVIRONMENTALDAMAGELOG:
+            break;
+
         case Opcode::SMSG_LOOT_MONEY_NOTIFY: {
-            // uint32 money + uint8 soleLooter
+            // Format: uint32 money + uint8 soleLooter
             if (packet.getSize() - packet.getReadPos() >= 4) {
                 uint32_t amount = packet.readUInt32();
                 playerMoneyCopper_ += amount;
@@ -4873,7 +4875,10 @@ std::string GameHandler::getCachedCreatureName(uint32_t entry) const {
 
 void GameHandler::handleNameQueryResponse(network::Packet& packet) {
     NameQueryResponseData data;
-    if (!NameQueryResponseParser::parse(packet, data)) return;
+    if (!packetParsers_ || !packetParsers_->parseNameQueryResponse(packet, data)) {
+        LOG_WARNING("Failed to parse SMSG_NAME_QUERY_RESPONSE (size=", packet.getSize(), ")");
+        return;
+    }
 
     pendingNameQueries.erase(data.guid);
 
