@@ -231,6 +231,16 @@ bool Application::initialize() {
             }
             hdPackManager_->applyToAssetManager(assetManager.get(), expansionId);
         }
+
+        // Load expansion-specific asset overlay (priority 50, below HD packs at 100+)
+        if (expansionRegistry_) {
+            auto* activeProfile = expansionRegistry_->getActive();
+            if (activeProfile && !activeProfile->assetManifest.empty()) {
+                if (assetManager->addOverlayManifest(activeProfile->assetManifest, 50, "expansion_overlay")) {
+                    LOG_INFO("Added expansion asset overlay: ", activeProfile->assetManifest);
+                }
+            }
+        }
     } else {
         LOG_WARNING("Failed to initialize asset manager - asset loading will be unavailable");
         LOG_WARNING("Set WOW_DATA_PATH environment variable to your WoW Data directory");
@@ -493,7 +503,19 @@ void Application::reloadExpansionData() {
     if (assetManager && !profile->dataPath.empty()) {
         assetManager->setExpansionDataPath(profile->dataPath);
         assetManager->clearDBCCache();
+
+        // Swap expansion asset overlay
+        assetManager->removeOverlay("expansion_overlay");
+        if (!profile->assetManifest.empty()) {
+            if (assetManager->addOverlayManifest(profile->assetManifest, 50, "expansion_overlay")) {
+                LOG_INFO("Swapped expansion asset overlay: ", profile->assetManifest);
+            }
+        }
     }
+
+    // Reset map name cache so it reloads from new expansion's Map.dbc
+    mapNameCacheLoaded_ = false;
+    mapNameById_.clear();
 }
 
 void Application::logoutToLogin() {
@@ -1828,13 +1850,13 @@ void Application::spawnPlayerCharacter() {
                             uint32_t raceId = charSectionsDbc->getUInt32(r, csL ? (*csL)["RaceID"] : 1);
                             uint32_t sexId = charSectionsDbc->getUInt32(r, csL ? (*csL)["SexID"] : 2);
                             uint32_t baseSection = charSectionsDbc->getUInt32(r, csL ? (*csL)["BaseSection"] : 3);
-                            uint32_t variationIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 8);
-                            uint32_t colorIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 9);
+                            uint32_t variationIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 4);
+                            uint32_t colorIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 5);
 
                             if (raceId != targetRaceId || sexId != targetSexId) continue;
 
                             // Section 0 = skin: match by colorIndex = skin byte
-                            const uint32_t csTex1 = csL ? (*csL)["Texture1"] : 4;
+                            const uint32_t csTex1 = csL ? (*csL)["Texture1"] : 6;
                             if (baseSection == 0 && !foundSkin && colorIndex == charSkinId) {
                                 std::string tex1 = charSectionsDbc->getString(r, csTex1);
                                 if (!tex1.empty()) {
@@ -2409,28 +2431,26 @@ void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
     // Resolve map folder name from Map.dbc (authoritative for world/instance maps).
     // This is required for instances like DeeprunTram (map 369) that are not Azeroth/Kalimdor.
-    static bool mapNameCacheLoaded = false;
-    static std::unordered_map<uint32_t, std::string> mapNameById;
-    if (!mapNameCacheLoaded && assetManager) {
-        mapNameCacheLoaded = true;
+    if (!mapNameCacheLoaded_ && assetManager) {
+        mapNameCacheLoaded_ = true;
         if (auto mapDbc = assetManager->loadDBC("Map.dbc"); mapDbc && mapDbc->isLoaded()) {
-            mapNameById.reserve(mapDbc->getRecordCount());
+            mapNameById_.reserve(mapDbc->getRecordCount());
             const auto* mapL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Map") : nullptr;
             for (uint32_t i = 0; i < mapDbc->getRecordCount(); i++) {
                 uint32_t id = mapDbc->getUInt32(i, mapL ? (*mapL)["ID"] : 0);
                 std::string internalName = mapDbc->getString(i, mapL ? (*mapL)["InternalName"] : 1);
-                if (!internalName.empty() && mapNameById.find(id) == mapNameById.end()) {
-                    mapNameById[id] = std::move(internalName);
+                if (!internalName.empty() && mapNameById_.find(id) == mapNameById_.end()) {
+                    mapNameById_[id] = std::move(internalName);
                 }
             }
-            LOG_INFO("Loaded Map.dbc map-name cache: ", mapNameById.size(), " entries");
+            LOG_INFO("Loaded Map.dbc map-name cache: ", mapNameById_.size(), " entries");
         } else {
             LOG_WARNING("Map.dbc not available; using fallback map-id mapping");
         }
     }
 
     std::string mapName;
-    if (auto it = mapNameById.find(mapId); it != mapNameById.end()) {
+    if (auto it = mapNameById_.find(mapId); it != mapNameById_.end()) {
         mapName = it->second;
     } else {
         mapName = mapIdToName(mapId);
@@ -3122,15 +3142,15 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                         uint32_t raceId = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["RaceID"] : 1);
                         uint32_t sexId = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["SexID"] : 2);
                         uint32_t section = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["BaseSection"] : 3);
-                        uint32_t variation = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["VariationIndex"] : 8);
-                        uint32_t colorIdx = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["ColorIndex"] : 9);
+                        uint32_t variation = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["VariationIndex"] : 4);
+                        uint32_t colorIdx = charSectionsDbc->getUInt32(r, csL2 ? (*csL2)["ColorIndex"] : 5);
 
                         if (raceId != targetRace || sexId != targetSex) continue;
                         if (section != 3) continue;  // Section 3 = hair
                         if (variation != static_cast<uint32_t>(extra.hairStyleId)) continue;
                         if (colorIdx != static_cast<uint32_t>(extra.hairColorId)) continue;
 
-                        hairTexPath = charSectionsDbc->getString(r, csL2 ? (*csL2)["Texture1"] : 4);
+                        hairTexPath = charSectionsDbc->getString(r, csL2 ? (*csL2)["Texture1"] : 6);
                         break;
                     }
 
@@ -3667,7 +3687,7 @@ void Application::spawnOnlinePlayer(uint64_t guid,
         const auto* csL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CharSections") : nullptr;
         uint32_t targetRaceId = raceId;
         uint32_t targetSexId = genderId;
-        const uint32_t csTex1 = csL ? (*csL)["Texture1"] : 4;
+        const uint32_t csTex1 = csL ? (*csL)["Texture1"] : 6;
 
         bool foundSkin = false;
         bool foundUnderwear = false;
@@ -3679,8 +3699,8 @@ void Application::spawnOnlinePlayer(uint64_t guid,
             uint32_t rRace = charSectionsDbc->getUInt32(r, csL ? (*csL)["RaceID"] : 1);
             uint32_t rSex = charSectionsDbc->getUInt32(r, csL ? (*csL)["SexID"] : 2);
             uint32_t baseSection = charSectionsDbc->getUInt32(r, csL ? (*csL)["BaseSection"] : 3);
-            uint32_t variationIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 8);
-            uint32_t colorIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 9);
+            uint32_t variationIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 4);
+            uint32_t colorIndex = charSectionsDbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 5);
 
             if (rRace != targetRaceId || rSex != targetSexId) continue;
 

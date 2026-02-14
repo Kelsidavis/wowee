@@ -176,6 +176,12 @@ bool ExpansionRegistry::loadProfile(const std::string& jsonPath, const std::stri
         v = jsonValue(json, "locale"); if (!v.empty()) p.locale = v;
         p.timezone = static_cast<uint32_t>(jsonInt(json, "timezone", static_cast<int>(p.timezone)));
     }
+    // Expansion-specific asset manifest (overlay for base data)
+    p.assetManifest = jsonValue(json, "assetManifest");
+    if (!p.assetManifest.empty() && p.assetManifest[0] != '/') {
+        p.assetManifest = dirPath + "/" + p.assetManifest;
+    }
+
     p.maxLevel = static_cast<uint32_t>(jsonInt(json, "maxLevel", 60));
     p.races = jsonUintArray(json, "races");
     p.classes = jsonUintArray(json, "classes");

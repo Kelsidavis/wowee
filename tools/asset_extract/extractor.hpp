@@ -25,6 +25,7 @@ public:
         bool skipDbcExtraction = false; // Extract visual assets only (recommended when CSV DBCs are in repo)
         bool onlyUsedDbcs = false; // Extract only the DBC files wowee uses (implies DBFilesClient/*.dbc filter)
         std::string dbcCsvOutputDir; // When set, write CSVs into this directory instead of outputDir/expansions/<exp>/db
+        std::string referenceManifest; // If set, only extract files NOT in this manifest (delta extraction)
     };
 
     struct Stats {

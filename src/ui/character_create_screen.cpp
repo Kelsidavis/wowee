@@ -179,8 +179,8 @@ void CharacterCreateScreen::updateAppearanceRanges() {
         if (raceId != targetRaceId || sexId != targetSexId) continue;
 
         uint32_t baseSection = dbc->getUInt32(r, csL ? (*csL)["BaseSection"] : 3);
-        uint32_t variationIndex = dbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 8);
-        uint32_t colorIndex = dbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 9);
+        uint32_t variationIndex = dbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 4);
+        uint32_t colorIndex = dbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 5);
 
         if (baseSection == 0 && variationIndex == 0) {
             skinMax = std::max(skinMax, static_cast<int>(colorIndex));
@@ -206,8 +206,8 @@ void CharacterCreateScreen::updateAppearanceRanges() {
         if (raceId != targetRaceId || sexId != targetSexId) continue;
 
         uint32_t baseSection = dbc->getUInt32(r, csL ? (*csL)["BaseSection"] : 3);
-        uint32_t variationIndex = dbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 8);
-        uint32_t colorIndex = dbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 9);
+        uint32_t variationIndex = dbc->getUInt32(r, csL ? (*csL)["VariationIndex"] : 4);
+        uint32_t colorIndex = dbc->getUInt32(r, csL ? (*csL)["ColorIndex"] : 5);
 
         if (baseSection == 1 && colorIndex == static_cast<uint32_t>(skin)) {
             faceMax = std::max(faceMax, static_cast<int>(variationIndex));

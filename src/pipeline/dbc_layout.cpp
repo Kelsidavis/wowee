@@ -24,8 +24,8 @@ void DBCLayout::loadWotlkDefaults() {
 
     // CharSections.dbc
     layouts_["CharSections"] = {{{ "RaceID", 1 }, { "SexID", 2 }, { "BaseSection", 3 },
-        { "Texture1", 4 }, { "Texture2", 5 }, { "Texture3", 6 },
-        { "VariationIndex", 8 }, { "ColorIndex", 9 }}};
+        { "VariationIndex", 4 }, { "ColorIndex", 5 },
+        { "Texture1", 6 }, { "Texture2", 7 }, { "Texture3", 8 }}};
 
     // SpellIcon.dbc (Icon.dbc in code but actually SpellIcon)
     layouts_["SpellIcon"] = {{{ "ID", 0 }, { "Path", 1 }}};

@@ -274,6 +274,7 @@ void GameHandler::update(float deltaTime) {
             auto pkt = InspectPacket::build(guid);
             socket->send(pkt);
             inspectRateLimit_ = 0.75f; // keep it gentle
+            LOG_INFO("Sent CMSG_INSPECT for player 0x", std::hex, guid, std::dec);
         }
     }
 
@@ -5543,6 +5544,7 @@ void GameHandler::updateOtherPlayerVisibleItems(uint64_t guid, const std::map<ui
         // Layout not detected yet — queue this player for inspect as fallback.
         if (socket && state == WorldState::IN_WORLD) {
             pendingAutoInspect_.insert(guid);
+            LOG_INFO("Queued player 0x", std::hex, guid, std::dec, " for auto-inspect (layout not detected)");
         }
         return;
     }

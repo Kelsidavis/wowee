@@ -19,6 +19,8 @@ static void printUsage(const char* prog) {
               << "  --skip-dbc          Do not extract DBFilesClient/*.dbc (visual assets only)\n"
               << "  --dbc-csv           Convert selected DBFilesClient/*.dbc to CSV under\n"
               << "                      <output>/expansions/<expansion>/db/*.csv (for committing)\n"
+              << "  --reference-manifest <path>\n"
+              << "                      Only extract files NOT in this manifest (delta extraction)\n"
               << "  --dbc-csv-out <dir> Write CSV DBCs into <dir> (overrides default output path)\n"
               << "  --verify            CRC32 verify all extracted files\n"
               << "  --threads <N>       Number of extraction threads (default: auto)\n"
@@ -50,6 +52,8 @@ int main(int argc, char** argv) {
             opts.generateDbcCsv = true;
         } else if (std::strcmp(argv[i], "--dbc-csv-out") == 0 && i + 1 < argc) {
             opts.dbcCsvOutputDir = argv[++i];
+        } else if (std::strcmp(argv[i], "--reference-manifest") == 0 && i + 1 < argc) {
+            opts.referenceManifest = argv[++i];
         } else if (std::strcmp(argv[i], "--verify") == 0) {
             opts.verify = true;
         } else if (std::strcmp(argv[i], "--verbose") == 0) {
@@ -112,6 +116,10 @@ int main(int argc, char** argv) {
         if (!opts.dbcCsvOutputDir.empty()) {
             std::cout << "DBC CSV out:   " << opts.dbcCsvOutputDir << "\n";
         }
+    }
+
+    if (!opts.referenceManifest.empty()) {
+        std::cout << "Reference:     " << opts.referenceManifest << " (delta mode)\n";
     }
 
     if (!wowee::tools::Extractor::run(opts)) {

@@ -246,6 +246,58 @@ static std::unordered_set<std::string> buildWantedDbcSet(const Extractor::Option
     return wanted;
 }
 
+// Load all entry keys from a manifest.json into a set of normalized WoW paths.
+// This is a minimal parser — just extracts the keys from the "entries" object
+// without pulling in a full JSON library.
+static std::unordered_set<std::string> loadManifestKeys(const std::string& manifestPath) {
+    std::unordered_set<std::string> keys;
+    std::ifstream f(manifestPath);
+    if (!f.is_open()) {
+        std::cerr << "Failed to open reference manifest: " << manifestPath << "\n";
+        return keys;
+    }
+
+    // Find the "entries" section, then extract keys from each line
+    bool inEntries = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!inEntries) {
+            if (line.find("\"entries\"") != std::string::npos) {
+                inEntries = true;
+            }
+            continue;
+        }
+
+        // End of entries block
+        size_t closeBrace = line.find_first_not_of(" \t");
+        if (closeBrace != std::string::npos && line[closeBrace] == '}') {
+            break;
+        }
+
+        // Extract key: find first quoted string on the line
+        size_t q1 = line.find('"');
+        if (q1 == std::string::npos) continue;
+        size_t q2 = q1 + 1;
+        // Find closing quote (handle escaped backslashes)
+        std::string key;
+        while (q2 < line.size() && line[q2] != '"') {
+            if (line[q2] == '\\' && q2 + 1 < line.size()) {
+                key += line[q2 + 1];  // unescape \\, \", etc.
+                q2 += 2;
+            } else {
+                key += line[q2];
+                q2++;
+            }
+        }
+
+        if (!key.empty()) {
+            keys.insert(key);  // Already normalized (lowercase, backslashes)
+        }
+    }
+
+    return keys;
+}
+
 // Known WoW client locales
 static const std::vector<std::string> kKnownLocales = {
     "enUS", "enGB", "deDE", "frFR", "esES", "esMX",
@@ -483,6 +535,22 @@ bool Extractor::run(const Options& opts) {
     std::vector<std::string> files;
     if (!enumerateFiles(opts, files)) {
         return false;
+    }
+
+    // Delta extraction: filter out files that already exist in the reference manifest
+    if (!opts.referenceManifest.empty()) {
+        auto refKeys = loadManifestKeys(opts.referenceManifest);
+        if (refKeys.empty()) {
+            std::cerr << "Warning: reference manifest is empty or failed to load\n";
+        } else {
+            size_t before = files.size();
+            files.erase(std::remove_if(files.begin(), files.end(),
+                [&refKeys](const std::string& wowPath) {
+                    return refKeys.count(normalizeWowPath(wowPath)) > 0;
+                }), files.end());
+            std::cout << "Delta filter: " << before << " -> " << files.size()
+                      << " files (" << (before - files.size()) << " already in reference)\n";
+        }
     }
 
     if (files.empty()) {

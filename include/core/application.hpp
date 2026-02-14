@@ -216,6 +216,8 @@ private:
     bool wasAutoAttacking_ = false;
     void processPendingMount();
     bool creatureLookupsBuilt_ = false;
+    bool mapNameCacheLoaded_ = false;
+    std::unordered_map<uint32_t, std::string> mapNameById_;
 
     // Deferred creature spawn queue (throttles spawning to avoid hangs)
     struct PendingCreatureSpawn {

@@ -30,6 +30,7 @@ struct ExpansionProfile {
     std::string locale = "enUS";
     uint32_t timezone = 0;
     std::string dataPath;      // Absolute path to expansion data dir
+    std::string assetManifest;  // Path to expansion-specific asset manifest (absolute, resolved from dataPath)
     uint32_t maxLevel = 60;
     std::vector<uint32_t> races;
     std::vector<uint32_t> classes;
