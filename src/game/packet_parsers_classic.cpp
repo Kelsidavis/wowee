@@ -340,5 +340,109 @@ bool ClassicPacketParsers::parseCharEnum(network::Packet& packet, CharEnumRespon
     return true;
 }
 
+// ============================================================================
+// Classic 1.12.1 parseMessageChat
+// Differences from WotLK:
+// - NO uint32 unknown field after senderGuid
+// - CHANNEL type: channelName + rank(u32) + senderGuid (not just channelName)
+// - No ACHIEVEMENT/GUILD_ACHIEVEMENT types
+// ============================================================================
+bool ClassicPacketParsers::parseMessageChat(network::Packet& packet, MessageChatData& data) {
+    if (packet.getSize() < 10) {
+        LOG_ERROR("[Classic] SMSG_MESSAGECHAT packet too small: ", packet.getSize(), " bytes");
+        return false;
+    }
+
+    // Read chat type
+    uint8_t typeVal = packet.readUInt8();
+    data.type = static_cast<ChatType>(typeVal);
+
+    // Read language
+    uint32_t langVal = packet.readUInt32();
+    data.language = static_cast<ChatLanguage>(langVal);
+
+    // Classic: NO uint32 unknown field here (WotLK has one)
+
+    // Type-specific data
+    switch (data.type) {
+        case ChatType::MONSTER_SAY:
+        case ChatType::MONSTER_YELL:
+        case ChatType::MONSTER_EMOTE: {
+            // nameLen(u32) + name + targetGuid(u64)
+            uint32_t nameLen = packet.readUInt32();
+            if (nameLen > 0 && nameLen < 256) {
+                data.senderName.resize(nameLen);
+                for (uint32_t i = 0; i < nameLen; ++i) {
+                    data.senderName[i] = static_cast<char>(packet.readUInt8());
+                }
+                // Remove null terminator if present
+                if (!data.senderName.empty() && data.senderName.back() == '\0') {
+                    data.senderName.pop_back();
+                }
+            }
+            data.receiverGuid = packet.readUInt64();
+            break;
+        }
+
+        case ChatType::CHANNEL: {
+            // channelName(string) + rank(u32) + senderGuid(u64)
+            data.channelName = packet.readString();
+            /*uint32_t rank =*/ packet.readUInt32();
+            data.senderGuid = packet.readUInt64();
+            break;
+        }
+
+        default: {
+            // Most types: senderGuid(u64)
+            data.senderGuid = packet.readUInt64();
+            break;
+        }
+    }
+
+    // Vanilla/Classic: target GUID follows type-specific header for non-monster types
+    // (Monster types already read target/receiver in their switch case)
+    if (data.type != ChatType::MONSTER_SAY &&
+        data.type != ChatType::MONSTER_YELL &&
+        data.type != ChatType::MONSTER_EMOTE &&
+        data.type != ChatType::CHANNEL) {
+        if (packet.getReadPos() + 12 <= packet.getSize()) { // 8 (guid) + 4 (msgLen) minimum
+            data.receiverGuid = packet.readUInt64();
+        }
+    }
+
+    // Read message length
+    uint32_t messageLen = packet.readUInt32();
+
+    // Read message
+    if (messageLen > 0 && messageLen < 8192) {
+        data.message.resize(messageLen);
+        for (uint32_t i = 0; i < messageLen; ++i) {
+            data.message[i] = static_cast<char>(packet.readUInt8());
+        }
+        // Remove null terminator if present
+        if (!data.message.empty() && data.message.back() == '\0') {
+            data.message.pop_back();
+        }
+    }
+
+    // Read chat tag
+    if (packet.getReadPos() < packet.getSize()) {
+        data.chatTag = packet.readUInt8();
+    }
+
+    LOG_INFO("[Classic] Parsed SMSG_MESSAGECHAT:");
+    LOG_INFO("  Type: ", getChatTypeString(data.type));
+    LOG_INFO("  Sender GUID: 0x", std::hex, data.senderGuid, std::dec);
+    if (!data.senderName.empty()) {
+        LOG_INFO("  Sender name: ", data.senderName);
+    }
+    if (!data.channelName.empty()) {
+        LOG_INFO("  Channel: ", data.channelName);
+    }
+    LOG_INFO("  Message: ", data.message);
+
+    return true;
+}
+
 } // namespace game
 } // namespace wowee

@@ -258,7 +258,7 @@ void InventoryScreen::updatePreviewEquipment(game::Inventory& inventory) {
         if (recIdx < 0) continue;
 
         for (int region = 0; region < 8; region++) {
-            uint32_t fieldIdx = 15 + region;
+            uint32_t fieldIdx = 14 + region;
             std::string texName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), fieldIdx);
             if (texName.empty()) continue;
 

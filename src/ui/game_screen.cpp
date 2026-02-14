@@ -2097,8 +2097,13 @@ const char* GameScreen::getChatTypeName(game::ChatType type) const {
         case game::ChatType::WHISPER: return "WHISPER";
         case game::ChatType::WHISPER_INFORM: return "TO";
         case game::ChatType::SYSTEM: return "SYSTEM";
+        case game::ChatType::MONSTER_SAY: return "SAY";
+        case game::ChatType::MONSTER_YELL: return "YELL";
+        case game::ChatType::MONSTER_EMOTE: return "EMOTE";
         case game::ChatType::CHANNEL: return "CHANNEL";
         case game::ChatType::ACHIEVEMENT: return "ACHIEVEMENT";
+        case game::ChatType::DND: return "DND";
+        case game::ChatType::AFK: return "AFK";
         default: return "UNKNOWN";
     }
 }
@@ -2135,6 +2140,12 @@ ImVec4 GameScreen::getChatTypeColor(game::ChatType type) const {
             return ImVec4(1.0f, 0.5f, 1.0f, 1.0f);  // Pink
         case game::ChatType::SYSTEM:
             return ImVec4(1.0f, 1.0f, 0.3f, 1.0f);  // Yellow
+        case game::ChatType::MONSTER_SAY:
+            return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);  // White (same as SAY)
+        case game::ChatType::MONSTER_YELL:
+            return ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // Red (same as YELL)
+        case game::ChatType::MONSTER_EMOTE:
+            return ImVec4(1.0f, 0.7f, 0.3f, 1.0f);  // Orange (same as EMOTE)
         case game::ChatType::CHANNEL:
             return ImVec4(1.0f, 0.7f, 0.7f, 1.0f);  // Light pink
         case game::ChatType::ACHIEVEMENT:
@@ -2314,10 +2325,10 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
         int32_t recIdx = displayInfoDbc->findRecordById(slot.item.displayInfoId);
         if (recIdx < 0) continue;
 
-        // DBC fields 15-22 = texture_1 through texture_8 (regions 0-7)
-        // (binary DBC has inventoryIcon_2 at field 6, shifting fields +1 vs CSV)
+        // DBC fields 14-21 = texture_1 through texture_8 (regions 0-7)
+        // Binary DBC (23 fields) has textures at 14+; some CSVs (25 fields) have them at 15+.
         for (int region = 0; region < 8; region++) {
-            uint32_t fieldIdx = 15 + region;
+            uint32_t fieldIdx = 14 + region;
             std::string texName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), fieldIdx);
             if (texName.empty()) continue;
 
@@ -2325,11 +2336,19 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
             // Try gender-specific first, then unisex fallback
             std::string base = "Item\\TextureComponents\\" +
                 std::string(componentDirs[region]) + "\\" + texName;
-            std::string malePath = base + "_M.blp";
+            // Determine gender suffix from active character
+            bool isFemale = false;
+            if (auto* gh = app.getGameHandler()) {
+                if (auto* ch = gh->getActiveCharacter()) {
+                    isFemale = (ch->gender == game::Gender::FEMALE) ||
+                               (ch->gender == game::Gender::NONBINARY && ch->useFemaleModel);
+                }
+            }
+            std::string genderPath = base + (isFemale ? "_F.blp" : "_M.blp");
             std::string unisexPath = base + "_U.blp";
             std::string fullPath;
-            if (assetManager->fileExists(malePath)) {
-                fullPath = malePath;
+            if (assetManager->fileExists(genderPath)) {
+                fullPath = genderPath;
             } else if (assetManager->fileExists(unisexPath)) {
                 fullPath = unisexPath;
             } else {

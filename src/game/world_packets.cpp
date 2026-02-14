@@ -1101,15 +1101,20 @@ bool UpdateObjectParser::parse(network::Packet& packet, UpdateObjectData& data) 
 bool DestroyObjectParser::parse(network::Packet& packet, DestroyObjectData& data) {
     // SMSG_DESTROY_OBJECT format:
     // uint64 guid
-    // uint8 isDeath (0 = despawn, 1 = death)
+    // uint8 isDeath (0 = despawn, 1 = death) — WotLK only; vanilla/TBC omit this
 
-    if (packet.getSize() < 9) {
+    if (packet.getSize() < 8) {
         LOG_ERROR("SMSG_DESTROY_OBJECT packet too small: ", packet.getSize(), " bytes");
         return false;
     }
 
     data.guid = packet.readUInt64();
-    data.isDeath = (packet.readUInt8() != 0);
+    // WotLK adds isDeath byte; vanilla/TBC packets are exactly 8 bytes
+    if (packet.getReadPos() < packet.getSize()) {
+        data.isDeath = (packet.readUInt8() != 0);
+    } else {
+        data.isDeath = false;
+    }
 
     LOG_INFO("Parsed SMSG_DESTROY_OBJECT:");
     LOG_INFO("  GUID: 0x", std::hex, data.guid, std::dec);
@@ -2102,12 +2107,24 @@ bool InitialSpellsParser::parse(network::Packet& packet, InitialSpellsData& data
     data.talentSpec = packet.readUInt8();
     uint16_t spellCount = packet.readUInt16();
 
-    LOG_INFO("SMSG_INITIAL_SPELLS: packetSize=", packetSize, " bytes, spellCount=", spellCount);
+    // Detect vanilla (uint16 spellId) vs WotLK (uint32 spellId) format
+    // Vanilla: 4 bytes/spell (uint16 id + uint16 slot), WotLK: 6 bytes/spell (uint32 id + uint16 unk)
+    size_t remainingAfterHeader = packetSize - 3; // subtract talentSpec(1) + spellCount(2)
+    bool vanillaFormat = remainingAfterHeader < static_cast<size_t>(spellCount) * 6 + 2;
+
+    LOG_INFO("SMSG_INITIAL_SPELLS: packetSize=", packetSize, " bytes, spellCount=", spellCount,
+             vanillaFormat ? " (vanilla uint16 format)" : " (WotLK uint32 format)");
 
     data.spellIds.reserve(spellCount);
     for (uint16_t i = 0; i < spellCount; ++i) {
-        uint32_t spellId = packet.readUInt32();
-        packet.readUInt16(); // unknown (always 0)
+        uint32_t spellId;
+        if (vanillaFormat) {
+            spellId = packet.readUInt16();
+            packet.readUInt16(); // slot
+        } else {
+            spellId = packet.readUInt32();
+            packet.readUInt16(); // unknown (always 0)
+        }
         if (spellId != 0) {
             data.spellIds.push_back(spellId);
         }
@@ -2117,7 +2134,11 @@ bool InitialSpellsParser::parse(network::Packet& packet, InitialSpellsData& data
     data.cooldowns.reserve(cooldownCount);
     for (uint16_t i = 0; i < cooldownCount; ++i) {
         SpellCooldownEntry entry;
-        entry.spellId = packet.readUInt32();
+        if (vanillaFormat) {
+            entry.spellId = packet.readUInt16();
+        } else {
+            entry.spellId = packet.readUInt32();
+        }
         entry.itemId = packet.readUInt16();
         entry.categoryId = packet.readUInt16();
         entry.cooldownMs = packet.readUInt32();

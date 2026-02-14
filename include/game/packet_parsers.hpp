@@ -91,6 +91,20 @@ public:
         return AuraUpdateParser::parse(packet, data, isAll);
     }
 
+    // --- Chat ---
+
+    /** Parse SMSG_MESSAGECHAT */
+    virtual bool parseMessageChat(network::Packet& packet, MessageChatData& data) {
+        return MessageChatParser::parse(packet, data);
+    }
+
+    // --- Destroy Object ---
+
+    /** Parse SMSG_DESTROY_OBJECT */
+    virtual bool parseDestroyObject(network::Packet& packet, DestroyObjectData& data) {
+        return DestroyObjectParser::parse(packet, data);
+    }
+
     // --- Utility ---
 
     /** Read a packed GUID from the packet */
@@ -163,6 +177,7 @@ public:
     network::Packet buildMovementPacket(LogicalOpcode opcode,
                                          const MovementInfo& info,
                                          uint64_t playerGuid = 0) override;
+    bool parseMessageChat(network::Packet& packet, MessageChatData& data) override;
 };
 
 /**

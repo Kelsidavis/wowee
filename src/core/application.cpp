@@ -2386,7 +2386,7 @@ void Application::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             for (uint32_t i = 0; i < mapDbc->getRecordCount(); i++) {
                 uint32_t id = mapDbc->getUInt32(i, mapL ? (*mapL)["ID"] : 0);
                 std::string internalName = mapDbc->getString(i, mapL ? (*mapL)["InternalName"] : 1);
-                if (!internalName.empty()) {
+                if (!internalName.empty() && mapNameById.find(id) == mapNameById.end()) {
                     mapNameById[id] = std::move(internalName);
                 }
             }

@@ -474,7 +474,7 @@ bool CharacterPreview::applyEquipment(const std::vector<game::EquipmentItem>& eq
         if (recIdx < 0) continue;
 
         for (int region = 0; region < 8; region++) {
-            uint32_t fieldIdx = 15 + region; // texture_1..texture_8
+            uint32_t fieldIdx = 14 + region; // texture_1..texture_8
             std::string texName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), fieldIdx);
             if (texName.empty()) continue;
 

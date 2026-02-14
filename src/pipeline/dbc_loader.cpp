@@ -231,6 +231,12 @@ bool DBCFile::loadCSV(const std::vector<uint8_t>& csvData) {
         }
     }
 
+    // Field 0 is always the numeric record ID in DBC files — never a string.
+    // Some CSV exports incorrectly mark it as a string column; force-remove it.
+    if (stringCols.erase(0) > 0) {
+        LOG_DEBUG("CSV DBC: removed field 0 from string columns (always numeric ID)");
+    }
+
     recordSize = fieldCount * 4;
 
     // --- Build string block with initial null byte ---
@@ -288,7 +294,11 @@ bool DBCFile::loadCSV(const std::vector<uint8_t>& csvData) {
                 if (end == std::string::npos) end = line.size();
                 std::string tok = line.substr(pos, end - pos);
                 if (!tok.empty()) {
-                    row.fields[col] = static_cast<uint32_t>(std::stoul(tok));
+                    try {
+                        row.fields[col] = static_cast<uint32_t>(std::stoul(tok));
+                    } catch (...) {
+                        row.fields[col] = 0; // non-numeric value in numeric field
+                    }
                 }
                 pos = (end < line.size()) ? end + 1 : line.size();
             }

@@ -861,6 +861,9 @@ private:
     void handleMonsterMove(network::Packet& packet);
     void handleMonsterMoveTransport(network::Packet& packet);
 
+    // ---- Other player movement (MSG_MOVE_* from server) ----
+    void handleOtherPlayerMovement(network::Packet& packet);
+
     // ---- Phase 5 handlers ----
     void handleLootResponse(network::Packet& packet);
     void handleLootReleaseResponse(network::Packet& packet);
@@ -1226,6 +1229,19 @@ private:
     std::vector<uint8_t> wardenModuleKey_;     // 16 bytes RC4
     uint32_t wardenModuleSize_ = 0;
     std::vector<uint8_t> wardenModuleData_;    // Downloaded module chunks
+    std::vector<uint8_t> wardenLoadedModuleImage_; // Parsed module image for key derivation
+
+    // Pre-computed challenge/response entries from .cr file
+    struct WardenCREntry {
+        uint8_t seed[16];
+        uint8_t reply[20];
+        uint8_t clientKey[16];  // Encrypt key (client→server)
+        uint8_t serverKey[16]; // Decrypt key (server→client)
+    };
+    std::vector<WardenCREntry> wardenCREntries_;
+    // Module-specific check type opcodes [9]: MEM, PAGE_A, PAGE_B, MPQ, LUA, DRIVER, TIMING, PROC, MODULE
+    uint8_t wardenCheckOpcodes_[9] = {};
+    bool loadWardenCRFile(const std::string& moduleHashHex);
 
     // ---- XP tracking ----
     uint32_t playerXp_ = 0;

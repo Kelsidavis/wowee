@@ -395,12 +395,51 @@ bool TbcPacketParsers::parseUpdateObject(network::Packet& packet, UpdateObjectDa
         }
     }
 
-    // Parse update blocks
+    // Parse update blocks — dispatching movement via virtual parseMovementBlock()
     data.blocks.reserve(data.blockCount);
     for (uint32_t i = 0; i < data.blockCount; ++i) {
         LOG_DEBUG("Parsing block ", i + 1, " / ", data.blockCount);
         UpdateBlock block;
-        if (!UpdateObjectParser::parseUpdateBlock(packet, block)) {
+
+        // Read update type
+        uint8_t updateTypeVal = packet.readUInt8();
+        block.updateType = static_cast<UpdateType>(updateTypeVal);
+        LOG_DEBUG("Update block: type=", (int)updateTypeVal);
+
+        bool ok = false;
+        switch (block.updateType) {
+            case UpdateType::VALUES: {
+                block.guid = UpdateObjectParser::readPackedGuid(packet);
+                ok = UpdateObjectParser::parseUpdateFields(packet, block);
+                break;
+            }
+            case UpdateType::MOVEMENT: {
+                block.guid = UpdateObjectParser::readPackedGuid(packet);
+                ok = this->parseMovementBlock(packet, block);
+                break;
+            }
+            case UpdateType::CREATE_OBJECT:
+            case UpdateType::CREATE_OBJECT2: {
+                block.guid = UpdateObjectParser::readPackedGuid(packet);
+                uint8_t objectTypeVal = packet.readUInt8();
+                block.objectType = static_cast<ObjectType>(objectTypeVal);
+                ok = this->parseMovementBlock(packet, block);
+                if (ok) {
+                    ok = UpdateObjectParser::parseUpdateFields(packet, block);
+                }
+                break;
+            }
+            case UpdateType::OUT_OF_RANGE_OBJECTS:
+            case UpdateType::NEAR_OBJECTS:
+                ok = true;
+                break;
+            default:
+                LOG_WARNING("Unknown update type: ", (int)updateTypeVal);
+                ok = false;
+                break;
+        }
+
+        if (!ok) {
             LOG_ERROR("Failed to parse update block ", i + 1);
             return false;
         }

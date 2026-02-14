@@ -264,6 +264,7 @@ std::shared_ptr<DBCFile> AssetManager::loadDBC(const std::string& name) {
     std::vector<uint8_t> dbcData;
 
     // Try expansion-specific CSV first (e.g. Data/expansions/wotlk/db/Spell.csv)
+    bool loadedFromCSV = false;
     if (!expansionDataPath_.empty()) {
         // Derive CSV name from DBC name: "Spell.dbc" -> "Spell.csv"
         std::string baseName = name;
@@ -281,6 +282,7 @@ std::shared_ptr<DBCFile> AssetManager::loadDBC(const std::string& name) {
                     dbcData.resize(static_cast<size_t>(size));
                     f.read(reinterpret_cast<char*>(dbcData.data()), size);
                     LOG_DEBUG("Found CSV DBC: ", csvPath);
+                    loadedFromCSV = true;
                 }
             }
         }
@@ -298,8 +300,57 @@ std::shared_ptr<DBCFile> AssetManager::loadDBC(const std::string& name) {
 
     auto dbc = std::make_shared<DBCFile>();
     if (!dbc->load(dbcData)) {
-        LOG_ERROR("Failed to load DBC: ", name);
-        return nullptr;
+        // If CSV failed to parse, try binary DBC fallback
+        if (loadedFromCSV) {
+            LOG_WARNING("CSV DBC failed to parse: ", name, " — trying binary DBC fallback");
+            dbcData.clear();
+            std::string dbcPath = "DBFilesClient\\" + name;
+            dbcData = readFile(dbcPath);
+            if (!dbcData.empty()) {
+                dbc = std::make_shared<DBCFile>();
+                if (dbc->load(dbcData)) {
+                    loadedFromCSV = false;
+                    LOG_INFO("Binary DBC fallback succeeded: ", name);
+                } else {
+                    LOG_ERROR("Failed to load DBC: ", name);
+                    return nullptr;
+                }
+            } else {
+                LOG_ERROR("Failed to load DBC: ", name);
+                return nullptr;
+            }
+        } else {
+            LOG_ERROR("Failed to load DBC: ", name);
+            return nullptr;
+        }
+    }
+
+    // Validate CSV-loaded DBCs: if >50 records but all have ID 0 in field 0,
+    // the CSV data is garbled (e.g. string data in the ID column).
+    if (loadedFromCSV && dbc->getRecordCount() > 50) {
+        uint32_t zeroIds = 0;
+        const uint32_t sampleSize = std::min(dbc->getRecordCount(), 100u);
+        for (uint32_t i = 0; i < sampleSize; ++i) {
+            if (dbc->getUInt32(i, 0) == 0) ++zeroIds;
+        }
+        // If >80% of sampled records have ID 0, the CSV is garbled
+        if (zeroIds > sampleSize * 4 / 5) {
+            LOG_WARNING("CSV DBC '", name, "' has garbled field 0 (",
+                        zeroIds, "/", sampleSize, " records with ID=0) — falling back to binary DBC");
+            dbcData.clear();
+            std::string dbcPath = "DBFilesClient\\" + name;
+            dbcData = readFile(dbcPath);
+            if (!dbcData.empty()) {
+                dbc = std::make_shared<DBCFile>();
+                if (!dbc->load(dbcData)) {
+                    LOG_ERROR("Binary DBC fallback also failed: ", name);
+                    return nullptr;
+                }
+                LOG_INFO("Binary DBC fallback succeeded: ", name);
+            } else {
+                LOG_WARNING("No binary DBC fallback available for: ", name);
+            }
+        }
     }
 
     dbcCache[name] = dbc;

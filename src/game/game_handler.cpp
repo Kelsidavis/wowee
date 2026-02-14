@@ -20,6 +20,7 @@
 #include <cctype>
 #include <ctime>
 #include <random>
+#include <zlib.h>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -28,7 +29,7 @@
 #include <unordered_set>
 #include <functional>
 #include <cstdlib>
-#include <zlib.h>
+#include <cstring>
 #include <openssl/sha.h>
 
 namespace wowee {
@@ -1382,6 +1383,27 @@ void GameHandler::handlePacket(network::Packet& packet) {
             LOG_INFO("Received MSG_INSPECT_ARENA_TEAMS");
             break;
 
+        // ---- MSG_MOVE_* opcodes (server relays other players' movement) ----
+        case Opcode::CMSG_MOVE_START_FORWARD:
+        case Opcode::CMSG_MOVE_START_BACKWARD:
+        case Opcode::CMSG_MOVE_STOP:
+        case Opcode::CMSG_MOVE_START_STRAFE_LEFT:
+        case Opcode::CMSG_MOVE_START_STRAFE_RIGHT:
+        case Opcode::CMSG_MOVE_STOP_STRAFE:
+        case Opcode::CMSG_MOVE_JUMP:
+        case Opcode::CMSG_MOVE_START_TURN_LEFT:
+        case Opcode::CMSG_MOVE_START_TURN_RIGHT:
+        case Opcode::CMSG_MOVE_STOP_TURN:
+        case Opcode::CMSG_MOVE_SET_FACING:
+        case Opcode::CMSG_MOVE_FALL_LAND:
+        case Opcode::CMSG_MOVE_HEARTBEAT:
+        case Opcode::CMSG_MOVE_START_SWIM:
+        case Opcode::CMSG_MOVE_STOP_SWIM:
+            if (state == WorldState::IN_WORLD) {
+                handleOtherPlayerMovement(packet);
+            }
+            break;
+
         default:
             // In pre-world states we need full visibility (char create/login handshakes).
             // In-world we keep de-duplication to avoid heavy log I/O in busy areas.
@@ -1907,6 +1929,67 @@ void GameHandler::handleTutorialFlags(network::Packet& packet) {
              flags[4], ", ", flags[5], ", ", flags[6], ", ", flags[7], "]");
 }
 
+bool GameHandler::loadWardenCRFile(const std::string& moduleHashHex) {
+    wardenCREntries_.clear();
+
+    // Look for .cr file in warden cache
+    std::string homeDir;
+    if (const char* h = std::getenv("HOME")) homeDir = h;
+    else homeDir = ".";
+
+    std::string crPath = homeDir + "/.local/share/wowee/warden_cache/" + moduleHashHex + ".cr";
+
+    std::ifstream crFile(crPath, std::ios::binary);
+    if (!crFile) {
+        LOG_WARNING("Warden: No .cr file found at ", crPath);
+        return false;
+    }
+
+    // Get file size
+    crFile.seekg(0, std::ios::end);
+    auto fileSize = crFile.tellg();
+    crFile.seekg(0, std::ios::beg);
+
+    // Header: [4 memoryRead][4 pageScanCheck][9 opcodes] = 17 bytes
+    constexpr size_t CR_HEADER_SIZE = 17;
+    constexpr size_t CR_ENTRY_SIZE = 68; // seed[16]+reply[20]+clientKey[16]+serverKey[16]
+
+    if (static_cast<size_t>(fileSize) < CR_HEADER_SIZE) {
+        LOG_ERROR("Warden: .cr file too small (", fileSize, " bytes)");
+        return false;
+    }
+
+    // Read header: [4 memoryRead][4 pageScanCheck][9 opcodes]
+    crFile.seekg(8); // skip memoryRead + pageScanCheck
+    crFile.read(reinterpret_cast<char*>(wardenCheckOpcodes_), 9);
+    {
+        std::string opcHex;
+        const char* names[] = {"MEM","PAGE_A","PAGE_B","MPQ","LUA","DRIVER","TIMING","PROC","MODULE"};
+        for (int i = 0; i < 9; i++) {
+            char s[16]; snprintf(s, sizeof(s), "%s=0x%02X ", names[i], wardenCheckOpcodes_[i]); opcHex += s;
+        }
+        LOG_INFO("Warden: Check opcodes: ", opcHex);
+    }
+
+    size_t entryCount = (static_cast<size_t>(fileSize) - CR_HEADER_SIZE) / CR_ENTRY_SIZE;
+    if (entryCount == 0) {
+        LOG_ERROR("Warden: .cr file has no entries");
+        return false;
+    }
+
+    wardenCREntries_.resize(entryCount);
+    for (size_t i = 0; i < entryCount; i++) {
+        auto& e = wardenCREntries_[i];
+        crFile.read(reinterpret_cast<char*>(e.seed), 16);
+        crFile.read(reinterpret_cast<char*>(e.reply), 20);
+        crFile.read(reinterpret_cast<char*>(e.clientKey), 16);
+        crFile.read(reinterpret_cast<char*>(e.serverKey), 16);
+    }
+
+    LOG_INFO("Warden: Loaded ", entryCount, " CR entries from ", crPath);
+    return true;
+}
+
 void GameHandler::handleWardenData(network::Packet& packet) {
     const auto& data = packet.getData();
     if (!wardenGateSeen_) {
@@ -1938,7 +2021,7 @@ void GameHandler::handleWardenData(network::Packet& packet) {
     // Log decrypted data
     {
         std::string hex;
-        size_t logSize = std::min(decrypted.size(), size_t(64));
+        size_t logSize = std::min(decrypted.size(), size_t(256));
         hex.reserve(logSize * 3);
         for (size_t i = 0; i < logSize; ++i) {
             char b[4]; snprintf(b, sizeof(b), "%02x ", decrypted[i]); hex += b;
@@ -1990,6 +2073,9 @@ void GameHandler::handleWardenData(network::Packet& packet) {
                 for (auto b : wardenModuleKey_) { char s[4]; snprintf(s, 4, "%02x", b); keyHex += s; }
                 LOG_INFO("Warden: MODULE_USE hash=", hashHex,
                          " key=", keyHex, " size=", wardenModuleSize_);
+
+                // Try to load pre-computed challenge/response entries
+                loadWardenCRFile(hashHex);
             }
 
             // Respond with MODULE_MISSING (opcode 0x00) to request the module data
@@ -2052,64 +2138,66 @@ void GameHandler::handleWardenData(network::Packet& packet) {
                 LOG_INFO("Warden: HASH_REQUEST seed=", seedHex);
             }
 
-            // The server expects SHA1 of the module's init function stub XOR'd with the seed.
-            // Without the actual module execution, we compute a plausible hash.
-            // For now, try to use the module data we downloaded.
-            // The correct approach: decrypt module with moduleKey RC4, then hash the init stub.
-            // But we need to at least send a HASH_RESULT to not get kicked immediately.
-
-            // Decrypt the downloaded module data using the module RC4 key
-            // VMaNGOS: The module is RC4-encrypted with wardenModuleKey_
-            if (!wardenModuleData_.empty() && !wardenModuleKey_.empty()) {
-                LOG_INFO("Warden: Attempting to compute hash from downloaded module (",
-                         wardenModuleData_.size(), " bytes)");
-
-                // The module data is RC4-encrypted. Decrypt it.
-                // Standard RC4 decryption with the module key
-                std::vector<uint8_t> moduleDecrypted(wardenModuleData_.size());
-                {
-                    // RC4 KSA + PRGA with wardenModuleKey_
-                    std::vector<uint8_t> S(256);
-                    for (int i = 0; i < 256; ++i) S[i] = static_cast<uint8_t>(i);
-                    uint8_t j = 0;
-                    for (int i = 0; i < 256; ++i) {
-                        j = (j + S[i] + wardenModuleKey_[i % wardenModuleKey_.size()]) & 0xFF;
-                        std::swap(S[i], S[j]);
-                    }
-                    uint8_t ri = 0, rj = 0;
-                    for (size_t k = 0; k < wardenModuleData_.size(); ++k) {
-                        ri = (ri + 1) & 0xFF;
-                        rj = (rj + S[ri]) & 0xFF;
-                        std::swap(S[ri], S[rj]);
-                        moduleDecrypted[k] = wardenModuleData_[k] ^ S[(S[ri] + S[rj]) & 0xFF];
+            // --- Try CR lookup (pre-computed challenge/response entries) ---
+            if (!wardenCREntries_.empty()) {
+                const WardenCREntry* match = nullptr;
+                for (const auto& entry : wardenCREntries_) {
+                    if (std::memcmp(entry.seed, seed.data(), 16) == 0) {
+                        match = &entry;
+                        break;
                     }
                 }
 
-                LOG_INFO("Warden: Module decrypted, computing hash response");
+                if (match) {
+                    LOG_INFO("Warden: Found matching CR entry for seed");
 
-                // The hash is SHA1 of the seed concatenated with module data
-                // Actually in VMaNGOS, the init function stub computes SHA1 of seed + specific module regions.
-                // We'll try a simple SHA1(seed + first 16 bytes of decrypted module) approach,
-                // which won't pass verification but at least sends a properly formatted response.
-                std::vector<uint8_t> hashInput;
-                hashInput.insert(hashInput.end(), seed.begin(), seed.end());
-                // Add decrypted module data
-                hashInput.insert(hashInput.end(), moduleDecrypted.begin(), moduleDecrypted.end());
-                auto hash = auth::Crypto::sha1(hashInput);
+                    // Log the reply we're sending
+                    {
+                        std::string replyHex;
+                        for (int i = 0; i < 20; i++) {
+                            char s[4]; snprintf(s, 4, "%02x", match->reply[i]); replyHex += s;
+                        }
+                        LOG_INFO("Warden: Sending pre-computed reply=", replyHex);
+                    }
 
-                // Send HASH_RESULT (WARDEN_CMSG_HASH_RESULT = opcode 0x04)
-                std::vector<uint8_t> resp;
-                resp.push_back(0x04); // WARDEN_CMSG_HASH_RESULT
-                resp.insert(resp.end(), hash.begin(), hash.end()); // 20-byte SHA1
-                sendWardenResponse(resp);
-                LOG_INFO("Warden: Sent HASH_RESULT (21 bytes)");
-            } else {
-                // No module data available, send a dummy hash
-                LOG_WARNING("Warden: No module data for hash computation, sending dummy");
-                std::vector<uint8_t> hashInput;
-                hashInput.insert(hashInput.end(), seed.begin(), seed.end());
-                auto hash = auth::Crypto::sha1(hashInput);
+                    // Send HASH_RESULT (opcode 0x04 + 20-byte reply)
+                    std::vector<uint8_t> resp;
+                    resp.push_back(0x04);
+                    resp.insert(resp.end(), match->reply, match->reply + 20);
+                    sendWardenResponse(resp);
 
+                    // Switch to new RC4 keys from the CR entry
+                    // clientKey = encrypt (client→server), serverKey = decrypt (server→client)
+                    std::vector<uint8_t> newEncryptKey(match->clientKey, match->clientKey + 16);
+                    std::vector<uint8_t> newDecryptKey(match->serverKey, match->serverKey + 16);
+                    wardenCrypto_->replaceKeys(newEncryptKey, newDecryptKey);
+
+                    {
+                        std::string ekHex, dkHex;
+                        for (int i = 0; i < 16; i++) { char s[4]; snprintf(s, 4, "%02x", newEncryptKey[i]); ekHex += s; }
+                        for (int i = 0; i < 16; i++) { char s[4]; snprintf(s, 4, "%02x", newDecryptKey[i]); dkHex += s; }
+                        LOG_INFO("Warden: Switched to CR keys encrypt=", ekHex, " decrypt=", dkHex);
+                    }
+
+                    wardenState_ = WardenState::WAIT_CHECKS;
+                    break;
+                } else {
+                    LOG_WARNING("Warden: Seed not found in ", wardenCREntries_.size(), " CR entries");
+                }
+            }
+
+            // --- Fallback: SHA1(seed + moduleImage) if no CR match ---
+            LOG_WARNING("Warden: No CR match, falling back to SHA1 hash computation");
+
+            if (wardenModuleData_.empty() || wardenModuleKey_.empty()) {
+                LOG_ERROR("Warden: No module data and no CR match — cannot compute hash");
+                wardenState_ = WardenState::WAIT_CHECKS;
+                break;
+            }
+
+            // SHA1 fallback (unlikely to work for vanilla modules, but log for debugging)
+            {
+                auto hash = auth::Crypto::sha1(seed);
                 std::vector<uint8_t> resp;
                 resp.push_back(0x04);
                 resp.insert(resp.end(), hash.begin(), hash.end());
@@ -2122,19 +2210,183 @@ void GameHandler::handleWardenData(network::Packet& packet) {
 
         case 0x02: { // WARDEN_SMSG_CHEAT_CHECKS_REQUEST
             LOG_INFO("Warden: CHEAT_CHECKS_REQUEST (", decrypted.size(), " bytes)");
-            // We don't have the module to properly process checks.
-            // Send a minimal valid-looking response.
-            // WARDEN_CMSG_CHEAT_CHECKS_RESULT (opcode 0x02):
-            // [1 opcode][2 length LE][4 checksum][result data]
 
-            // Minimal response: length=0, checksum=0
+            if (decrypted.size() < 3) {
+                LOG_ERROR("Warden: CHEAT_CHECKS_REQUEST too short");
+                break;
+            }
+
+            // --- Parse string table ---
+            // Format: [1 opcode][string table: (len+data)*][0x00 end][check data][xorByte]
+            size_t pos = 1;
+            std::vector<std::string> strings;
+            while (pos < decrypted.size()) {
+                uint8_t slen = decrypted[pos++];
+                if (slen == 0) break; // end of string table
+                if (pos + slen > decrypted.size()) break;
+                strings.emplace_back(reinterpret_cast<const char*>(decrypted.data() + pos), slen);
+                pos += slen;
+            }
+            LOG_INFO("Warden: String table: ", strings.size(), " entries");
+            for (size_t i = 0; i < strings.size(); i++) {
+                LOG_INFO("Warden:   [", i, "] = \"", strings[i], "\"");
+            }
+
+            // XOR byte is the last byte of the packet
+            uint8_t xorByte = decrypted.back();
+            LOG_INFO("Warden: XOR byte = 0x", [&]{ char s[4]; snprintf(s,4,"%02x",xorByte); return std::string(s); }());
+
+            // Check type enum indices
+            enum CheckType { CT_MEM=0, CT_PAGE_A=1, CT_PAGE_B=2, CT_MPQ=3, CT_LUA=4,
+                             CT_DRIVER=5, CT_TIMING=6, CT_PROC=7, CT_MODULE=8, CT_UNKNOWN=9 };
+            const char* checkTypeNames[] = {"MEM","PAGE_A","PAGE_B","MPQ","LUA","DRIVER","TIMING","PROC","MODULE","UNKNOWN"};
+
+            auto decodeCheckType = [&](uint8_t raw) -> CheckType {
+                uint8_t decoded = raw ^ xorByte;
+                for (int i = 0; i < 9; i++) {
+                    if (decoded == wardenCheckOpcodes_[i]) return static_cast<CheckType>(i);
+                }
+                return CT_UNKNOWN;
+            };
+
+            // --- Parse check entries and build response ---
+            std::vector<uint8_t> resultData;
+            size_t checkEnd = decrypted.size() - 1; // exclude xorByte
+            int checkCount = 0;
+
+            while (pos < checkEnd) {
+                CheckType ct = decodeCheckType(decrypted[pos]);
+                pos++;
+                checkCount++;
+
+                LOG_INFO("Warden: Check #", checkCount, " type=", checkTypeNames[ct],
+                         " at offset ", pos - 1);
+
+                switch (ct) {
+                    case CT_TIMING: {
+                        // No additional request data
+                        // Response: [uint8 result=1][uint32 ticks]
+                        resultData.push_back(0x01);
+                        uint32_t ticks = static_cast<uint32_t>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count());
+                        resultData.push_back(ticks & 0xFF);
+                        resultData.push_back((ticks >> 8) & 0xFF);
+                        resultData.push_back((ticks >> 16) & 0xFF);
+                        resultData.push_back((ticks >> 24) & 0xFF);
+                        break;
+                    }
+                    case CT_MEM: {
+                        // Request: [1 stringIdx][4 offset][1 length]
+                        if (pos + 6 > checkEnd) { pos = checkEnd; break; }
+                        pos++; // stringIdx
+                        uint32_t offset = decrypted[pos] | (uint32_t(decrypted[pos+1])<<8)
+                                        | (uint32_t(decrypted[pos+2])<<16) | (uint32_t(decrypted[pos+3])<<24);
+                        pos += 4;
+                        uint8_t readLen = decrypted[pos++];
+                        LOG_INFO("Warden:   MEM offset=0x", [&]{char s[12];snprintf(s,12,"%08x",offset);return std::string(s);}(),
+                                 " len=", (int)readLen);
+                        // Response: [uint8 result=0][data zeros]
+                        // We don't have real memory, send zeros
+                        resultData.push_back(0x00);
+                        for (int i = 0; i < readLen; i++) resultData.push_back(0x00);
+                        break;
+                    }
+                    case CT_PAGE_A:
+                    case CT_PAGE_B: {
+                        // Request: [4 seed][20 sha1][4 addr][1 length]
+                        if (pos + 29 > checkEnd) { pos = checkEnd; break; }
+                        pos += 29;
+                        // Response: [uint8 result=0] (page matches expected)
+                        resultData.push_back(0x00);
+                        break;
+                    }
+                    case CT_MPQ: {
+                        // Request: [1 stringIdx]
+                        if (pos + 1 > checkEnd) { pos = checkEnd; break; }
+                        uint8_t strIdx = decrypted[pos++];
+                        LOG_INFO("Warden:   MPQ file=\"",
+                                 (strIdx < strings.size() ? strings[strIdx] : "?"), "\"");
+                        // Response: [uint8 result=0][20 sha1 zeros]
+                        // Pretend file found with zero hash (may fail comparison)
+                        resultData.push_back(0x00);
+                        for (int i = 0; i < 20; i++) resultData.push_back(0x00);
+                        break;
+                    }
+                    case CT_LUA: {
+                        // Request: [1 stringIdx]
+                        if (pos + 1 > checkEnd) { pos = checkEnd; break; }
+                        uint8_t strIdx = decrypted[pos++];
+                        LOG_INFO("Warden:   LUA str=\"",
+                                 (strIdx < strings.size() ? strings[strIdx] : "?"), "\"");
+                        // Response: [uint8 result=0][uint16 len=0]
+                        // Lua string doesn't exist
+                        resultData.push_back(0x01); // not found
+                        break;
+                    }
+                    case CT_DRIVER: {
+                        // Request: [4 seed][20 sha1][1 stringIdx]
+                        if (pos + 25 > checkEnd) { pos = checkEnd; break; }
+                        pos += 24; // skip seed + sha1
+                        uint8_t strIdx = decrypted[pos++];
+                        LOG_INFO("Warden:   DRIVER=\"",
+                                 (strIdx < strings.size() ? strings[strIdx] : "?"), "\"");
+                        // Response: [uint8 result=1] (driver NOT found = clean)
+                        resultData.push_back(0x01);
+                        break;
+                    }
+                    case CT_MODULE: {
+                        // Request: [4 seed][20 sha1]
+                        if (pos + 24 > checkEnd) { pos = checkEnd; break; }
+                        pos += 24;
+                        // Response: [uint8 result=1] (module NOT loaded = clean)
+                        resultData.push_back(0x01);
+                        break;
+                    }
+                    case CT_PROC: {
+                        // Request: [4 seed][20 sha1][1 stringIdx][1 stringIdx2][4 offset]
+                        if (pos + 30 > checkEnd) { pos = checkEnd; break; }
+                        pos += 30;
+                        // Response: [uint8 result=1] (proc NOT found = clean)
+                        resultData.push_back(0x01);
+                        break;
+                    }
+                    default: {
+                        LOG_WARNING("Warden: Unknown check type, cannot parse remaining");
+                        pos = checkEnd; // stop parsing
+                        break;
+                    }
+                }
+            }
+
+            LOG_INFO("Warden: Parsed ", checkCount, " checks, result data size=", resultData.size());
+
+            // --- Compute checksum: XOR of 5 uint32s from SHA1(resultData) ---
+            auto resultHash = auth::Crypto::sha1(resultData);
+            uint32_t checksum = 0;
+            for (int i = 0; i < 5; i++) {
+                uint32_t word = resultHash[i*4]
+                              | (uint32_t(resultHash[i*4+1]) << 8)
+                              | (uint32_t(resultHash[i*4+2]) << 16)
+                              | (uint32_t(resultHash[i*4+3]) << 24);
+                checksum ^= word;
+            }
+
+            // --- Build response: [0x02][uint16 length][uint32 checksum][resultData] ---
+            uint16_t resultLen = static_cast<uint16_t>(resultData.size());
             std::vector<uint8_t> resp;
-            resp.push_back(0x02); // WARDEN_CMSG_CHEAT_CHECKS_RESULT
-            resp.push_back(0x00); resp.push_back(0x00); // length = 0
-            resp.push_back(0x00); resp.push_back(0x00);
-            resp.push_back(0x00); resp.push_back(0x00); // checksum = 0
+            resp.push_back(0x02);
+            resp.push_back(resultLen & 0xFF);
+            resp.push_back((resultLen >> 8) & 0xFF);
+            resp.push_back(checksum & 0xFF);
+            resp.push_back((checksum >> 8) & 0xFF);
+            resp.push_back((checksum >> 16) & 0xFF);
+            resp.push_back((checksum >> 24) & 0xFF);
+            resp.insert(resp.end(), resultData.begin(), resultData.end());
             sendWardenResponse(resp);
-            LOG_INFO("Warden: Sent CHEAT_CHECKS_RESULT (minimal)");
+            LOG_INFO("Warden: Sent CHEAT_CHECKS_RESULT (", resp.size(), " bytes, ",
+                     checkCount, " checks, checksum=0x",
+                     [&]{char s[12];snprintf(s,12,"%08x",checksum);return std::string(s);}(), ")");
             break;
         }
 
@@ -2431,7 +2683,7 @@ void GameHandler::setOrientation(float orientation) {
 void GameHandler::handleUpdateObject(network::Packet& packet) {
 
     UpdateObjectData data;
-    if (!UpdateObjectParser::parse(packet, data)) {
+    if (!packetParsers_->parseUpdateObject(packet, data)) {
         LOG_WARNING("Failed to parse SMSG_UPDATE_OBJECT");
         return;
     }
@@ -2651,14 +2903,14 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                     if (unit->getFactionTemplate() != 0) {
                         unit->setHostile(isHostileFaction(unit->getFactionTemplate()));
                     }
-                    // Trigger creature spawn callback for units with displayId
-                    if (block.objectType == ObjectType::UNIT && unit->getDisplayId() != 0) {
+                    // Trigger creature spawn callback for units/players with displayId
+                    if ((block.objectType == ObjectType::UNIT || block.objectType == ObjectType::PLAYER) && unit->getDisplayId() != 0) {
                         if (creatureSpawnCallback_) {
                             creatureSpawnCallback_(block.guid, unit->getDisplayId(),
                                 unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
                         }
                         // Query quest giver status for NPCs with questgiver flag (0x02)
-                        if ((unit->getNpcFlags() & 0x02) && socket) {
+                        if (block.objectType == ObjectType::UNIT && (unit->getNpcFlags() & 0x02) && socket) {
                             network::Packet qsPkt(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_QUERY));
                             qsPkt.writeUInt64(block.guid);
                             socket->send(qsPkt);
@@ -2981,8 +3233,8 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                             } else if (key == ufNpcFlags) { unit->setNpcFlags(val); }
                         }
 
-                        // Some units are created without displayId and get it later via VALUES.
-                        if (entity->getType() == ObjectType::UNIT &&
+                        // Some units/players are created without displayId and get it later via VALUES.
+                        if ((entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::PLAYER) &&
                             displayIdChanged &&
                             unit->getDisplayId() != 0 &&
                             unit->getDisplayId() != oldDisplayId) {
@@ -2990,7 +3242,7 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                 creatureSpawnCallback_(block.guid, unit->getDisplayId(),
                                     unit->getX(), unit->getY(), unit->getZ(), unit->getOrientation());
                             }
-                            if ((unit->getNpcFlags() & 0x02) && socket) {
+                            if (entity->getType() == ObjectType::UNIT && (unit->getNpcFlags() & 0x02) && socket) {
                                 network::Packet qsPkt(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_QUERY));
                                 qsPkt.writeUInt64(block.guid);
                                 socket->send(qsPkt);
@@ -3349,7 +3601,7 @@ void GameHandler::handleMessageChat(network::Packet& packet) {
     LOG_DEBUG("Handling SMSG_MESSAGECHAT");
 
     MessageChatData data;
-    if (!MessageChatParser::parse(packet, data)) {
+    if (!packetParsers_->parseMessageChat(packet, data)) {
         LOG_WARNING("Failed to parse SMSG_MESSAGECHAT");
         return;
     }
@@ -3361,6 +3613,31 @@ void GameHandler::handleMessageChat(network::Packet& packet) {
             lastWhisperSender_ = data.senderName;
         }
         return;
+    }
+
+    // Resolve sender name from entity/cache if not already set by parser
+    if (data.senderName.empty() && data.senderGuid != 0) {
+        // Check player name cache first
+        auto nameIt = playerNameCache.find(data.senderGuid);
+        if (nameIt != playerNameCache.end()) {
+            data.senderName = nameIt->second;
+        } else {
+            // Try entity name
+            auto entity = entityManager.getEntity(data.senderGuid);
+            if (entity) {
+                if (entity->getType() == ObjectType::PLAYER) {
+                    auto player = std::dynamic_pointer_cast<Player>(entity);
+                    if (player && !player->getName().empty()) {
+                        data.senderName = player->getName();
+                    }
+                } else if (entity->getType() == ObjectType::UNIT) {
+                    auto unit = std::dynamic_pointer_cast<Unit>(entity);
+                    if (unit && !unit->getName().empty()) {
+                        data.senderName = unit->getName();
+                    }
+                }
+            }
+        }
     }
 
     // Add to chat history
@@ -3381,18 +3658,7 @@ void GameHandler::handleMessageChat(network::Packet& packet) {
     if (!data.senderName.empty()) {
         senderInfo = data.senderName;
     } else if (data.senderGuid != 0) {
-        // Try to find entity name
-        auto entity = entityManager.getEntity(data.senderGuid);
-        if (entity && entity->getType() == ObjectType::PLAYER) {
-            auto player = std::dynamic_pointer_cast<Player>(entity);
-            if (player && !player->getName().empty()) {
-                senderInfo = player->getName();
-            } else {
-                senderInfo = "Player-" + std::to_string(data.senderGuid);
-            }
-        } else {
-            senderInfo = "Unknown-" + std::to_string(data.senderGuid);
-        }
+        senderInfo = "Unknown-" + std::to_string(data.senderGuid);
     } else {
         senderInfo = "System";
     }
@@ -5053,6 +5319,48 @@ void GameHandler::handleArenaError(network::Packet& packet) {
     }
     addSystemChatMessage(msg);
     LOG_INFO("Arena error: ", error, " - ", msg);
+}
+
+void GameHandler::handleOtherPlayerMovement(network::Packet& packet) {
+    // Server relays MSG_MOVE_* for other players: PackedGuid + MovementInfo
+    uint64_t moverGuid = UpdateObjectParser::readPackedGuid(packet);
+    if (moverGuid == playerGuid || moverGuid == 0) {
+        return; // Skip our own echoes
+    }
+
+    // Read movement info (expansion-specific format)
+    // For classic: moveFlags(u32) + time(u32) + pos(4xf32) + [transport] + [pitch] + fallTime(u32) + [jump] + [splineElev]
+    MovementInfo info = {};
+    info.flags = packet.readUInt32();
+    // WotLK has uint16 flags2, classic/TBC don't
+    if (build >= 8606) { // TBC+
+        if (build >= 12340) {
+            info.flags2 = packet.readUInt16();
+        } else {
+            info.flags2 = packet.readUInt8();
+        }
+    }
+    info.time = packet.readUInt32();
+    info.x = packet.readFloat();
+    info.y = packet.readFloat();
+    info.z = packet.readFloat();
+    info.orientation = packet.readFloat();
+
+    // Update entity position in entity manager
+    auto entity = entityManager.getEntity(moverGuid);
+    if (!entity) {
+        return;
+    }
+
+    // Convert server coords to canonical
+    glm::vec3 canonical = core::coords::serverToCanonical(glm::vec3(info.x, info.y, info.z));
+    float canYaw = core::coords::serverToCanonicalYaw(info.orientation);
+    entity->setPosition(canonical.x, canonical.y, canonical.z, canYaw);
+
+    // Notify renderer
+    if (creatureMoveCallback_) {
+        creatureMoveCallback_(moverGuid, canonical.x, canonical.y, canonical.z, 0);
+    }
 }
 
 void GameHandler::handleMonsterMove(network::Packet& packet) {

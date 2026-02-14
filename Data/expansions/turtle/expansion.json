@@ -6,7 +6,7 @@
   "build": 7234,
   "worldBuild": 5875,
   "protocolVersion": 3,
-  "os": "OSX",
+  "os": "Win",
   "locale": "enGB",
   "maxLevel": 60,
   "races": [1, 2, 3, 4, 5, 6, 7, 8],
