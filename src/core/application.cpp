@@ -3130,15 +3130,16 @@ void Application::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x
                         const auto* idiL = pipeline::getActiveDBCLayout()
                             ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
                         // Texture component region fields (8 regions: ArmUpper..Foot)
+                        // Fields 15-22 in WotLK ItemDisplayInfo.dbc (field 14 = HelmetGeosetVis[1])
                         const uint32_t texRegionFields[8] = {
-                            idiL ? (*idiL)["TextureArmUpper"]  : 14u,
-                            idiL ? (*idiL)["TextureArmLower"]  : 15u,
-                            idiL ? (*idiL)["TextureHand"]      : 16u,
-                            idiL ? (*idiL)["TextureTorsoUpper"]: 17u,
-                            idiL ? (*idiL)["TextureTorsoLower"]: 18u,
-                            idiL ? (*idiL)["TextureLegUpper"]  : 19u,
-                            idiL ? (*idiL)["TextureLegLower"]  : 20u,
-                            idiL ? (*idiL)["TextureFoot"]      : 21u,
+                            idiL ? (*idiL)["TextureArmUpper"]  : 15u,
+                            idiL ? (*idiL)["TextureArmLower"]  : 16u,
+                            idiL ? (*idiL)["TextureHand"]      : 17u,
+                            idiL ? (*idiL)["TextureTorsoUpper"]: 18u,
+                            idiL ? (*idiL)["TextureTorsoLower"]: 19u,
+                            idiL ? (*idiL)["TextureLegUpper"]  : 20u,
+                            idiL ? (*idiL)["TextureLegLower"]  : 21u,
+                            idiL ? (*idiL)["TextureFoot"]      : 22u,
                         };
                         const bool npcIsFemale = (extra.sexId == 1);
 
@@ -3969,15 +3970,16 @@ void Application::setOnlinePlayerEquipment(uint64_t guid,
     };
 
     // Texture component region fields from DBC layout
+    // Fields 15-22 in WotLK ItemDisplayInfo.dbc (field 14 = HelmetGeosetVis[1])
     const uint32_t texRegionFields[8] = {
-        idiL ? (*idiL)["TextureArmUpper"]  : 14u,
-        idiL ? (*idiL)["TextureArmLower"]  : 15u,
-        idiL ? (*idiL)["TextureHand"]      : 16u,
-        idiL ? (*idiL)["TextureTorsoUpper"]: 17u,
-        idiL ? (*idiL)["TextureTorsoLower"]: 18u,
-        idiL ? (*idiL)["TextureLegUpper"]  : 19u,
-        idiL ? (*idiL)["TextureLegLower"]  : 20u,
-        idiL ? (*idiL)["TextureFoot"]      : 21u,
+        idiL ? (*idiL)["TextureArmUpper"]  : 15u,
+        idiL ? (*idiL)["TextureArmLower"]  : 16u,
+        idiL ? (*idiL)["TextureHand"]      : 17u,
+        idiL ? (*idiL)["TextureTorsoUpper"]: 18u,
+        idiL ? (*idiL)["TextureTorsoLower"]: 19u,
+        idiL ? (*idiL)["TextureLegUpper"]  : 20u,
+        idiL ? (*idiL)["TextureLegLower"]  : 21u,
+        idiL ? (*idiL)["TextureFoot"]      : 22u,
     };
 
     std::vector<std::pair<int, std::string>> regionLayers;
