@@ -234,6 +234,16 @@ public:
     void leaveChannel(const std::string& channelName);
     const std::vector<std::string>& getJoinedChannels() const { return joinedChannels_; }
     std::string getChannelByIndex(int index) const;
+    int getChannelIndex(const std::string& channelName) const;
+
+    // Chat auto-join settings (set by UI before autoJoinDefaultChannels)
+    struct ChatAutoJoin {
+        bool general = true;
+        bool trade = true;
+        bool localDefense = true;
+        bool lfg = true;
+    };
+    ChatAutoJoin chatAutoJoin;
 
     // Chat bubble callback: (senderGuid, message, isYell)
     using ChatBubbleCallback = std::function<void(uint64_t, const std::string&, bool)>;

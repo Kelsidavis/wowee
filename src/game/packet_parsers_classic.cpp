@@ -488,6 +488,26 @@ bool ClassicPacketParsers::parseMessageChat(network::Packet& packet, MessageChat
 }
 
 // ============================================================================
+// Classic CMSG_JOIN_CHANNEL / CMSG_LEAVE_CHANNEL
+// Classic format: just string channelName + string password (no channelId/hasVoice/joinedByZone)
+// ============================================================================
+
+network::Packet ClassicPacketParsers::buildJoinChannel(const std::string& channelName, const std::string& password) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_JOIN_CHANNEL));
+    packet.writeString(channelName);
+    packet.writeString(password);
+    LOG_DEBUG("[Classic] Built CMSG_JOIN_CHANNEL: channel=", channelName);
+    return packet;
+}
+
+network::Packet ClassicPacketParsers::buildLeaveChannel(const std::string& channelName) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_LEAVE_CHANNEL));
+    packet.writeString(channelName);
+    LOG_DEBUG("[Classic] Built CMSG_LEAVE_CHANNEL: channel=", channelName);
+    return packet;
+}
+
+// ============================================================================
 // Classic guild roster parser
 // Differences from WotLK:
 // - No rankCount field (fixed 10 ranks, read rights only)

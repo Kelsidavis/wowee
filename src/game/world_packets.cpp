@@ -1233,6 +1233,10 @@ bool MessageChatParser::parse(network::Packet& packet, MessageChatData& data) {
         for (uint32_t i = 0; i < messageLen; ++i) {
             data.message[i] = static_cast<char>(packet.readUInt8());
         }
+        // Strip trailing null terminator (servers include it in messageLen)
+        if (!data.message.empty() && data.message.back() == '\0') {
+            data.message.pop_back();
+        }
     }
 
     // Read chat tag

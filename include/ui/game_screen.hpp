@@ -215,6 +215,17 @@ private:
     GLuint backpackIconTexture_ = 0;
     GLuint emptyBagSlotTexture_ = 0;
 
+    // Chat settings
+    bool chatShowTimestamps_ = false;
+    int chatFontSize_ = 1;  // 0=small, 1=medium, 2=large
+    bool chatAutoJoinGeneral_ = true;
+    bool chatAutoJoinTrade_ = true;
+    bool chatAutoJoinLocalDefense_ = true;
+    bool chatAutoJoinLFG_ = true;
+
+    // Join channel input buffer
+    char joinChannelBuffer_[128] = "";
+
     static std::string getSettingsPath();
 
     // Gender placeholder replacement

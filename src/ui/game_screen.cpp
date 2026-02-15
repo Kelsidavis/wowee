@@ -34,6 +34,8 @@
 #include <filesystem>
 #include <fstream>
 #include <cctype>
+#include <chrono>
+#include <ctime>
 #include <unordered_set>
 
 namespace {
@@ -199,6 +201,12 @@ void GameScreen::render(game::GameHandler& gameHandler) {
             }
         }
     }
+
+    // Sync chat auto-join settings to GameHandler
+    gameHandler.chatAutoJoin.general = chatAutoJoinGeneral_;
+    gameHandler.chatAutoJoin.trade = chatAutoJoinTrade_;
+    gameHandler.chatAutoJoin.localDefense = chatAutoJoinLocalDefense_;
+    gameHandler.chatAutoJoin.lfg = chatAutoJoinLFG_;
 
     // Process targeting input before UI windows
     processTargetInput(gameHandler);
@@ -562,6 +570,10 @@ void GameScreen::renderChatWindow(game::GameHandler& gameHandler) {
     // Chat history
     const auto& chatHistory = gameHandler.getChatHistory();
 
+    // Apply chat font size scaling
+    float chatScale = chatFontSize_ == 0 ? 0.85f : (chatFontSize_ == 2 ? 1.2f : 1.0f);
+    ImGui::SetWindowFontScale(chatScale);
+
     ImGui::BeginChild("ChatHistory", ImVec2(0, -70), true, ImGuiWindowFlags_HorizontalScrollbar);
     bool chatHistoryHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
@@ -847,20 +859,54 @@ void GameScreen::renderChatWindow(game::GameHandler& gameHandler) {
 
         ImVec4 color = getChatTypeColor(msg.type);
 
+        // Optional timestamp prefix
+        std::string tsPrefix;
+        if (chatShowTimestamps_) {
+            auto tt = std::chrono::system_clock::to_time_t(msg.timestamp);
+            std::tm tm{};
+            localtime_r(&tt, &tm);
+            char tsBuf[16];
+            snprintf(tsBuf, sizeof(tsBuf), "[%02d:%02d] ", tm.tm_hour, tm.tm_min);
+            tsPrefix = tsBuf;
+        }
+
         if (msg.type == game::ChatType::SYSTEM) {
+            if (!tsPrefix.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                ImGui::TextWrapped("%s", tsPrefix.c_str());
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0, 0);
+            }
             renderTextWithLinks(msg.message, color);
         } else if (msg.type == game::ChatType::TEXT_EMOTE) {
+            if (!tsPrefix.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                ImGui::TextWrapped("%s", tsPrefix.c_str());
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0, 0);
+            }
             renderTextWithLinks(msg.message, color);
         } else if (!msg.senderName.empty()) {
             if (msg.type == game::ChatType::MONSTER_SAY || msg.type == game::ChatType::MONSTER_YELL) {
-                std::string prefix = msg.senderName + " says: ";
+                std::string prefix = tsPrefix + msg.senderName + " says: ";
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
+                ImGui::TextWrapped("%s", prefix.c_str());
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0, 0);
+                renderTextWithLinks(msg.message, color);
+            } else if (msg.type == game::ChatType::CHANNEL && !msg.channelName.empty()) {
+                int chIdx = gameHandler.getChannelIndex(msg.channelName);
+                std::string chDisplay = chIdx > 0
+                    ? "[" + std::to_string(chIdx) + ". " + msg.channelName + "]"
+                    : "[" + msg.channelName + "]";
+                std::string prefix = tsPrefix + chDisplay + " [" + msg.senderName + "]: ";
                 ImGui::PushStyleColor(ImGuiCol_Text, color);
                 ImGui::TextWrapped("%s", prefix.c_str());
                 ImGui::PopStyleColor();
                 ImGui::SameLine(0, 0);
                 renderTextWithLinks(msg.message, color);
             } else {
-                std::string prefix = "[" + std::string(getChatTypeName(msg.type)) + "] " + msg.senderName + ": ";
+                std::string prefix = tsPrefix + "[" + std::string(getChatTypeName(msg.type)) + "] " + msg.senderName + ": ";
                 ImGui::PushStyleColor(ImGuiCol_Text, color);
                 ImGui::TextWrapped("%s", prefix.c_str());
                 ImGui::PopStyleColor();
@@ -868,7 +914,7 @@ void GameScreen::renderChatWindow(game::GameHandler& gameHandler) {
                 renderTextWithLinks(msg.message, color);
             }
         } else {
-            std::string prefix = "[" + std::string(getChatTypeName(msg.type)) + "] ";
+            std::string prefix = tsPrefix + "[" + std::string(getChatTypeName(msg.type)) + "] ";
             ImGui::PushStyleColor(ImGuiCol_Text, color);
             ImGui::TextWrapped("%s", prefix.c_str());
             ImGui::PopStyleColor();
@@ -883,6 +929,9 @@ void GameScreen::renderChatWindow(game::GameHandler& gameHandler) {
     }
 
     ImGui::EndChild();
+
+    // Reset font scale after chat history
+    ImGui::SetWindowFontScale(1.0f);
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -5464,6 +5513,59 @@ void GameScreen::renderSettingsWindow() {
                 ImGui::EndTabItem();
             }
 
+            // ============================================================
+            // CHAT TAB
+            // ============================================================
+            if (ImGui::BeginTabItem("Chat")) {
+                ImGui::Spacing();
+
+                ImGui::Text("Appearance");
+                ImGui::Separator();
+
+                if (ImGui::Checkbox("Show Timestamps", &chatShowTimestamps_)) {
+                    saveSettings();
+                }
+                ImGui::SetItemTooltip("Show [HH:MM] before each chat message");
+
+                const char* fontSizes[] = { "Small", "Medium", "Large" };
+                if (ImGui::Combo("Chat Font Size", &chatFontSize_, fontSizes, 3)) {
+                    saveSettings();
+                }
+
+                ImGui::Spacing();
+                ImGui::Spacing();
+                ImGui::Text("Auto-Join Channels");
+                ImGui::Separator();
+
+                if (ImGui::Checkbox("General", &chatAutoJoinGeneral_)) saveSettings();
+                if (ImGui::Checkbox("Trade", &chatAutoJoinTrade_)) saveSettings();
+                if (ImGui::Checkbox("LocalDefense", &chatAutoJoinLocalDefense_)) saveSettings();
+                if (ImGui::Checkbox("LookingForGroup", &chatAutoJoinLFG_)) saveSettings();
+
+                ImGui::Spacing();
+                ImGui::Spacing();
+                ImGui::Text("Joined Channels");
+                ImGui::Separator();
+
+                ImGui::TextDisabled("Use /join and /leave commands in chat to manage channels.");
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if (ImGui::Button("Restore Chat Defaults", ImVec2(-1, 0))) {
+                    chatShowTimestamps_ = false;
+                    chatFontSize_ = 1;
+                    chatAutoJoinGeneral_ = true;
+                    chatAutoJoinTrade_ = true;
+                    chatAutoJoinLocalDefense_ = true;
+                    chatAutoJoinLFG_ = true;
+                    saveSettings();
+                }
+
+                ImGui::EndTabItem();
+            }
+
             ImGui::EndTabBar();
         }
 
@@ -5920,6 +6022,12 @@ void GameScreen::saveSettings() {
 
     // Chat
     out << "chat_active_tab=" << activeChatTab_ << "\n";
+    out << "chat_timestamps=" << (chatShowTimestamps_ ? 1 : 0) << "\n";
+    out << "chat_font_size=" << chatFontSize_ << "\n";
+    out << "chat_autojoin_general=" << (chatAutoJoinGeneral_ ? 1 : 0) << "\n";
+    out << "chat_autojoin_trade=" << (chatAutoJoinTrade_ ? 1 : 0) << "\n";
+    out << "chat_autojoin_localdefense=" << (chatAutoJoinLocalDefense_ ? 1 : 0) << "\n";
+    out << "chat_autojoin_lfg=" << (chatAutoJoinLFG_ ? 1 : 0) << "\n";
 
     LOG_INFO("Settings saved to ", path);
 }
@@ -5973,6 +6081,12 @@ void GameScreen::loadSettings() {
             else if (key == "invert_mouse") pendingInvertMouse = (std::stoi(val) != 0);
             // Chat
             else if (key == "chat_active_tab") activeChatTab_ = std::clamp(std::stoi(val), 0, 3);
+            else if (key == "chat_timestamps") chatShowTimestamps_ = (std::stoi(val) != 0);
+            else if (key == "chat_font_size") chatFontSize_ = std::clamp(std::stoi(val), 0, 2);
+            else if (key == "chat_autojoin_general") chatAutoJoinGeneral_ = (std::stoi(val) != 0);
+            else if (key == "chat_autojoin_trade") chatAutoJoinTrade_ = (std::stoi(val) != 0);
+            else if (key == "chat_autojoin_localdefense") chatAutoJoinLocalDefense_ = (std::stoi(val) != 0);
+            else if (key == "chat_autojoin_lfg") chatAutoJoinLFG_ = (std::stoi(val) != 0);
         } catch (...) {}
     }
     LOG_INFO("Settings loaded from ", path);

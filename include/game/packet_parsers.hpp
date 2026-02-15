@@ -136,6 +136,18 @@ public:
         return GuildQueryResponseParser::parse(packet, data);
     }
 
+    // --- Channels ---
+
+    /** Build CMSG_JOIN_CHANNEL */
+    virtual network::Packet buildJoinChannel(const std::string& channelName, const std::string& password) {
+        return JoinChannelPacket::build(channelName, password);
+    }
+
+    /** Build CMSG_LEAVE_CHANNEL */
+    virtual network::Packet buildLeaveChannel(const std::string& channelName) {
+        return LeaveChannelPacket::build(channelName);
+    }
+
     // --- Utility ---
 
     /** Read a packed GUID from the packet */
@@ -216,6 +228,8 @@ public:
     bool parseMessageChat(network::Packet& packet, MessageChatData& data) override;
     bool parseGuildRoster(network::Packet& packet, GuildRosterData& data) override;
     bool parseGuildQueryResponse(network::Packet& packet, GuildQueryResponseData& data) override;
+    network::Packet buildJoinChannel(const std::string& channelName, const std::string& password) override;
+    network::Packet buildLeaveChannel(const std::string& channelName) override;
 };
 
 /**

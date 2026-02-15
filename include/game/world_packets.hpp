@@ -11,6 +11,7 @@
 #include <string>
 #include <map>
 #include <unordered_map>
+#include <chrono>
 
 namespace wowee {
 namespace game {
@@ -653,6 +654,7 @@ struct MessageChatData {
     std::string message;
     std::string channelName;  // For channel messages
     uint8_t chatTag = 0;      // Player flags (AFK, DND, GM, etc.)
+    std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now();
 
     bool isValid() const { return !message.empty(); }
 };

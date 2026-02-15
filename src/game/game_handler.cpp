@@ -3912,6 +3912,10 @@ void GameHandler::sendChatMessage(ChatType type, const std::string& message, con
         echo.type = type;
     }
 
+    if (type == ChatType::CHANNEL) {
+        echo.channelName = target;
+    }
+
     addLocalChatMessage(echo);
 }
 
@@ -4075,14 +4079,16 @@ void GameHandler::handleTextEmote(network::Packet& packet) {
 
 void GameHandler::joinChannel(const std::string& channelName, const std::string& password) {
     if (state != WorldState::IN_WORLD || !socket) return;
-    auto packet = JoinChannelPacket::build(channelName, password);
+    auto packet = packetParsers_ ? packetParsers_->buildJoinChannel(channelName, password)
+                                 : JoinChannelPacket::build(channelName, password);
     socket->send(packet);
     LOG_INFO("Requesting to join channel: ", channelName);
 }
 
 void GameHandler::leaveChannel(const std::string& channelName) {
     if (state != WorldState::IN_WORLD || !socket) return;
-    auto packet = LeaveChannelPacket::build(channelName);
+    auto packet = packetParsers_ ? packetParsers_->buildLeaveChannel(channelName)
+                                 : LeaveChannelPacket::build(channelName);
     socket->send(packet);
     LOG_INFO("Requesting to leave channel: ", channelName);
 }
@@ -4090,6 +4096,13 @@ void GameHandler::leaveChannel(const std::string& channelName) {
 std::string GameHandler::getChannelByIndex(int index) const {
     if (index < 1 || index > static_cast<int>(joinedChannels_.size())) return "";
     return joinedChannels_[index - 1];
+}
+
+int GameHandler::getChannelIndex(const std::string& channelName) const {
+    for (int i = 0; i < static_cast<int>(joinedChannels_.size()); ++i) {
+        if (joinedChannels_[i] == channelName) return i + 1;  // 1-based
+    }
+    return 0;
 }
 
 void GameHandler::handleChannelNotify(network::Packet& packet) {
@@ -4135,8 +4148,10 @@ void GameHandler::handleChannelNotify(network::Packet& packet) {
 }
 
 void GameHandler::autoJoinDefaultChannels() {
-    joinChannel("General");
-    joinChannel("Trade");
+    if (chatAutoJoin.general) joinChannel("General");
+    if (chatAutoJoin.trade) joinChannel("Trade");
+    if (chatAutoJoin.localDefense) joinChannel("LocalDefense");
+    if (chatAutoJoin.lfg) joinChannel("LookingForGroup");
 }
 
 void GameHandler::setTarget(uint64_t guid) {
