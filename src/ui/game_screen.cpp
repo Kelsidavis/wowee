@@ -5510,7 +5510,7 @@ void GameScreen::renderSettingsWindow() {
         if (ImGui::Button("Back to Game", ImVec2(-1, 0))) {
             showSettingsWindow = false;
         }
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleVar();
     }
     ImGui::End();
 }
