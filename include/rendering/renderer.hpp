@@ -137,7 +137,7 @@ public:
     void setEquippedWeaponType(uint32_t inventoryType) { equippedWeaponInvType_ = inventoryType; meleeAnimId = 0; }
 
     // Mount rendering
-    void setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float heightOffset);
+    void setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float heightOffset, const std::string& modelPath = "");
     void setTaxiFlight(bool onTaxi) { taxiFlight_ = onTaxi; }
     void setMountPitchRoll(float pitch, float roll) { mountPitch_ = pitch; mountRoll_ = roll; }
     void clearMount();

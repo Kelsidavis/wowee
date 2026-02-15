@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+#include <unordered_map>
 #include <chrono>
 
 namespace wowee {
@@ -24,7 +25,15 @@ enum class MountFamily {
     WOLF,
     TIGER,
     RAPTOR,
-    DRAGON
+    DRAGON,
+    KODO,
+    MECHANOSTRIDER,
+    TALLSTRIDER,
+    UNDEAD_HORSE
+};
+
+struct MountFamilyHash {
+    std::size_t operator()(MountFamily f) const { return static_cast<std::size_t>(f); }
 };
 
 struct MountSample {
@@ -42,7 +51,7 @@ public:
     void update(float deltaTime);
 
     // Called when mounting/dismounting
-    void onMount(uint32_t creatureDisplayId, bool isFlying);
+    void onMount(uint32_t creatureDisplayId, bool isFlying, const std::string& modelPath = "");
     void onDismount();
 
     // Update movement state
@@ -63,6 +72,7 @@ public:
 private:
     MountType detectMountType(uint32_t creatureDisplayId) const;
     MountFamily detectMountFamily(uint32_t creatureDisplayId) const;
+    MountFamily detectMountFamilyFromPath(const std::string& modelPath) const;
     void updateMountSounds();
     void stopAllMountSounds();
     void loadMountSounds();
@@ -80,11 +90,18 @@ private:
     // Mount sound samples (loaded from MPQ)
     std::vector<MountSample> wingFlapSounds_;
     std::vector<MountSample> wingIdleSounds_;
-    std::vector<MountSample> horseBreathSounds_;
-    std::vector<MountSample> horseMoveSounds_;
-    std::vector<MountSample> horseJumpSounds_;   // Jump effort sounds
-    std::vector<MountSample> horseLandSounds_;   // Landing thud sounds
-    std::vector<MountSample> horseIdleSounds_;   // Snorts and whinnies for idle
+
+    // Per-family ground mount sounds
+    struct FamilySounds {
+        std::vector<MountSample> move;    // Movement ambient (alerts/whinnies/growls)
+        std::vector<MountSample> jump;    // Jump effort sounds
+        std::vector<MountSample> land;    // Landing wound/thud sounds
+        std::vector<MountSample> idle;    // Idle ambient (snorts/breathing/fidgets)
+    };
+    std::unordered_map<MountFamily, FamilySounds, MountFamilyHash> familySounds_;
+
+    // Helper to get sounds for current family (falls back to HORSE)
+    const FamilySounds& getCurrentFamilySounds() const;
 
     // Sound state tracking
     bool playingMovementSound_ = false;

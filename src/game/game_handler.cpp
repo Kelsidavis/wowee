@@ -3280,6 +3280,18 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                             mountAuraSpellId_ = a.spellId;
                                         }
                                     }
+                                    // Classic/vanilla fallback: scan UNIT_FIELD_AURAS from same update block
+                                    if (mountAuraSpellId_ == 0) {
+                                        const uint16_t ufAuras = fieldIndex(UF::UNIT_FIELD_AURAS);
+                                        if (ufAuras != 0xFFFF) {
+                                            for (const auto& [fk, fv] : block.fields) {
+                                                if (fk >= ufAuras && fk < ufAuras + 48 && fv != 0) {
+                                                    mountAuraSpellId_ = fv;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
                                     LOG_INFO("Mount detected: displayId=", val, " auraSpellId=", mountAuraSpellId_);
                                 }
                                 if (old != 0 && val == 0) {
@@ -3668,6 +3680,18 @@ void GameHandler::handleUpdateObject(network::Packet& packet) {
                                         for (const auto& a : playerAuras) {
                                             if (!a.isEmpty() && a.maxDurationMs < 0 && a.casterGuid == playerGuid) {
                                                 mountAuraSpellId_ = a.spellId;
+                                            }
+                                        }
+                                        // Classic/vanilla fallback: scan UNIT_FIELD_AURAS from same update block
+                                        if (mountAuraSpellId_ == 0) {
+                                            const uint16_t ufAuras = fieldIndex(UF::UNIT_FIELD_AURAS);
+                                            if (ufAuras != 0xFFFF) {
+                                                for (const auto& [fk, fv] : block.fields) {
+                                                    if (fk >= ufAuras && fk < ufAuras + 48 && fv != 0) {
+                                                        mountAuraSpellId_ = fv;
+                                                        break;
+                                                    }
+                                                }
                                             }
                                         }
                                         LOG_INFO("Mount detected (values update): displayId=", val, " auraSpellId=", mountAuraSpellId_);
@@ -8594,6 +8618,21 @@ void GameHandler::updateClientTaxi(float deltaTime) {
     auto playerEntity = entityManager.getEntity(playerGuid);
 
     auto finishTaxiFlight = [&]() {
+            // Snap player to the last waypoint (landing position) before clearing state.
+            // Without this, the player would be left at whatever mid-flight position
+            // they were at when the path completion was detected.
+            if (!taxiClientPath_.empty()) {
+                const auto& landingPos = taxiClientPath_.back();
+                if (playerEntity) {
+                    playerEntity->setPosition(landingPos.x, landingPos.y, landingPos.z,
+                                              movementInfo.orientation);
+                }
+                movementInfo.x = landingPos.x;
+                movementInfo.y = landingPos.y;
+                movementInfo.z = landingPos.z;
+                LOG_INFO("Taxi landing: snapped to final waypoint (",
+                         landingPos.x, ", ", landingPos.y, ", ", landingPos.z, ")");
+            }
             taxiClientActive_ = false;
             onTaxiFlight_ = false;
             taxiLandingCooldown_ = 2.0f;  // 2 second cooldown to prevent re-entering

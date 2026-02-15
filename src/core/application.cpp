@@ -712,7 +712,12 @@ void Application::update(float deltaTime) {
             }
             if (renderer && renderer->getCameraController()) {
                 const bool externallyDrivenMotion = onTaxi || onTransportNow;
-                renderer->getCameraController()->setExternalFollow(externallyDrivenMotion);
+                // Keep physics frozen (externalFollow) during landing clamp when terrain
+                // hasn't loaded yet — prevents gravity from pulling player through void.
+                bool landingClampActive = !onTaxi && taxiLandingClampTimer_ > 0.0f &&
+                                          worldEntryMovementGraceTimer_ <= 0.0f &&
+                                          !gameHandler->isMounted();
+                renderer->getCameraController()->setExternalFollow(externallyDrivenMotion || landingClampActive);
                 renderer->getCameraController()->setExternalMoving(externallyDrivenMotion);
                 if (externallyDrivenMotion) {
                     // Drop any stale local movement toggles while server drives taxi motion.
@@ -721,15 +726,11 @@ void Application::update(float deltaTime) {
                 }
                 if (lastTaxiFlight_ && !onTaxi) {
                     renderer->getCameraController()->clearMovementInputs();
-                    // Keep clamping for a short grace window after taxi ends to avoid
-                    // falling through WMOs while floor/collision state settles.
-                    taxiLandingClampTimer_ = 1.5f;
+                    // Keep clamping until terrain loads at landing position.
+                    // Timer only counts down once a valid floor is found.
+                    taxiLandingClampTimer_ = 2.0f;
                 }
-                if (!onTaxi &&
-                    worldEntryMovementGraceTimer_ <= 0.0f &&
-                    !gameHandler->isMounted() &&
-                    taxiLandingClampTimer_ > 0.0f) {
-                    taxiLandingClampTimer_ -= deltaTime;
+                if (landingClampActive) {
                     if (renderer && gameHandler) {
                         glm::vec3 p = renderer->getCharacterPosition();
                         std::optional<float> terrainFloor;
@@ -753,17 +754,18 @@ void Application::update(float deltaTime) {
                         if (m2Floor && (!targetFloor || *m2Floor > *targetFloor)) targetFloor = m2Floor;
 
                         if (targetFloor) {
+                            // Floor found — snap player to it and start countdown to release
                             float targetZ = *targetFloor + 0.10f;
-                            // Only lift upward to prevent sinking through floors/bridges.
-                            // Never force the player downward from a valid elevated surface.
-                            if (p.z < targetZ - 0.05f) {
+                            if (std::abs(p.z - targetZ) > 0.05f) {
                                 p.z = targetZ;
                                 renderer->getCharacterPosition() = p;
                                 glm::vec3 canonical = core::coords::renderToCanonical(p);
                                 gameHandler->setPosition(canonical.x, canonical.y, canonical.z);
                                 gameHandler->sendMovement(game::Opcode::CMSG_MOVE_HEARTBEAT);
                             }
+                            taxiLandingClampTimer_ -= deltaTime;
                         }
+                        // No floor found: don't decrement timer, keep player frozen until terrain loads
                     }
                 }
                 bool idleOrbit = renderer->getCameraController()->isIdleOrbit();
@@ -1130,12 +1132,11 @@ void Application::setupUICallbacks() {
             pos.z += 20.0f;
         }
 
-        // Nudge forward slightly to break edge-cases where unstuck lands exactly
-        // on problematic collision seams.
+        // Nudge forward to break free of collision seams / stuck geometry.
         if (gameHandler) {
             float renderYaw = gameHandler->getMovementInfo().orientation + glm::radians(90.0f);
-            pos.x += std::cos(renderYaw) * 2.0f;
-            pos.y += std::sin(renderYaw) * 2.0f;
+            pos.x += std::cos(renderYaw) * 5.0f;
+            pos.y += std::sin(renderYaw) * 5.0f;
         }
 
         cc->teleportTo(pos);
@@ -4675,7 +4676,7 @@ void Application::processPendingMount() {
         }
     }
 
-    renderer->setMounted(instanceId, mountDisplayId, heightOffset);
+    renderer->setMounted(instanceId, mountDisplayId, heightOffset, m2Path);
     charRenderer->playAnimation(instanceId, 0, true);
 
     LOG_INFO("processPendingMount: DONE displayId=", mountDisplayId, " model=", m2Path, " heightOffset=", heightOffset);

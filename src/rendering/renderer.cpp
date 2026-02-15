@@ -576,7 +576,7 @@ void Renderer::setCharacterFollow(uint32_t instanceId) {
     }
 }
 
-void Renderer::setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float heightOffset) {
+void Renderer::setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float heightOffset, const std::string& modelPath) {
     mountInstanceId_ = mountInstId;
     mountHeightOffset_ = heightOffset;
     mountSeatAttachmentId_ = -1;
@@ -812,7 +812,7 @@ void Renderer::setMounted(uint32_t mountInstId, uint32_t mountDisplayId, float h
     // Notify mount sound manager
     if (mountSoundManager) {
         bool isFlying = taxiFlight_;  // Taxi flights are flying mounts
-        mountSoundManager->onMount(mountDisplayId, isFlying);
+        mountSoundManager->onMount(mountDisplayId, isFlying, modelPath);
     }
 }
 

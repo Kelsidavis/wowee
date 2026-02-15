@@ -895,7 +895,23 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             (lowerName.find("seaweed") != std::string::npos) ||
             (lowerName.find("kelp") != std::string::npos) ||
             (lowerName.find("cattail") != std::string::npos) ||
-            (lowerName.find("reed") != std::string::npos);
+            (lowerName.find("reed") != std::string::npos) ||
+            (lowerName.find("palm") != std::string::npos) ||
+            (lowerName.find("bamboo") != std::string::npos) ||
+            (lowerName.find("banana") != std::string::npos) ||
+            (lowerName.find("coconut") != std::string::npos) ||
+            (lowerName.find("canopy") != std::string::npos) ||
+            (lowerName.find("hedge") != std::string::npos) ||
+            (lowerName.find("cactus") != std::string::npos) ||
+            (lowerName.find("leaf") != std::string::npos) ||
+            (lowerName.find("leaves") != std::string::npos) ||
+            (lowerName.find("stalk") != std::string::npos) ||
+            (lowerName.find("corn") != std::string::npos) ||
+            (lowerName.find("crop") != std::string::npos) ||
+            (lowerName.find("hay") != std::string::npos) ||
+            (lowerName.find("frond") != std::string::npos) ||
+            (lowerName.find("algae") != std::string::npos) ||
+            (lowerName.find("coral") != std::string::npos);
         bool treeLike = (lowerName.find("tree") != std::string::npos);
         foliageOrTreeLike = (foliageName || treeLike);
         bool hardTreePart =

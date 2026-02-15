@@ -400,9 +400,12 @@ bool WMORenderer::loadModel(const pipeline::WMOModel& model, uint32_t id) {
         }
 
         groupRes.mergedBatches.reserve(batchMap.size());
+        bool anyTextured = false;
         for (auto& [key, mb] : batchMap) {
+            if (mb.hasTexture) anyTextured = true;
             groupRes.mergedBatches.push_back(std::move(mb));
         }
+        groupRes.allUntextured = !anyTextured && !groupRes.mergedBatches.empty();
     }
 
     // Copy portal data for visibility culling
@@ -1197,6 +1200,18 @@ void WMORenderer::render(const Camera& camera, const glm::mat4& view, const glm:
         glm::vec3 cameraPos = camera.getPosition();
         for (uint32_t gi : dl.visibleGroups) {
             const auto& group = model.groups[gi];
+
+            // Skip groups with SHOW_SKYBOX flag (0x20000) — these are transparent
+            // sky windows meant to show the skybox behind them, not solid geometry
+            if (group.groupFlags & 0x20000) {
+                continue;
+            }
+
+            // Skip groups where ALL batches use the fallback white texture —
+            // these are collision/placeholder/LOD shell groups with no visual data
+            if (group.allUntextured) {
+                continue;
+            }
 
             // STORMWIND.WMO specific fix: LOD shell visibility control
             // Combination of distance culling + backface culling for best results

@@ -309,6 +309,7 @@ private:
         glm::vec3 boundingBoxMax;
 
         uint32_t groupFlags = 0;
+        bool allUntextured = false;  // True if ALL batches use fallback white texture (collision/placeholder group)
 
         // Material batches (start index, count, material ID)
         struct Batch {
