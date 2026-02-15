@@ -1431,6 +1431,10 @@ void WMORenderer::renderGroup(const GroupResources& group, [[maybe_unused]] cons
     static bool lastUnlit = false;
 
     for (const auto& mb : group.mergedBatches) {
+        // Skip untextured batches — these are collision/placeholder geometry
+        // that renders as solid grey when drawn with the fallback white texture.
+        if (!mb.hasTexture) continue;
+
         if (mb.texId != lastBoundTex) {
             glBindTexture(GL_TEXTURE_2D, mb.texId);
             lastBoundTex = mb.texId;
