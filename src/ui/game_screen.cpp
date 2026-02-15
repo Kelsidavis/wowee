@@ -2639,6 +2639,20 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
     // Load ItemDisplayInfo.dbc
     auto displayInfoDbc = assetManager->loadDBC("ItemDisplayInfo.dbc");
     if (!displayInfoDbc) return;
+    const auto* idiL = pipeline::getActiveDBCLayout()
+        ? pipeline::getActiveDBCLayout()->getLayout("ItemDisplayInfo") : nullptr;
+    // Texture component region fields (8 regions: ArmUpper..Foot)
+    // Binary DBC (23 fields) has textures at 14+
+    const uint32_t texRegionFields[8] = {
+        idiL ? (*idiL)["TextureArmUpper"]  : 14u,
+        idiL ? (*idiL)["TextureArmLower"]  : 15u,
+        idiL ? (*idiL)["TextureHand"]      : 16u,
+        idiL ? (*idiL)["TextureTorsoUpper"]: 17u,
+        idiL ? (*idiL)["TextureTorsoLower"]: 18u,
+        idiL ? (*idiL)["TextureLegUpper"]  : 19u,
+        idiL ? (*idiL)["TextureLegLower"]  : 20u,
+        idiL ? (*idiL)["TextureFoot"]      : 21u,
+    };
 
     // Collect equipment texture regions from all equipped items
     std::vector<std::pair<int, std::string>> regionLayers;
@@ -2650,11 +2664,9 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
         int32_t recIdx = displayInfoDbc->findRecordById(slot.item.displayInfoId);
         if (recIdx < 0) continue;
 
-        // DBC fields 14-21 = texture_1 through texture_8 (regions 0-7)
-        // Binary DBC (23 fields) has textures at 14+; some CSVs (25 fields) have them at 15+.
         for (int region = 0; region < 8; region++) {
-            uint32_t fieldIdx = 14 + region;
-            std::string texName = displayInfoDbc->getString(static_cast<uint32_t>(recIdx), fieldIdx);
+            std::string texName = displayInfoDbc->getString(
+                static_cast<uint32_t>(recIdx), texRegionFields[region]);
             if (texName.empty()) continue;
 
             // Actual MPQ files have a gender suffix: _M (male), _F (female), _U (unisex)

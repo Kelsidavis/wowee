@@ -5686,7 +5686,16 @@ void GameHandler::rebuildOnlineInventory() {
         }
     }
 
-    onlineEquipDirty_ = true;
+    // Only mark equipment dirty if equipped item displayInfoIds actually changed
+    std::array<uint32_t, 19> currentEquipDisplayIds{};
+    for (int i = 0; i < 19; i++) {
+        const auto& slot = inventory.getEquipSlot(static_cast<EquipSlot>(i));
+        if (!slot.empty()) currentEquipDisplayIds[i] = slot.item.displayInfoId;
+    }
+    if (currentEquipDisplayIds != lastEquipDisplayIds_) {
+        lastEquipDisplayIds_ = currentEquipDisplayIds;
+        onlineEquipDirty_ = true;
+    }
 
     LOG_DEBUG("Rebuilt online inventory: equip=", [&](){
         int c = 0; for (auto g : equipSlotGuids_) if (g) c++; return c;

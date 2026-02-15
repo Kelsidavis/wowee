@@ -1134,6 +1134,7 @@ private:
     int packSlotBase_ = -1;
     std::map<uint16_t, uint32_t> lastPlayerFields_;
     bool onlineEquipDirty_ = false;
+    std::array<uint32_t, 19> lastEquipDisplayIds_{};
 
     // Visible equipment for other players: detect the update-field layout (base + stride)
     // using the local player's own equipped items, then decode other players by index.
