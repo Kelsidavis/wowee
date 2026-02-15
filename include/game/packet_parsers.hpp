@@ -117,6 +117,13 @@ public:
         return NameQueryResponseParser::parse(packet, data);
     }
 
+    // --- GameObject Query ---
+
+    /** Parse SMSG_GAMEOBJECT_QUERY_RESPONSE */
+    virtual bool parseGameObjectQueryResponse(network::Packet& packet, GameObjectQueryResponseData& data) {
+        return GameObjectQueryResponseParser::parse(packet, data);
+    }
+
     // --- Gossip ---
 
     /** Parse SMSG_GOSSIP_MESSAGE */
@@ -233,6 +240,7 @@ public:
     network::Packet buildCastSpell(uint32_t spellId, uint64_t targetGuid, uint8_t castCount) override;
     bool parseCastFailed(network::Packet& packet, CastFailedData& data) override;
     bool parseMessageChat(network::Packet& packet, MessageChatData& data) override;
+    bool parseGameObjectQueryResponse(network::Packet& packet, GameObjectQueryResponseData& data) override;
     bool parseGossipMessage(network::Packet& packet, GossipMessageData& data) override;
     bool parseGuildRoster(network::Packet& packet, GuildRosterData& data) override;
     bool parseGuildQueryResponse(network::Packet& packet, GuildQueryResponseData& data) override;

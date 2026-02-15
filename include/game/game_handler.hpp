@@ -389,6 +389,10 @@ public:
     void queryPlayerName(uint64_t guid);
     void queryCreatureInfo(uint32_t entry, uint64_t guid);
     void queryGameObjectInfo(uint32_t entry, uint64_t guid);
+    const GameObjectQueryResponseData* getCachedGameObjectInfo(uint32_t entry) const {
+        auto it = gameObjectInfoCache_.find(entry);
+        return (it != gameObjectInfoCache_.end()) ? &it->second : nullptr;
+    }
     std::string getCachedPlayerName(uint64_t guid) const;
     std::string getCachedCreatureName(uint32_t entry) const;
 

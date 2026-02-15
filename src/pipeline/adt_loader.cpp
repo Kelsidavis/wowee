@@ -374,6 +374,17 @@ void ADTLoader::parseMCNK(const uint8_t* data, size_t size, int chunkIndex, ADTT
         uint32_t skip = (possibleMagic == MCAL) ? 8 : 0;
         parseMCAL(data + ofsAlpha + skip, sizeAlpha - skip, chunk);
     }
+
+    // Liquid (MCLQ) - vanilla/TBC per-chunk water (no MH2O in these expansions)
+    // ofsLiquid at MCNK header offset 0x60, sizeLiquid at 0x64
+    uint32_t ofsLiquid = readUInt32(data, 0x60);
+    uint32_t sizeLiquid = readUInt32(data, 0x64);
+    if (ofsLiquid > 0 && sizeLiquid > 8 && ofsLiquid + sizeLiquid <= size) {
+        uint32_t possibleMagic = readUInt32(data, ofsLiquid);
+        uint32_t skip = (possibleMagic == MCLQ) ? 8 : 0;
+        parseMCLQ(data + ofsLiquid + skip, sizeLiquid - skip,
+                  chunkIndex, chunk.flags, terrain);
+    }
 }
 
 void ADTLoader::parseMCVT(const uint8_t* data, size_t size, MapChunk& chunk) {
@@ -451,6 +462,100 @@ void ADTLoader::parseMCAL(const uint8_t* data, size_t size, MapChunk& chunk) {
     // Store raw data; decompression happens per-layer during mesh generation
     chunk.alphaMap.resize(size);
     std::memcpy(chunk.alphaMap.data(), data, size);
+}
+
+void ADTLoader::parseMCLQ(const uint8_t* data, size_t size, int chunkIndex,
+                          uint32_t mcnkFlags, ADTTerrain& terrain) {
+    // MCLQ: Vanilla/TBC per-chunk liquid data (inside MCNK)
+    // Layout:
+    //   float minHeight, maxHeight  (8 bytes)
+    //   SLiquidVertex[9*9]          (81 * 8 = 648 bytes)
+    //     water: uint8 depth, flow0, flow1, filler, float height
+    //     magma: uint16 s, uint16 t, float height
+    //   uint8 tiles[8*8]            (64 bytes)
+    // Total minimum: 720 bytes
+
+    if (size < 720) {
+        return;  // Not enough data for a valid MCLQ
+    }
+
+    float minHeight = readFloat(data, 0);
+    float maxHeight = readFloat(data, 4);
+
+    // Determine liquid type from MCNK flags
+    // 0x04 = has liquid (river/lake), 0x08 = ocean, 0x10 = magma, 0x20 = slime
+    uint16_t liquidType = 0;  // water
+    if (mcnkFlags & 0x08) liquidType = 1;       // ocean
+    else if (mcnkFlags & 0x10) liquidType = 2;  // magma
+    else if (mcnkFlags & 0x20) liquidType = 3;  // slime
+
+    // Read 9x9 height values (skip depth/flow bytes, just read the float height)
+    const uint8_t* vertData = data + 8;
+    std::vector<float> heights(81);
+    for (int i = 0; i < 81; i++) {
+        heights[i] = readFloat(vertData, i * 8 + 4);  // float at offset 4 within each 8-byte vertex
+    }
+
+    // Read 8x8 tile flags
+    const uint8_t* tileData = data + 8 + 648;
+    std::vector<uint8_t> tileMask(64);
+    bool anyVisible = false;
+    for (int i = 0; i < 64; i++) {
+        uint8_t tileFlag = tileData[i];
+        // Bit 0x0F = liquid type, bit 0x40 = fatigue, bit 0x80 = hidden
+        // A tile is visible if NOT hidden (0x80 not set) and type is non-zero or has base flag
+        bool hidden = (tileFlag & 0x80) != 0;
+        tileMask[i] = hidden ? 0 : 1;
+        if (!hidden) anyVisible = true;
+    }
+
+    if (!anyVisible) {
+        return;  // All tiles hidden, no visible water
+    }
+
+    // Validate heights - if all heights are 0 or unreasonable, skip
+    bool validHeights = false;
+    for (float h : heights) {
+        if (h != 0.0f && std::isfinite(h)) {
+            validHeights = true;
+            break;
+        }
+    }
+    // If heights are all zero, use maxHeight as flat water level
+    if (!validHeights) {
+        for (float& h : heights) h = maxHeight;
+    }
+
+    // Build a WaterLayer matching the MH2O format
+    ADTTerrain::WaterLayer layer;
+    layer.liquidType = liquidType;
+    layer.flags = 0;
+    layer.minHeight = minHeight;
+    layer.maxHeight = maxHeight;
+    layer.x = 0;
+    layer.y = 0;
+    layer.width = 8;   // 8 tiles = 9 vertices per axis
+    layer.height = 8;
+    layer.heights = std::move(heights);
+    layer.mask.resize(8);  // 8 bytes = 64 bits for 8x8 tiles
+    for (int row = 0; row < 8; row++) {
+        uint8_t rowBits = 0;
+        for (int col = 0; col < 8; col++) {
+            if (tileMask[row * 8 + col]) {
+                rowBits |= (1 << col);
+            }
+        }
+        layer.mask[row] = rowBits;
+    }
+
+    terrain.waterData[chunkIndex].layers.push_back(std::move(layer));
+
+    static int mclqLogCount = 0;
+    if (mclqLogCount < 5) {
+        LOG_INFO("MCLQ[", chunkIndex, "]: type=", liquidType,
+                 " height=[", minHeight, ",", maxHeight, "]");
+        mclqLogCount++;
+    }
 }
 
 void ADTLoader::parseMH2O(const uint8_t* data, size_t size, ADTTerrain& terrain) {

@@ -206,6 +206,8 @@ private:
     static void parseMCLY(const uint8_t* data, size_t size, MapChunk& chunk);
     static void parseMCAL(const uint8_t* data, size_t size, MapChunk& chunk);
     static void parseMH2O(const uint8_t* data, size_t size, ADTTerrain& terrain);
+    static void parseMCLQ(const uint8_t* data, size_t size, int chunkIndex,
+                          uint32_t mcnkFlags, ADTTerrain& terrain);
 };
 
 } // namespace pipeline

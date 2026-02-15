@@ -223,11 +223,20 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
                 foundUnderwear = true;
             }
         }
+
+        LOG_INFO("CharSections lookup: skin=", foundSkin ? bodySkinPath_ : "(not found)",
+                 " face=", foundFace ? (faceLowerPath.empty() ? "(empty)" : faceLowerPath) : "(not found)",
+                 " hair=", foundHair ? (hairScalpPath.empty() ? "(empty)" : hairScalpPath) : "(not found)",
+                 " underwear=", foundUnderwear, " (", underwearPaths.size(), " textures)");
+    } else {
+        LOG_WARNING("CharSections.dbc not loaded — no character textures");
     }
 
     // Assign texture filenames on model before GPU upload
     for (size_t ti = 0; ti < model.textures.size(); ti++) {
         auto& tex = model.textures[ti];
+        LOG_INFO("  Model texture[", ti, "]: type=", tex.type,
+                 " filename='", tex.filename, "'");
         if (tex.type == 1 && tex.filename.empty() && !bodySkinPath_.empty()) {
             tex.filename = bodySkinPath_;
         } else if (tex.type == 6 && tex.filename.empty() && !hairScalpPath.empty()) {

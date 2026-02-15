@@ -27,7 +27,7 @@ void TransportManager::update(float deltaTime) {
     }
 }
 
-void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, uint32_t pathId, const glm::vec3& spawnWorldPos) {
+void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, uint32_t pathId, const glm::vec3& spawnWorldPos, uint32_t entry) {
     auto pathIt = paths_.find(pathId);
     if (pathIt == paths_.end()) {
         std::cerr << "TransportManager: Path " << pathId << " not found for transport " << guid << std::endl;
@@ -44,6 +44,7 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
     transport.guid = guid;
     transport.wmoInstanceId = wmoInstanceId;
     transport.pathId = pathId;
+    transport.entry = entry;
     transport.allowBootstrapVelocity = false;
 
     // CRITICAL: Set basePosition from spawn position and t=0 offset
@@ -52,6 +53,10 @@ void TransportManager::registerTransport(uint64_t guid, uint32_t wmoInstanceId, 
         // Stationary transport - no path animation
         transport.basePosition = spawnWorldPos;
         transport.position = spawnWorldPos;
+    } else if (path.worldCoords) {
+        // World-coordinate path (TaxiPathNode) - points are absolute world positions
+        transport.basePosition = glm::vec3(0.0f);
+        transport.position = evalTimedCatmullRom(path, 0);
     } else {
         // Moving transport - infer base from first path offset
         glm::vec3 offset0 = evalTimedCatmullRom(path, 0);
@@ -542,6 +547,16 @@ void TransportManager::updateServerTransport(uint64_t guid, const glm::vec3& pos
     auto pathIt = paths_.find(transport->pathId);
     const bool hasPath = (pathIt != paths_.end());
     const bool isZOnlyPath = (hasPath && pathIt->second.fromDBC && pathIt->second.zOnly && pathIt->second.durationMs > 0);
+    const bool isWorldCoordPath = (hasPath && pathIt->second.worldCoords && pathIt->second.durationMs > 0);
+
+    // Don't let (0,0,0) server updates override a TaxiPathNode world-coordinate path
+    if (isWorldCoordPath && glm::length(position) < 1.0f) {
+        transport->serverUpdateCount++;
+        transport->lastServerUpdate = elapsedTime_;
+        transport->serverYaw = orientation;
+        transport->hasServerYaw = true;
+        return;
+    }
 
     // Track server updates
     transport->serverUpdateCount++;
@@ -938,6 +953,181 @@ bool TransportManager::loadTransportAnimationDBC(pipeline::AssetManager* assetMg
 
     LOG_INFO("Loaded ", pathsLoaded, " transport paths from TransportAnimation.dbc");
     return pathsLoaded > 0;
+}
+
+bool TransportManager::loadTaxiPathNodeDBC(pipeline::AssetManager* assetMgr) {
+    LOG_INFO("Loading TaxiPathNode.dbc...");
+
+    if (!assetMgr) {
+        LOG_ERROR("AssetManager is null");
+        return false;
+    }
+
+    auto dbcData = assetMgr->readFile("DBFilesClient\\TaxiPathNode.dbc");
+    if (dbcData.empty()) {
+        LOG_WARNING("TaxiPathNode.dbc not found - MO_TRANSPORT will use fallback paths");
+        return false;
+    }
+
+    pipeline::DBCFile dbc;
+    if (!dbc.load(dbcData)) {
+        LOG_ERROR("Failed to parse TaxiPathNode.dbc");
+        return false;
+    }
+
+    LOG_INFO("TaxiPathNode.dbc: ", dbc.getRecordCount(), " records, ",
+             dbc.getFieldCount(), " fields per record");
+
+    // Group nodes by PathID, storing (NodeIndex, MapID, X, Y, Z)
+    struct TaxiNode {
+        uint32_t nodeIndex;
+        uint32_t mapId;
+        float x, y, z;
+    };
+    std::map<uint32_t, std::vector<TaxiNode>> nodesByPath;
+
+    for (uint32_t i = 0; i < dbc.getRecordCount(); i++) {
+        uint32_t pathId = dbc.getUInt32(i, 1);    // PathID
+        uint32_t nodeIdx = dbc.getUInt32(i, 2);   // NodeIndex
+        uint32_t mapId = dbc.getUInt32(i, 3);     // MapID
+        float posX = dbc.getFloat(i, 4);          // X (server coords)
+        float posY = dbc.getFloat(i, 5);          // Y (server coords)
+        float posZ = dbc.getFloat(i, 6);          // Z (server coords)
+
+        nodesByPath[pathId].push_back({nodeIdx, mapId, posX, posY, posZ});
+    }
+
+    // Build world-coordinate transport paths
+    int pathsLoaded = 0;
+    for (auto& [pathId, nodes] : nodesByPath) {
+        if (nodes.size() < 2) continue;
+
+        // Sort by NodeIndex
+        std::sort(nodes.begin(), nodes.end(),
+                  [](const TaxiNode& a, const TaxiNode& b) { return a.nodeIndex < b.nodeIndex; });
+
+        // Skip flight-master paths (nodes on different maps are map teleports)
+        // Transport paths stay on the same map
+        bool sameMap = true;
+        uint32_t firstMap = nodes[0].mapId;
+        for (const auto& node : nodes) {
+            if (node.mapId != firstMap) { sameMap = false; break; }
+        }
+
+        // Calculate total path distance to identify transport routes (long water crossings)
+        float totalDist = 0.0f;
+        for (size_t i = 1; i < nodes.size(); i++) {
+            float dx = nodes[i].x - nodes[i-1].x;
+            float dy = nodes[i].y - nodes[i-1].y;
+            float dz = nodes[i].z - nodes[i-1].z;
+            totalDist += std::sqrt(dx*dx + dy*dy + dz*dz);
+        }
+
+        // Transport routes are typically >500 units long and stay on same map
+        // Flight paths can also be long, but we'll store all same-map paths
+        // and let the caller choose the right one by pathId
+        if (!sameMap) continue;
+
+        // Build timed points using distance-based timing (28 units/sec default boat speed)
+        const float transportSpeed = 28.0f;  // units per second
+        std::vector<TimedPoint> timedPoints;
+        timedPoints.reserve(nodes.size() + 1);
+
+        uint32_t cumulativeMs = 0;
+        for (size_t i = 0; i < nodes.size(); i++) {
+            // Convert server coords to canonical
+            glm::vec3 serverPos(nodes[i].x, nodes[i].y, nodes[i].z);
+            glm::vec3 canonical = core::coords::serverToCanonical(serverPos);
+
+            timedPoints.push_back({cumulativeMs, canonical});
+
+            if (i + 1 < nodes.size()) {
+                float dx = nodes[i+1].x - nodes[i].x;
+                float dy = nodes[i+1].y - nodes[i].y;
+                float dz = nodes[i+1].z - nodes[i].z;
+                float segDist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                uint32_t segMs = static_cast<uint32_t>((segDist / transportSpeed) * 1000.0f);
+                if (segMs < 100) segMs = 100;  // Minimum 100ms per segment
+                cumulativeMs += segMs;
+            }
+        }
+
+        // Add wrap point (return to start) for looping
+        float wrapDx = nodes.front().x - nodes.back().x;
+        float wrapDy = nodes.front().y - nodes.back().y;
+        float wrapDz = nodes.front().z - nodes.back().z;
+        float wrapDist = std::sqrt(wrapDx*wrapDx + wrapDy*wrapDy + wrapDz*wrapDz);
+        uint32_t wrapMs = static_cast<uint32_t>((wrapDist / transportSpeed) * 1000.0f);
+        if (wrapMs < 100) wrapMs = 100;
+        cumulativeMs += wrapMs;
+        timedPoints.push_back({cumulativeMs, timedPoints[0].pos});
+
+        TransportPath path;
+        path.pathId = pathId;
+        path.points = timedPoints;
+        path.looping = false;  // Explicit wrap point added
+        path.durationMs = cumulativeMs;
+        path.zOnly = false;
+        path.fromDBC = true;
+        path.worldCoords = true;  // TaxiPathNode uses absolute world coordinates
+
+        taxiPaths_[pathId] = path;
+        pathsLoaded++;
+    }
+
+    LOG_INFO("Loaded ", pathsLoaded, " TaxiPathNode transport paths (", nodesByPath.size(), " total taxi paths)");
+    return pathsLoaded > 0;
+}
+
+bool TransportManager::hasTaxiPath(uint32_t taxiPathId) const {
+    return taxiPaths_.find(taxiPathId) != taxiPaths_.end();
+}
+
+bool TransportManager::assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPathId) {
+    auto taxiIt = taxiPaths_.find(taxiPathId);
+    if (taxiIt == taxiPaths_.end()) {
+        LOG_WARNING("No TaxiPathNode path for taxiPathId=", taxiPathId);
+        return false;
+    }
+
+    // Find transport(s) with matching entry that are at (0,0,0)
+    for (auto& [guid, transport] : transports_) {
+        if (transport.entry != entry) continue;
+        if (glm::length(transport.position) > 1.0f) continue;  // Already has real position
+
+        // Copy the taxi path into the main paths_ map (indexed by entry for this transport)
+        TransportPath path = taxiIt->second;
+        path.pathId = entry;  // Index by GO entry
+        paths_[entry] = path;
+
+        // Update transport to use the new path
+        transport.pathId = entry;
+        transport.basePosition = glm::vec3(0.0f);  // World-coordinate path, no base offset
+        if (!path.points.empty()) {
+            transport.position = evalTimedCatmullRom(path, 0);
+        }
+        transport.useClientAnimation = true;  // Server won't send position updates
+
+        // Seed local clock to a deterministic phase
+        if (path.durationMs > 0) {
+            transport.localClockMs = static_cast<uint32_t>(elapsedTime_ * 1000.0f) % path.durationMs;
+        }
+
+        updateTransformMatrices(transport);
+        if (wmoRenderer_) {
+            wmoRenderer_->setInstanceTransform(transport.wmoInstanceId, transport.transform);
+        }
+
+        LOG_INFO("Assigned TaxiPathNode path to transport 0x", std::hex, guid, std::dec,
+                 " entry=", entry, " taxiPathId=", taxiPathId,
+                 " waypoints=", path.points.size(),
+                 " duration=", path.durationMs, "ms",
+                 " startPos=(", transport.position.x, ", ", transport.position.y, ", ", transport.position.z, ")");
+        return true;
+    }
+
+    LOG_DEBUG("No transport at (0,0,0) found for entry=", entry, " taxiPathId=", taxiPathId);
+    return false;
 }
 
 bool TransportManager::hasPathForEntry(uint32_t entry) const {

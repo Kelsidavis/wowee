@@ -581,6 +581,49 @@ bool ClassicPacketParsers::parseGuildQueryResponse(network::Packet& packet, Guil
 }
 
 // ============================================================================
+// GameObject Query — Classic has no extra strings before data[]
+// WotLK has iconName + castBarCaption + unk1 between names and data[].
+// Vanilla: entry, type, displayId, name[4], data[24]
+// ============================================================================
+
+bool ClassicPacketParsers::parseGameObjectQueryResponse(network::Packet& packet, GameObjectQueryResponseData& data) {
+    data.entry = packet.readUInt32();
+
+    // High bit set means gameobject not found
+    if (data.entry & 0x80000000) {
+        data.entry &= ~0x80000000;
+        data.name = "";
+        return true;
+    }
+
+    data.type = packet.readUInt32();
+    data.displayId = packet.readUInt32();
+    // 4 name strings
+    data.name = packet.readString();
+    packet.readString();
+    packet.readString();
+    packet.readString();
+
+    // Classic: data[24] comes immediately after names (no extra strings)
+    size_t remaining = packet.getSize() - packet.getReadPos();
+    if (remaining >= 24 * 4) {
+        for (int i = 0; i < 24; i++) {
+            data.data[i] = packet.readUInt32();
+        }
+        data.hasData = true;
+    }
+
+    if (data.type == 15) { // MO_TRANSPORT
+        LOG_INFO("Classic GO query: MO_TRANSPORT entry=", data.entry,
+                 " name=\"", data.name, "\" displayId=", data.displayId,
+                 " taxiPathId=", data.data[0], " moveSpeed=", data.data[1]);
+    } else {
+        LOG_DEBUG("Classic GO query: ", data.name, " type=", data.type, " entry=", data.entry);
+    }
+    return true;
+}
+
+// ============================================================================
 // Gossip — Classic has no menuId, and quest items lack questFlags + isRepeatable
 // ============================================================================
 

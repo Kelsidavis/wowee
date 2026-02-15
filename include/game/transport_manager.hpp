@@ -29,12 +29,14 @@ struct TransportPath {
     uint32_t durationMs;   // Total loop duration in ms (includes wrap segment if added)
     bool zOnly;    // True if path only has Z movement (elevator/bobbing), false if real XY travel
     bool fromDBC;  // True if loaded from TransportAnimation.dbc, false for runtime fallback/custom paths
+    bool worldCoords = false;  // True if points are absolute world coords (TaxiPathNode), not local offsets
 };
 
 struct ActiveTransport {
     uint64_t guid;              // Entity GUID
     uint32_t wmoInstanceId;     // WMO renderer instance ID
     uint32_t pathId;            // Current path
+    uint32_t entry = 0;         // GameObject entry (for MO_TRANSPORT path updates)
     glm::vec3 basePosition;     // Spawn position (base offset for path)
     glm::vec3 position;         // Current world position
     glm::quat rotation;         // Current world rotation
@@ -79,7 +81,7 @@ public:
     void setWMORenderer(rendering::WMORenderer* renderer) { wmoRenderer_ = renderer; }
 
     void update(float deltaTime);
-    void registerTransport(uint64_t guid, uint32_t wmoInstanceId, uint32_t pathId, const glm::vec3& spawnWorldPos);
+    void registerTransport(uint64_t guid, uint32_t wmoInstanceId, uint32_t pathId, const glm::vec3& spawnWorldPos, uint32_t entry = 0);
     void unregisterTransport(uint64_t guid);
 
     ActiveTransport* getTransport(uint64_t guid);
@@ -91,6 +93,16 @@ public:
 
     // Load transport paths from TransportAnimation.dbc
     bool loadTransportAnimationDBC(pipeline::AssetManager* assetMgr);
+
+    // Load transport paths from TaxiPathNode.dbc (world-coordinate paths for MO_TRANSPORT)
+    bool loadTaxiPathNodeDBC(pipeline::AssetManager* assetMgr);
+
+    // Check if a TaxiPathNode path exists for a given taxiPathId
+    bool hasTaxiPath(uint32_t taxiPathId) const;
+
+    // Assign a TaxiPathNode path to an existing transport (called when GO query response arrives)
+    // Returns true if the transport was updated
+    bool assignTaxiPathToTransport(uint32_t entry, uint32_t taxiPathId);
 
     // Check if a path exists for a given GameObject entry
     bool hasPathForEntry(uint32_t entry) const;
@@ -126,7 +138,8 @@ private:
     void updateTransformMatrices(ActiveTransport& transport);
 
     std::unordered_map<uint64_t, ActiveTransport> transports_;
-    std::unordered_map<uint32_t, TransportPath> paths_;  // Indexed by transportEntry (pathId from TransportAnimation.dbc)
+    std::unordered_map<uint32_t, TransportPath> paths_;      // Indexed by transportEntry (pathId from TransportAnimation.dbc)
+    std::unordered_map<uint32_t, TransportPath> taxiPaths_;  // Indexed by TaxiPath.dbc ID (world-coord paths for MO_TRANSPORT)
     rendering::WMORenderer* wmoRenderer_ = nullptr;
     bool clientSideAnimation_ = false;  // DISABLED - use server positions instead of client prediction
     float elapsedTime_ = 0.0f;  // Total elapsed time (seconds)

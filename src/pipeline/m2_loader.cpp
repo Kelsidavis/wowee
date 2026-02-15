@@ -1050,26 +1050,34 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         model.attachmentLookup = readArray<uint16_t>(m2Data, header.ofsAttachmentLookup, header.nAttachmentLookup);
     }
 
-    // Parse particle emitters (WotLK M2ParticleOld: 0x1DC = 476 bytes per emitter)
-    // Skip for vanilla — emitter struct size differs
-    static constexpr uint32_t EMITTER_STRUCT_SIZE = 0x1DC;
-    if (header.version >= 264 &&
-        header.nParticleEmitters > 0 && header.ofsParticleEmitters > 0 &&
-        header.nParticleEmitters < 256 &&
-        static_cast<size_t>(header.ofsParticleEmitters) +
-            static_cast<size_t>(header.nParticleEmitters) * EMITTER_STRUCT_SIZE <= m2Data.size()) {
+    // Parse particle emitters — struct size differs between versions:
+    //   WotLK (version >= 264): M2ParticleOld = 0x1DC (476) bytes, M2TrackDisk (20 bytes), FBlocks
+    //   Vanilla (version < 264): 0x1F8 (504) bytes, M2TrackDiskVanilla (28 bytes), static lifecycle arrays
+    if (header.nParticleEmitters > 0 && header.ofsParticleEmitters > 0 &&
+        header.nParticleEmitters < 256) {
 
-        // Build sequence flags for parseAnimTrack
+        const bool isVanilla = (header.version < 264);
+        static constexpr uint32_t EMITTER_SIZE_WOTLK  = 0x1DC; // 476
+        static constexpr uint32_t EMITTER_SIZE_VANILLA = 0x1F8; // 504
+        const uint32_t emitterSize = isVanilla ? EMITTER_SIZE_VANILLA : EMITTER_SIZE_WOTLK;
+
+        if (static_cast<size_t>(header.ofsParticleEmitters) +
+                static_cast<size_t>(header.nParticleEmitters) * emitterSize <= m2Data.size()) {
+
+        // Build sequence flags for parseAnimTrack (WotLK only)
         std::vector<uint32_t> emSeqFlags;
-        emSeqFlags.reserve(model.sequences.size());
-        for (const auto& seq : model.sequences) {
-            emSeqFlags.push_back(seq.flags);
+        if (!isVanilla) {
+            emSeqFlags.reserve(model.sequences.size());
+            for (const auto& seq : model.sequences) {
+                emSeqFlags.push_back(seq.flags);
+            }
         }
 
         for (uint32_t ei = 0; ei < header.nParticleEmitters; ei++) {
-            uint32_t base = header.ofsParticleEmitters + ei * EMITTER_STRUCT_SIZE;
+            uint32_t base = header.ofsParticleEmitters + ei * emitterSize;
 
             M2ParticleEmitter em;
+            // Header fields (0x00-0x33) are the same for both versions
             em.particleId = readValue<int32_t>(m2Data, base + 0x00);
             em.flags      = readValue<uint32_t>(m2Data, base + 0x04);
             em.position.x = readValue<float>(m2Data, base + 0x08);
@@ -1085,32 +1093,97 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
             if (em.textureRows == 0) em.textureRows = 1;
             if (em.textureCols == 0) em.textureCols = 1;
 
-            // Parse animated tracks (M2TrackDisk at known offsets)
-            auto parseTrack = [&](uint32_t off, M2AnimationTrack& track) {
-                if (base + off + sizeof(M2TrackDisk) <= m2Data.size()) {
-                    M2TrackDisk disk = readValue<M2TrackDisk>(m2Data, base + off);
-                    parseAnimTrack(m2Data, disk, track, TrackType::FLOAT, emSeqFlags);
-                }
-            };
-            parseTrack(0x34, em.emissionSpeed);
-            parseTrack(0x48, em.speedVariation);
-            parseTrack(0x5C, em.verticalRange);
-            parseTrack(0x70, em.horizontalRange);
-            parseTrack(0x84, em.gravity);
-            parseTrack(0x98, em.lifespan);
-            parseTrack(0xB0, em.emissionRate);
-            parseTrack(0xC8, em.emissionAreaLength);
-            parseTrack(0xDC, em.emissionAreaWidth);
-            parseTrack(0xF0, em.deceleration);
+            if (isVanilla) {
+                // Vanilla: 10 contiguous M2TrackDiskVanilla tracks (28 bytes each) at 0x34
+                auto parseTrackV = [&](uint32_t off, M2AnimationTrack& track) {
+                    if (base + off + sizeof(M2TrackDiskVanilla) <= m2Data.size()) {
+                        M2TrackDiskVanilla disk = readValue<M2TrackDiskVanilla>(m2Data, base + off);
+                        parseAnimTrackVanilla(m2Data, disk, track, TrackType::FLOAT);
+                    }
+                };
+                parseTrackV(0x34, em.emissionSpeed);       // +28 = 0x50
+                parseTrackV(0x50, em.speedVariation);      // +28 = 0x6C
+                parseTrackV(0x6C, em.verticalRange);       // +28 = 0x88
+                parseTrackV(0x88, em.horizontalRange);     // +28 = 0xA4
+                parseTrackV(0xA4, em.gravity);             // +28 = 0xC0
+                parseTrackV(0xC0, em.lifespan);            // +28 = 0xDC
+                parseTrackV(0xDC, em.emissionRate);        // +28 = 0xF8
+                parseTrackV(0xF8, em.emissionAreaLength);  // +28 = 0x114
+                parseTrackV(0x114, em.emissionAreaWidth);  // +28 = 0x130
+                parseTrackV(0x130, em.deceleration);       // +28 = 0x14C
 
-            // Parse FBlocks (color, alpha, scale) — FBlocks are 16 bytes each
-            parseFBlock(m2Data, base + 0x104, em.particleColor, 0);
-            parseFBlock(m2Data, base + 0x114, em.particleAlpha, 1);
-            parseFBlock(m2Data, base + 0x124, em.particleScale, 2);
+                // Vanilla: NO FBlocks — color/alpha/scale are static inline values
+                // Layout (empirically confirmed from real vanilla M2 files):
+                //   +0x14C: float midpoint (lifecycle split: 0→mid→1)
+                //   +0x150: uint32 colorValues[3] (BGRA, A channel = opacity)
+                //   +0x15C: float scaleValues[3] (1D particle scale)
+                float midpoint = readValue<float>(m2Data, base + 0x14C);
+                if (midpoint < 0.0f || midpoint > 1.0f) midpoint = 0.5f;
+
+                // Synthesize color FBlock from static BGRA values
+                {
+                    em.particleColor.timestamps = {0.0f, midpoint, 1.0f};
+                    em.particleColor.vec3Values.resize(3);
+                    em.particleAlpha.timestamps = {0.0f, midpoint, 1.0f};
+                    em.particleAlpha.floatValues.resize(3);
+                    for (int c = 0; c < 3; c++) {
+                        uint32_t bgra = readValue<uint32_t>(m2Data, base + 0x150 + c * 4);
+                        float b = ((bgra >>  0) & 0xFF) / 255.0f;
+                        float g = ((bgra >>  8) & 0xFF) / 255.0f;
+                        float r = ((bgra >> 16) & 0xFF) / 255.0f;
+                        float a = ((bgra >> 24) & 0xFF) / 255.0f;
+                        em.particleColor.vec3Values[c] = glm::vec3(r, g, b);
+                        em.particleAlpha.floatValues[c] = a;
+                    }
+                    // If all alpha zero, use sensible default (fade out)
+                    bool allZero = true;
+                    for (auto v : em.particleAlpha.floatValues) {
+                        if (v > 0.01f) { allZero = false; break; }
+                    }
+                    if (allZero) {
+                        em.particleAlpha.floatValues = {1.0f, 1.0f, 0.0f};
+                    }
+                }
+
+                // Synthesize scale FBlock from static float values
+                {
+                    em.particleScale.timestamps = {0.0f, midpoint, 1.0f};
+                    em.particleScale.floatValues.resize(3);
+                    for (int s = 0; s < 3; s++) {
+                        float scale = readValue<float>(m2Data, base + 0x15C + s * 4);
+                        if (scale < 0.001f || scale > 100.0f) scale = 1.0f;
+                        em.particleScale.floatValues[s] = scale;
+                    }
+                }
+            } else {
+                // WotLK: M2TrackDisk (20 bytes) at known offsets with vary floats interspersed
+                auto parseTrack = [&](uint32_t off, M2AnimationTrack& track) {
+                    if (base + off + sizeof(M2TrackDisk) <= m2Data.size()) {
+                        M2TrackDisk disk = readValue<M2TrackDisk>(m2Data, base + off);
+                        parseAnimTrack(m2Data, disk, track, TrackType::FLOAT, emSeqFlags);
+                    }
+                };
+                parseTrack(0x34, em.emissionSpeed);
+                parseTrack(0x48, em.speedVariation);
+                parseTrack(0x5C, em.verticalRange);
+                parseTrack(0x70, em.horizontalRange);
+                parseTrack(0x84, em.gravity);
+                parseTrack(0x98, em.lifespan);
+                parseTrack(0xB0, em.emissionRate);
+                parseTrack(0xC8, em.emissionAreaLength);
+                parseTrack(0xDC, em.emissionAreaWidth);
+                parseTrack(0xF0, em.deceleration);
+
+                // Parse FBlocks (color, alpha, scale) — FBlocks are 16 bytes each
+                parseFBlock(m2Data, base + 0x104, em.particleColor, 0);
+                parseFBlock(m2Data, base + 0x114, em.particleAlpha, 1);
+                parseFBlock(m2Data, base + 0x124, em.particleScale, 2);
+            }
 
             model.particleEmitters.push_back(std::move(em));
         }
         core::Logger::getInstance().debug("  Particle emitters: ", model.particleEmitters.size());
+        } // end size check
     }
 
     // Read collision mesh (bounding triangles/vertices/normals)

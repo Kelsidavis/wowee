@@ -1962,13 +1962,27 @@ bool GameObjectQueryResponseParser::parse(network::Packet& packet, GameObjectQue
     }
 
     data.type = packet.readUInt32();       // GameObjectType
-    /*uint32_t displayId =*/ packet.readUInt32();
+    data.displayId = packet.readUInt32();
     // 4 name strings (only first is usually populated)
     data.name = packet.readString();
     // name2, name3, name4
     packet.readString();
     packet.readString();
     packet.readString();
+
+    // WotLK: 3 extra strings before data[] (iconName, castBarCaption, unk1)
+    packet.readString();  // iconName
+    packet.readString();  // castBarCaption
+    packet.readString();  // unk1
+
+    // Read 24 type-specific data fields
+    size_t remaining = packet.getSize() - packet.getReadPos();
+    if (remaining >= 24 * 4) {
+        for (int i = 0; i < 24; i++) {
+            data.data[i] = packet.readUInt32();
+        }
+        data.hasData = true;
+    }
 
     LOG_DEBUG("GameObject query response: ", data.name, " (type=", data.type, " entry=", data.entry, ")");
     return true;

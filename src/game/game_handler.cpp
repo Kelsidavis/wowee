@@ -5392,7 +5392,9 @@ void GameHandler::handleCreatureQueryResponse(network::Packet& packet) {
 
 void GameHandler::handleGameObjectQueryResponse(network::Packet& packet) {
     GameObjectQueryResponseData data;
-    if (!GameObjectQueryResponseParser::parse(packet, data)) return;
+    bool ok = packetParsers_ ? packetParsers_->parseGameObjectQueryResponse(packet, data)
+                             : GameObjectQueryResponseParser::parse(packet, data);
+    if (!ok) return;
 
     pendingGameObjectQueries_.erase(data.entry);
 
@@ -5405,6 +5407,19 @@ void GameHandler::handleGameObjectQueryResponse(network::Packet& packet) {
                 if (go->getEntry() == data.entry) {
                     go->setName(data.name);
                 }
+            }
+        }
+
+        // MO_TRANSPORT (type 15): assign TaxiPathNode path if available
+        if (data.type == 15 && data.hasData && data.data[0] != 0 && transportManager_) {
+            uint32_t taxiPathId = data.data[0];
+            if (transportManager_->hasTaxiPath(taxiPathId)) {
+                if (transportManager_->assignTaxiPathToTransport(data.entry, taxiPathId)) {
+                    LOG_INFO("MO_TRANSPORT entry=", data.entry, " assigned TaxiPathNode path ", taxiPathId);
+                }
+            } else {
+                LOG_INFO("MO_TRANSPORT entry=", data.entry, " taxiPathId=", taxiPathId,
+                         " not found in TaxiPathNode.dbc");
             }
         }
     }

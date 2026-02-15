@@ -205,9 +205,10 @@ bool Application::initialize() {
             renderer->getCharacterRenderer()->setAssetManager(assetManager.get());
         }
 
-        // Load transport paths from TransportAnimation.dbc
+        // Load transport paths from TransportAnimation.dbc and TaxiPathNode.dbc
         if (gameHandler && gameHandler->getTransportManager()) {
             gameHandler->getTransportManager()->loadTransportAnimationDBC(assetManager.get());
+            gameHandler->getTransportManager()->loadTaxiPathNodeDBC(assetManager.get());
         }
 
         // Initialize HD texture packs
@@ -1487,7 +1488,7 @@ void Application::setupUICallbacks() {
         }
 
         // Register the transport with spawn position (prevents rendering at origin until server update)
-        transportManager->registerTransport(guid, wmoInstanceId, pathId, canonicalSpawnPos);
+        transportManager->registerTransport(guid, wmoInstanceId, pathId, canonicalSpawnPos, entry);
 
         // Server-authoritative movement - set initial position from spawn data
         glm::vec3 canonicalPos(x, y, z);
@@ -1502,6 +1503,20 @@ void Application::setupUICallbacks() {
                      " pos=(", pending.x, ", ", pending.y, ", ", pending.z, ") orientation=", pending.orientation);
             pendingTransportMoves_.erase(pendingIt);
         }
+
+        // For MO_TRANSPORT at (0,0,0): check if GO data is already cached with a taxiPathId
+        if (glm::length(canonicalSpawnPos) < 1.0f && gameHandler) {
+            auto goData = gameHandler->getCachedGameObjectInfo(entry);
+            if (goData && goData->type == 15 && goData->hasData && goData->data[0] != 0) {
+                uint32_t taxiPathId = goData->data[0];
+                if (transportManager->hasTaxiPath(taxiPathId)) {
+                    transportManager->assignTaxiPathToTransport(entry, taxiPathId);
+                    LOG_INFO("Assigned cached TaxiPathNode path for MO_TRANSPORT entry=", entry,
+                             " taxiPathId=", taxiPathId);
+                }
+            }
+        }
+
         if (auto* tr = transportManager->getTransport(guid); tr) {
             LOG_INFO("Transport registered: guid=0x", std::hex, guid, std::dec,
                      " entry=", entry, " displayId=", displayId,
@@ -1598,7 +1613,7 @@ void Application::setupUICallbacks() {
                                  " displayId=", displayId, " wmoInstance=", wmoInstanceId);
                     }
 
-                    transportManager->registerTransport(guid, wmoInstanceId, pathId, canonicalSpawnPos);
+                    transportManager->registerTransport(guid, wmoInstanceId, pathId, canonicalSpawnPos, entry);
                 } else {
                     pendingTransportMoves_[guid] = PendingTransportMove{x, y, z, orientation};
                     LOG_WARNING("Cannot auto-spawn transport 0x", std::hex, guid, std::dec,

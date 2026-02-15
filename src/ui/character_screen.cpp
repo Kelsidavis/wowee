@@ -59,18 +59,6 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
     // Get character list
     const auto& characters = gameHandler.getCharacters();
 
-    // Handle disconnected state (e.g. Warden kicked us)
-    if (gameHandler.getState() == game::WorldState::DISCONNECTED ||
-        gameHandler.getState() == game::WorldState::FAILED) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Disconnected from server.");
-        ImGui::TextWrapped("The server closed the connection. This may be caused by "
-                           "anti-cheat (Warden) verification failure.");
-        ImGui::Spacing();
-        if (ImGui::Button("Back", ImVec2(120, 36))) { if (onBack) onBack(); }
-        ImGui::End();
-        return;
-    }
-
     // Request character list if not available.
     // Also show a loading state while CHAR_LIST_REQUESTED is in-flight (characters may be cleared to avoid stale UI).
     if (characters.empty() &&
@@ -80,6 +68,18 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
         if (gameHandler.getState() == game::WorldState::READY) {
             gameHandler.requestCharacterList();
         }
+        ImGui::End();
+        return;
+    }
+
+    // Handle disconnected state with no characters received
+    if (characters.empty() &&
+        (gameHandler.getState() == game::WorldState::DISCONNECTED ||
+         gameHandler.getState() == game::WorldState::FAILED)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Disconnected from server.");
+        ImGui::TextWrapped("The server closed the connection before sending the character list.");
+        ImGui::Spacing();
+        if (ImGui::Button("Back", ImVec2(120, 36))) { if (onBack) onBack(); }
         ImGui::End();
         return;
     }
@@ -343,6 +343,12 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
 
         // Enter World button — full width
         float btnW = ImGui::GetContentRegionAvail().x;
+        bool disconnected = (gameHandler.getState() == game::WorldState::DISCONNECTED ||
+                             gameHandler.getState() == game::WorldState::FAILED);
+        if (disconnected) {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "Connection lost — click Back to reconnect");
+        }
+        if (disconnected) ImGui::BeginDisabled();
         if (ImGui::Button("Enter World", ImVec2(btnW, 44))) {
             characterSelected = true;
             saveLastCharacter(character.guid);
@@ -352,6 +358,7 @@ void CharacterScreen::render(game::GameHandler& gameHandler) {
             gameHandler.selectCharacter(character.guid);
             if (onCharacterSelected) onCharacterSelected(character.guid);
         }
+        if (disconnected) ImGui::EndDisabled();
 
         ImGui::EndChild();
     }
