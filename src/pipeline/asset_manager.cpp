@@ -164,7 +164,34 @@ std::vector<std::string> AssetManager::getOverlayIds() const {
 }
 
 std::string AssetManager::resolveLayeredPath(const std::string& normalizedPath) const {
-    // Check overlay manifests first (sorted by priority desc)
+    // For character textures, pick the highest-resolution variant across overlays/base.
+    // Turtle/classic overlays often include low-res character skins; the base dataset may have higher-res.
+    auto isCharacterTexture = [&]() -> bool {
+        if (normalizedPath.size() < 4) return false;
+        if (normalizedPath.rfind("character\\", 0) != 0) return false;
+        return normalizedPath.compare(normalizedPath.size() - 4, 4, ".blp") == 0;
+    };
+
+    if (isCharacterTexture()) {
+        uint64_t bestSize = 0;
+        std::string bestFsPath;
+
+        auto consider = [&](const AssetManifest& m) {
+            if (const auto* e = m.lookup(normalizedPath)) {
+                if (e->size > bestSize) {
+                    bestSize = e->size;
+                    bestFsPath = m.getBasePath() + "/" + e->filesystemPath;
+                }
+            }
+        };
+
+        for (const auto& layer : overlayLayers_) consider(layer.manifest);
+        consider(manifest_);
+
+        if (!bestFsPath.empty()) return bestFsPath;
+    }
+
+    // Default: check overlay manifests first (sorted by priority desc)
     for (const auto& layer : overlayLayers_) {
         std::string fsPath = layer.manifest.resolveFilesystemPath(normalizedPath);
         if (!fsPath.empty()) {
